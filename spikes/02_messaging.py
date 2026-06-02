@@ -84,11 +84,15 @@ busy_start=send("turn/start",{"threadId":A,"input":[{"type":"text","text":"secon
 r=pump(3)
 e2=[m for m in r if m.get("id")==busy_start and "error" in m]
 print("   turn/start on busy thread:", "REJECTED "+json.dumps(e2[0]['error']) if e2 else "accepted (queued?)")
+# INTENTIONAL NEGATIVE PROBE: turn/steer WITHOUT expectedTurnId — this is how the
+# `expectedTurnId` requirement was discovered (server returns -32600 missing field).
+# When promoted to the integration suite: keep this as an explicit "asserts it errors"
+# case, AND add a POSITIVE steer test that captures expectedTurnId from `turn/started`.
 steer=send("turn/steer",{"threadId":A,"input":[{"type":"text","text":"also mention the word KIWI"}]})
 r=pump(3)
 es=[m for m in r if m.get("id")==steer and "error" in m]
 ok_s=[m for m in r if m.get("id")==steer and "result" in m]
-print("   turn/steer on busy thread:", "ERROR "+json.dumps(es[0]['error']) if es else ("ok (input added to active turn)" if ok_s else "no reply"))
+print("   turn/steer WITHOUT expectedTurnId (expect error):", "ERROR "+json.dumps(es[0]['error']) if es else ("ok (unexpected)" if ok_s else "no reply"))
 # drain remainder
 end=time.time()+40
 while time.time()<end:

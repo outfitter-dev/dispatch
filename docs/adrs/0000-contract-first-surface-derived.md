@@ -18,7 +18,7 @@ dispatch must expose the same operations through a CLI and an MCP server now, an
 
 Author each operation **once** as an *op* in `contracts/`: input/output Pydantic models, `intent`, `idempotent`, examples, and an async handler. Collect ops in a registry. Every surface is a **pure projection** of that registry — `derive_cli`, `derive_mcp`, `derive_remote` — mirroring Trails' `derive → create → surface` ladder. Surfaces contain projection wiring only; they never hand-implement an op. CLI flags, MCP tool defs/annotations, and error/exit codes are derived from the op. Where a derivation is wrong for one op, override explicitly on the op.
 
-A parity test asserts the ops exposed by every surface equal the registry.
+A parity test enforces this — and it must check *behavior*, not just the set of op names. For each op it asserts the derived projections agree: CLI option set ↔ MCP `inputSchema` (and `outputSchema`) ↔ the input/output models, MCP annotations ↔ `intent`/`idempotent`, and the error-code projection across surfaces. Name-only enumeration would let drift hide in per-op schema/annotation/error mapping.
 
 ## Consequences
 

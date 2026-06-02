@@ -100,7 +100,7 @@ Schema is regenerated per binary (`codex app-server generate-json-schema [--expe
 ## Triggers
 
 A trigger binds **when → action → lane**, stored in the registry:
-- `when`: `time` (interval, or cron/RRULE — Codex uses iCal RRULE; parse with `croniter`/`dateutil`), or `event` (`idle_for`, `turn_completed`, `waiting_on_approval`).
+- `when`: `time` (interval or cron — cron parsed with `croniter`; we own the format and do NOT support iCal RRULE in v1), or `event` (`idle_for`, `turn_completed`, `waiting_on_approval`).
 - `action`: `send(prompt)` | `steer(prompt)` | `brief(items)`.
 - `guard` (optional): `idle_only`, `min_interval`, `dedupe` — and the **extension seam for future conditional triggers**.
 
@@ -119,7 +119,7 @@ The client supports the full responder loop. v1 surfaces `waiting_on_approval` a
 - **uv** (deps, lockfile, venv, Python-version mgmt, runner) · build backend **hatchling** · **src/ layout + PEP 420 namespace** (`src/outfitter/dispatch/`, no `__init__.py` at `outfitter/`).
 - CLI: **Typer** + **Rich**. Lint/format: **Ruff**. Types: **mypy --strict**. Validation/config: **Pydantic v2** + **pydantic-settings**.
 - Async: stdlib **asyncio** (subprocess + streams + unix socket server). DB: **aiosqlite** (hand-written SQL; no ORM). Logging: **structlog** (also feeds the audit log).
-- MCP: the official Python **`mcp`** SDK (stdio transport first). Scheduling: small custom asyncio scheduler + `croniter`/`dateutil` for cron/RRULE.
+- MCP: the official Python **`mcp`** SDK (stdio transport first). Scheduling: small custom asyncio scheduler + `croniter` for cron (interval needs no lib). No `dateutil`/RRULE in v1.
 - Tests: **pytest** + **pytest-asyncio**. Hooks: **lefthook** (polyglot; runs ruff/mypy/pytest). Task runner: **just** (justfile) for `test`/`lint`/`typecheck`/`run`. Daemon keep-alive: **launchd** LaunchAgent plist. CI: GitHub Actions + `astral-sh/setup-uv`.
 
 ## Data model (registry, SQLite)
