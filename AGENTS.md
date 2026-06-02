@@ -25,14 +25,16 @@ Always go through `uv` (never a bare `python`/`pip`). `uv sync` to install, `uv 
 
 dispatch owns one `codex app-server` subprocess (stdio JSONL, shared `~/.codex`), multiplexes many lanes over it, and exposes them through derived surfaces. The architecture makes consistency easier than drift: every surface (CLI/MCP/remote) is *derived* from one op registry, so they cannot diverge. We orchestrate the Codex App Server (itself a one-protocol-many-surfaces design) and apply the same discipline to our own surfaces.
 
-## Working docs (local only, gitignored)
+## Project docs
 
-- `.agents/plans/v0/design.md` — approved design spec.
-- `.agents/plans/v0/PLAN.md` — phased implementation plan.
-- `.agents/plans/v0/REFS.md` — research + Trails references.
-- `.agents/notes/` — working notes, session recaps, learnings (historical record).
+- `docs/development/design.md` — approved design spec.
+- `docs/adrs/` — architecture decision records (start from `template.md`; index in `README.md`).
+- `docs/research/` — App Server verification + orchestration thesis (the findings dispatch is built on).
+- `.agents/plans/v0/` — phased plan (`PLAN.md`) + references (`REFS.md`); tracked.
+- `spikes/` — App Server probe scripts; seed of the integration suite.
+- `.agents/notes/` — working notes, session recaps, learnings; **gitignored, local only**.
 
-Read the plan before implementing. Record findings/decisions in `.agents/notes/`.
+Read `docs/development/design.md` and `.agents/plans/v0/PLAN.md` before implementing. Record working findings in `.agents/notes/`; promote durable decisions into `docs/adrs/`.
 
 ## Lexicon
 

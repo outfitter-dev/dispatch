@@ -1,5 +1,4 @@
-# Agent working docs (local only)
-.agents/plans/
+# Agent working notes (local only). Plans (.agents/plans) ARE tracked.
 .agents/notes/
 
 # Python
