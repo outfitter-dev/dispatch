@@ -1,0 +1,29 @@
+# client/ — the App Server client
+
+Path: `src/outfitter/dispatch/client/`. The ONLY place that spawns or speaks to `codex app-server`. Importable standalone (no daemon dependency).
+
+## Transport
+
+- Spawn `codex app-server --listen stdio://` via `asyncio.create_subprocess_exec`. **stdio JSONL is the only bare-JSON transport** — one newline-delimited JSON message per line. (unix/ws are WebSocket-framed; the managed daemon control socket is auth-gated. Do not use them.)
+- One app-server process hosts many lanes. A single connection multiplexes them.
+- Detect crash via stdout EOF; surface it so the daemon can restart + re-resume.
+
+## Message router
+
+Demux the single stream: responses by request `id`, notifications by `threadId`, into per-lane async queues + a global stream. Expose `events(thread_id | all)`. This is the verified pattern (mirrors the Python SDK's internal router).
+
+## Primitives (typed; Pydantic wire models)
+
+`initialize` → `thread_start/resume/list/read/archive` → `turn_start/steer/interrupt` → `inject_items` → approval responder. Verified gotchas to encode:
+
+- `thread/start.sandbox` is a **string** enum (`read-only`/`workspace-write`/`danger-full-access`); `turn/start.sandboxPolicy` is an **object** (`{type:"readOnly", ...}`). Different encodings — model both.
+- `turn/steer` requires `expectedTurnId` (from `turn/started`).
+- `thread/list` results are under `result.data` (not `result.threads`); `useStateDbOnly:true` reads the persisted store.
+- `thread/resume` of a *persisted* thread yields live event fan-out; pre-persistence it errors `no rollout found`.
+- Approvals are server→client requests: lane emits `thread/status/changed` `activeFlags:["waitingOnApproval"]`; reply `{id, result:{decision}}` (`accept`/`acceptForSession`/`decline`/`cancel`); server emits `serverRequest/resolved`. File-change approvals carry **no diff** — correlate by `itemId` to the `fileChange` item.
+- Threads persist by default (`ephemeral:false`). Pass `ephemeral:true` for throwaway/test lanes.
+
+## Discipline
+
+- Pin the binary; regenerate wire models from `codex app-server generate-json-schema` for that version. Do NOT depend on the `openai-codex` Python SDK (it pins an older CLI).
+- No business logic here — this layer is transport + typed primitives only. Orchestration lives in `core/`.

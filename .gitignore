@@ -1,0 +1,26 @@
+# Agent working docs (local only)
+.agents/plans/
+.agents/notes/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# Runtime / local state
+*.db
+*.sqlite
+*.sqlite3
+.env
+.env.*
+
+# macOS / editor
+.DS_Store
+*.swp
