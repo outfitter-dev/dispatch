@@ -1,11 +1,12 @@
-"""Daemon host wiring: own the app-server, host the core, serve the control
-socket. Phase 5 adds supervision/restart and ``up``/``down``/``status``.
+"""Daemon host wiring: own the app-server (with supervision/restart), host the
+core, serve the control socket.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import signal
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,45 +22,58 @@ from outfitter.dispatch.core.triggers import TriggerRunner
 from outfitter.dispatch.registry.store import Registry
 
 from .control import ControlServer
+from .supervisor import Supervisor
 
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-async def run_daemon(socket_path: Path, db_path: Path) -> None:
-    """Start the app-server client + registry, then serve the control socket
-    until cancelled."""
+async def _spawn_client() -> AppServerClient:
     transport = StdioTransport()
     await transport.start()
     client = AppServerClient(transport)
     await client.start()
     await client.initialize()
+    return client
+
+
+async def run_daemon(socket_path: Path, db_path: Path) -> None:
+    """Start the supervised app-server client + registry, then serve the control
+    socket until cancelled. The supervisor restarts the app-server on crash."""
     store = await Registry.open(db_path)
+    log = structlog.get_logger()
+    first_client = await _spawn_client()
     # mypy verifies AppServerClient satisfies the LaneClient protocol here.
-    ctx = Ctx(client=client, registry=store, log=structlog.get_logger(), abort=asyncio.Event())
-    server = ControlServer(REGISTRY, ctx)
+    ctx = Ctx(client=first_client, registry=store, log=log, abort=asyncio.Event())
     runner = TriggerRunner(ctx, _utcnow)
-    reactor = Reactor(ctx, runner)
     scheduler = Scheduler(ctx, runner, _utcnow)
+    server = ControlServer(REGISTRY, ctx)
+    supervisor = Supervisor(ctx, _spawn_client, lambda: Reactor(ctx, runner).run())
 
     socket_path.parent.mkdir(parents=True, exist_ok=True)
     if socket_path.exists():
         socket_path.unlink()
-    srv = await server.serve(socket_path)
-    reactor_task = asyncio.create_task(reactor.run())
+
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        with contextlib.suppress(NotImplementedError):
+            loop.add_signal_handler(sig, stop.set)
+
+    await server.serve(socket_path)  # already accepting once started
+    supervisor_task = asyncio.create_task(supervisor.supervise(first_client))
     scheduler_task = asyncio.create_task(scheduler.run())
     try:
-        async with srv:
-            await srv.serve_forever()
+        await stop.wait()  # serve until SIGTERM/SIGINT
     finally:
-        reactor_task.cancel()
+        log.info("dispatchd.shutting_down")
+        await supervisor.stop()  # closes the client → terminates the app-server
         scheduler_task.cancel()
-        for task in (reactor_task, scheduler_task):
+        for task in (supervisor_task, scheduler_task):
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         await server.close()
         await store.close()
-        await client.close()
         with contextlib.suppress(FileNotFoundError):
             socket_path.unlink()

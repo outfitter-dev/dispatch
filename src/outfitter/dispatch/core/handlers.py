@@ -14,14 +14,19 @@ from outfitter.dispatch.registry.models import Lane
 
 from .models import (
     ActionAck,
+    ActionView,
     AttachInput,
     LaneDetail,
     LaneInput,
     LaneRef,
     LaneTextInput,
+    LogInput,
+    LogOutput,
     OpenInput,
     Roster,
     RosterInput,
+    StatusInput,
+    StatusOutput,
 )
 
 _READ_ONLY = SandboxPolicy(type="readOnly")
@@ -133,3 +138,32 @@ async def archive(inp: LaneInput, ctx: Ctx) -> LaneRef:
     await ctx.registry.update_lane_status(lane.id, "archived")
     await ctx.registry.log_action("archive", lane=lane.id)
     return _ref(await ctx.registry.get_lane(lane.id))
+
+
+async def status(inp: StatusInput, ctx: Ctx) -> StatusOutput:
+    lanes = await ctx.registry.list_lanes()
+    triggers = await ctx.registry.list_triggers()
+    return StatusOutput(
+        lanes=len(lanes),
+        idle=sum(1 for lane in lanes if lane.status == "idle"),
+        busy=sum(1 for lane in lanes if lane.status == "busy"),
+        triggers=len(triggers),
+        triggers_enabled=sum(1 for trigger in triggers if trigger.enabled),
+    )
+
+
+async def show_log(inp: LogInput, ctx: Ctx) -> LogOutput:
+    records = await ctx.registry.recent_actions(inp.limit)
+    return LogOutput(
+        actions=[
+            ActionView(
+                ts=record.ts.isoformat(),
+                op=record.op,
+                lane=record.lane,
+                trigger_id=record.trigger_id,
+                outcome=record.outcome,
+                detail=record.detail,
+            )
+            for record in records
+        ]
+    )

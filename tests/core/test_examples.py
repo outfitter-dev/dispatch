@@ -20,6 +20,8 @@ async def test_registry_has_the_v1_ops() -> None:
         "show",
         "roster",
         "archive",
+        "status",
+        "log",
         "trigger-add",
         "trigger-list",
         "trigger-rm",

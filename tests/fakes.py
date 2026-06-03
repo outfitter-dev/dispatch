@@ -137,3 +137,22 @@ class FakeClock:
 
     def advance(self, seconds: float) -> None:
         self._t = self._t + timedelta(seconds=seconds)
+
+
+class FakeSupervisedClient(FakeLaneClient):
+    """A FakeLaneClient with the supervised lifecycle (wait_closed/close)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed = asyncio.Event()
+        self.resumed: list[str] = []
+
+    async def thread_resume(self, thread_id: str) -> ThreadInfo:
+        self.resumed.append(thread_id)
+        return await super().thread_resume(thread_id)
+
+    async def wait_closed(self) -> None:
+        await self.closed.wait()
+
+    async def close(self) -> None:
+        self.closed.set()

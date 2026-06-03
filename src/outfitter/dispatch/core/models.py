@@ -103,3 +103,35 @@ class TriggerList(BaseModel):
 class TriggerRemoved(BaseModel):
     id: str
     removed: bool
+
+
+# --- lifecycle ops (status / log) ---------------------------------------------
+
+
+class StatusInput(BaseModel):
+    pass
+
+
+class StatusOutput(BaseModel):
+    lanes: int
+    idle: int
+    busy: int
+    triggers: int
+    triggers_enabled: int
+
+
+class LogInput(BaseModel):
+    limit: int = Field(default=20, description="How many recent actions to show.")
+
+
+class ActionView(BaseModel):
+    ts: str
+    op: str
+    lane: str | None = None
+    trigger_id: str | None = None
+    outcome: str
+    detail: str | None = None
+
+
+class LogOutput(BaseModel):
+    actions: list[ActionView]
