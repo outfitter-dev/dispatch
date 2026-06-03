@@ -16,7 +16,9 @@ dispatch automates pings to lanes on time and event triggers. Codex already has 
 
 ## Decision
 
-dispatch owns its scheduler. A small asyncio scheduler handles time triggers (interval + cron/RRULE via `croniter`/`dateutil`); a reactor consumes the App Server event stream for event triggers (`idle_for`, `turn_completed`, `waiting_on_approval`). Triggers are stored in dispatch's own registry, fire actions through the verified messaging primitives (`turn/start`, `turn/steer`, `inject_items`), and run through a guard layer (`idle_only`, `min_interval`, `dedupe`) that is also the seam for future conditional triggers. We do not write Codex automation TOML.
+dispatch owns its scheduler. A small asyncio scheduler handles time triggers; a reactor consumes the App Server event stream for event triggers (`idle_for`, `turn_completed`, `waiting_on_approval`).
+
+Because we own the scheduler we also own the trigger time-format: v1 supports **interval and cron only**, via `croniter` for cron fields. We deliberately do **not** support iCal RRULE (and so do not pull in `dateutil.rrulestr`) — Codex's automation RRULE format is irrelevant since we don't consume its TOML. RRULE is a later add only if a concrete need appears. Triggers are stored in dispatch's own registry, fire actions through the verified messaging primitives (`turn/start`, `turn/steer`, `inject_items`), and run through a guard layer (`idle_only`, `min_interval`, `dedupe`) that is also the seam for future conditional triggers. We do not write Codex automation TOML.
 
 ## Consequences
 

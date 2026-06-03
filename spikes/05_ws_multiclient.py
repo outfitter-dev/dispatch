@@ -72,7 +72,7 @@ async def main():
 
         # B: does it see A's thread without resuming? does resume work + subscribe?
         await B.send("thread/list", {"limit": 50}); await B.pump(4)
-        b_sees = any(t.get("id") == tid for m in B.take() if "result" in m for t in (m["result"].get("threads", []) if isinstance(m.get("result"), dict) else []))
+        b_sees = any(t.get("id") == tid for m in B.take() if "result" in m for t in (m["result"].get("data", []) if isinstance(m.get("result"), dict) else []))
         print(f"Q2a — B's thread/list sees A's thread: {b_sees}")
         await B.send("thread/resume", {"threadId": tid}); await B.pump(4)
         bres = [ (m.get('method') or ('RESP' if 'result' in m else 'ERR:'+str(m.get('error',{}).get('message','')[:60]))) for m in B.take()]

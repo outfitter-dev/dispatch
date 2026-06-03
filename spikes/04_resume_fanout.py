@@ -69,7 +69,7 @@ async def main():
             sees = False
             for m in B.take():
                 if "result" in m:
-                    for t in (m["result"].get("threads", []) if isinstance(m.get("result"),dict) else []):
+                    for t in (m["result"].get("data", []) if isinstance(m.get("result"),dict) else []):
                         if t.get("id") == tid: sees = True
             print("B thread/list sees A's (now persisted) thread:", sees)
             rid = await B.send("thread/resume", {"threadId": tid}); await B.pump(5)

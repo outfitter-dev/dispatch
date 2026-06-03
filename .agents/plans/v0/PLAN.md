@@ -17,7 +17,7 @@ References: [`REFS.md`](./REFS.md).
 Goal: an installable, lint/type/test-green skeleton; `dispatch --help` and `dispatchd --help` run.
 
 - `uv init` → `pyproject.toml`: `name = "outfitter-dispatch"`, `requires-python = ">=3.13"`, build-backend hatchling configured for the `outfitter.dispatch` namespace package under `src/`.
-- Runtime deps: `typer`, `rich`, `pydantic`, `pydantic-settings`, `aiosqlite`, `structlog`, `croniter` (or `python-dateutil`), `mcp`.
+- Runtime deps: `typer`, `rich`, `pydantic`, `pydantic-settings`, `aiosqlite`, `structlog`, `croniter`, `mcp`. (No `dateutil`/RRULE in v1 — cron + interval only.)
 - Dev deps: `ruff`, `mypy`, `pytest`, `pytest-asyncio`.
 - `[project.scripts]`: `dispatch = "outfitter.dispatch.cli:app"`, `dispatchd = "outfitter.dispatch.daemon.__main__:main"`.
 - Config: `ruff.toml` (strict ruleset + formatter), `mypy` strict in `pyproject`, `pytest` asyncio mode, `.python-version`.
@@ -62,7 +62,7 @@ Acceptance: full CLI roundtrip works; `test_examples` green.
 
 Goal: automated pings on time + event triggers; our own scheduler.
 
-- `core/scheduler.py`: asyncio time wheel; interval + cron/RRULE next-fire via `croniter`/`dateutil`.
+- `core/scheduler.py`: asyncio time wheel; interval + cron next-fire via `croniter` (no RRULE in v1).
 - `core/reactor.py`: consume the client event stream; map events (`idle_for`, `turn_completed`, `waiting_on_approval`) → trigger evaluation.
 - `core/triggers.py`: trigger model (`when` / `action` / `guard`), guards (`idle_only`, `min_interval`, `dedupe`); the conditional-guard seam (not implemented, interface only).
 - Persistence in `registry` (`triggers` table); `surfaces/cli` `triggers add|rm|pause|resume|list`.

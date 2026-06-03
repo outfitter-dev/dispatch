@@ -34,4 +34,4 @@ One `DispatchError` hierarchy in `errors.py` (e.g. `NotFoundError`, `LaneBusyErr
 - Adding capability = adding an op + registering it. Nothing else.
 - Every op exposed on MCP/remote must define `output`.
 - Keep handlers pure-ish: input in, output out (or raise). Side effects go through injected dependencies (the App Server client, the registry) passed via `ctx`, never imported ad hoc.
-- A parity test asserts CLI commands ≡ MCP tools ≡ registry ops. It must stay green.
+- A parity test must stay green — and it checks **behavior, not just op names**. Per op, assert the derived projections agree: CLI option set ↔ MCP `inputSchema`/`outputSchema` ↔ the input/output models; MCP annotations ↔ `intent`/`idempotent`; error-code projection consistent across surfaces. Enumerating that the same op *names* exist on each surface is not enough — drift hides in the per-op schema/annotation/error mapping.
