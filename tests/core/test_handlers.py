@@ -183,8 +183,12 @@ async def test_discover_lists_persisted_sessions_from_client(store: Registry) ->
     assert first.cwd == "/work"
     assert first.source == "cli"
     assert first.ephemeral is False
-    # Discovery reads through to the client's thread_list with the requested limit...
-    assert any(name == "thread_list" and kw["limit"] == 10 for name, kw in client.calls)
+    # Discovery reads through to the client's thread_list with the requested limit
+    # AND state-db only — the latter is what keeps it read-only (no live resume).
+    assert any(
+        name == "thread_list" and kw["limit"] == 10 and kw["use_state_db_only"] is True
+        for name, kw in client.calls
+    )
     # ...and registers nothing (pure read; ADR-0005 observe-only untouched).
     assert (await handlers.roster(RosterInput(), ctx)).lanes == []
 
@@ -198,3 +202,13 @@ async def test_discover_shortens_long_preview(store: Registry) -> None:
     assert preview is not None
     assert len(preview) <= 80
     assert preview.endswith("…")
+
+
+async def test_discover_keeps_short_preview_verbatim(store: Registry) -> None:
+    exactly_80 = "y" * 80
+    client = FakeLaneClient()
+    client.list_result = [ThreadInfo(id="t1", preview=exactly_80)]
+    ctx = make_ctx(store, client)
+    out = await handlers.discover(DiscoverInput(), ctx)
+    # At the boundary the preview is returned unchanged — no ellipsis.
+    assert out.sessions[0].preview == exactly_80

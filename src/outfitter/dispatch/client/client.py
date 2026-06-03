@@ -111,7 +111,13 @@ class AppServerClient:
         if params is not None:
             message["params"] = params
         await self._transport.send(message)
-        return await fut
+        try:
+            return await fut
+        except asyncio.CancelledError:
+            # A bounded caller (e.g. attach's wait_for) timed out: drop the pending
+            # request so abandoned ids don't accumulate in the router.
+            self._router.discard_request(request_id)
+            raise
 
     async def _notify(self, method: str, params: dict[str, object] | None = None) -> None:
         message: dict[str, object] = {"method": method}

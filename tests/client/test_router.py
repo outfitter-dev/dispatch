@@ -35,6 +35,17 @@ async def test_router_routes_notification_to_lane_events_and_raw() -> None:
     assert raw_msg["method"] == "turn/started"
 
 
+async def test_discard_request_drops_pending_and_ignores_late_response() -> None:
+    router = Router()
+    fut = router.new_request(7)
+    assert 7 in router._pending
+    router.discard_request(7)  # the awaiter was cancelled (bounded timeout)
+    assert 7 not in router._pending
+    # A late response for the abandoned id is a harmless no-op (does not crash).
+    router.handle({"id": 7, "result": {"thread": {"id": "x"}}})
+    assert not fut.done()
+
+
 async def test_router_routes_server_request_to_approval_event() -> None:
     router = Router()
     events = router.events.subscribe("L1")

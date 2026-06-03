@@ -34,6 +34,17 @@ async def test_initialize_sends_request_then_initialized_notification(
     assert "id" not in fake.sent[1]  # initialized is a notification
 
 
+async def test_bounded_request_timeout_discards_pending(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    # No auto-responder: thread/resume never gets a reply, so a bounded wait_for
+    # cancels it. The client must drop the pending id (no leak across timeouts).
+    c, _fake = client
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(c.thread_resume("STUCK"), 0.05)
+    assert c._router._pending == {}
+
+
 async def test_thread_start_parses_thread_info(
     client: tuple[AppServerClient, FakeTransport],
 ) -> None:

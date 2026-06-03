@@ -84,6 +84,12 @@ class Router:
         self._pending[request_id] = fut
         return fut
 
+    def discard_request(self, request_id: int) -> None:
+        """Drop a pending request whose awaiter was cancelled (e.g. a bounded
+        ``wait_for`` timed out). Prevents ``_pending`` from growing without bound
+        across repeated timeouts; a late response for this id is then ignored."""
+        self._pending.pop(request_id, None)
+
     def handle(self, message: dict[str, object]) -> None:
         mid = message.get("id")
         method = message.get("method")

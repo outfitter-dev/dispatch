@@ -70,7 +70,7 @@ class FakeLaneClient:
     async def thread_list(
         self, limit: int = 50, cursor: str | None = None, use_state_db_only: bool | None = None
     ) -> list[ThreadInfo]:
-        self._record("thread_list", limit=limit)
+        self._record("thread_list", limit=limit, use_state_db_only=use_state_db_only)
         return self.list_result
 
     async def thread_read(self, thread_id: str) -> dict[str, object]:
