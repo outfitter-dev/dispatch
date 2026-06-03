@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
 
-from outfitter.dispatch.contracts.errors import AuthorityError, ValidationError
+from outfitter.dispatch.client.models import ThreadInfo, ThreadStatus
+from outfitter.dispatch.contracts.errors import AppServerError, AuthorityError, ValidationError
 from outfitter.dispatch.core import handlers
 from outfitter.dispatch.core.models import (
     AttachInput,
+    DiscoverInput,
     LaneInput,
     LaneTextInput,
     LogInput,
@@ -133,3 +136,65 @@ async def test_attach_is_idempotent(store: Registry) -> None:
     second = await handlers.attach_lane(AttachInput(thread="T9"), ctx)
     assert first.id == second.id == "T9"
     assert len((await handlers.roster(RosterInput(), ctx)).lanes) == 1
+
+
+class _HangingResumeClient(FakeLaneClient):
+    """A client whose ``thread/resume`` never returns — models a wedged app-server."""
+
+    async def thread_resume(self, thread_id: str) -> ThreadInfo:
+        await asyncio.sleep(3600)  # cancelled by the handler's wait_for bound
+        raise AssertionError("unreachable")  # pragma: no cover
+
+
+async def test_attach_resume_timeout_projects_cleanly_and_leaves_registry_empty(
+    store: Registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(handlers, "_RESUME_TIMEOUT_S", 0.05)
+    ctx = make_ctx(store, _HangingResumeClient())
+    with pytest.raises(AppServerError) as excinfo:
+        await handlers.attach_lane(AttachInput(thread="STUCK"), ctx)
+    assert "timed out" in str(excinfo.value)
+    # The bounded failure must not half-register a lane.
+    assert (await handlers.roster(RosterInput(), ctx)).lanes == []
+
+
+async def test_discover_lists_persisted_sessions_from_client(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.list_result = [
+        ThreadInfo(
+            id="019e8a09",
+            name="Desktop",
+            preview="  multi\n  line   preview  ",
+            cwd="/work",
+            source="cli",
+            ephemeral=False,
+            status=ThreadStatus(type="idle"),
+        ),
+        ThreadInfo(id="t2"),  # sparse row: only an id
+    ]
+    ctx = make_ctx(store, client)
+    out = await handlers.discover(DiscoverInput(limit=10), ctx)
+
+    assert [s.id for s in out.sessions] == ["019e8a09", "t2"]
+    first = out.sessions[0]
+    assert first.name == "Desktop"
+    assert first.status == "idle"  # flattened from the status object
+    assert first.preview == "multi line preview"  # whitespace collapsed
+    assert first.cwd == "/work"
+    assert first.source == "cli"
+    assert first.ephemeral is False
+    # Discovery reads through to the client's thread_list with the requested limit...
+    assert any(name == "thread_list" and kw["limit"] == 10 for name, kw in client.calls)
+    # ...and registers nothing (pure read; ADR-0005 observe-only untouched).
+    assert (await handlers.roster(RosterInput(), ctx)).lanes == []
+
+
+async def test_discover_shortens_long_preview(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.list_result = [ThreadInfo(id="t1", preview="x" * 200)]
+    ctx = make_ctx(store, client)
+    out = await handlers.discover(DiscoverInput(), ctx)
+    preview = out.sessions[0].preview
+    assert preview is not None
+    assert len(preview) <= 80
+    assert preview.endswith("…")

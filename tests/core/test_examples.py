@@ -19,6 +19,7 @@ async def test_registry_has_the_v1_ops() -> None:
         "interrupt",
         "show",
         "roster",
+        "discover",
         "archive",
         "status",
         "log",

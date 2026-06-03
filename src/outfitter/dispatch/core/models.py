@@ -34,6 +34,10 @@ class RosterInput(BaseModel):
     include_archived: bool = Field(default=False, description="Include archived lanes.")
 
 
+class DiscoverInput(BaseModel):
+    limit: int = Field(default=50, ge=1, description="Max persisted Codex sessions to list.")
+
+
 # --- outputs ------------------------------------------------------------------
 
 
@@ -58,6 +62,23 @@ class ActionAck(BaseModel):
 
 class Roster(BaseModel):
     lanes: list[LaneRef]
+
+
+class DiscoveredSession(BaseModel):
+    """A persisted Codex session discoverable via ``thread/list`` — a candidate to
+    ``attach``, not (yet) a managed lane. Mirrors the available ``ThreadInfo`` subset."""
+
+    id: str
+    name: str | None = None
+    preview: str | None = None
+    cwd: str | None = None
+    status: str | None = None
+    source: str | None = None
+    ephemeral: bool | None = None
+
+
+class Discovery(BaseModel):
+    sessions: list[DiscoveredSession]
 
 
 # --- trigger ops --------------------------------------------------------------

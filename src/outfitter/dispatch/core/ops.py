@@ -13,6 +13,8 @@ from . import handlers, trigger_handlers
 from .models import (
     ActionAck,
     AttachInput,
+    DiscoverInput,
+    Discovery,
     LaneDetail,
     LaneInput,
     LaneRef,
@@ -132,6 +134,17 @@ ROSTER = define_op(
     examples=[Example("empty", input={}, output={"lanes": []})],
 )
 
+DISCOVER = define_op(
+    id="discover",
+    summary="List persisted Codex sessions you could attach (distinct from roster).",
+    input=DiscoverInput,
+    output=Discovery,
+    intent="read",
+    idempotent=True,
+    handler=handlers.discover,
+    examples=[Example("empty", input={"limit": 50}, output={"sessions": []})],
+)
+
 ARCHIVE = define_op(
     id="archive",
     summary="Archive a lane (reversible).",
@@ -241,6 +254,7 @@ _ALL = (
     INTERRUPT,
     SHOW,
     ROSTER,
+    DISCOVER,
     ARCHIVE,
     STATUS,
     LOG,
