@@ -15,7 +15,16 @@ import aiosqlite
 
 from outfitter.dispatch.contracts.errors import NotFoundError
 
-from .models import ActionRecord, Lane, LaneSource, LaneStatus
+from .models import (
+    ActionAdapter,
+    ActionRecord,
+    Guard,
+    Lane,
+    LaneSource,
+    LaneStatus,
+    Trigger,
+    WhenAdapter,
+)
 
 Clock = Callable[[], datetime]
 
@@ -46,6 +55,7 @@ CREATE TABLE IF NOT EXISTS triggers (
     action_spec TEXT NOT NULL,
     guard_spec TEXT,
     enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT,
     last_fired_at TEXT
 );
 CREATE TABLE IF NOT EXISTS actions_log (
@@ -172,6 +182,61 @@ class Registry:
         )
         await self._conn.commit()
 
+    # --- triggers -------------------------------------------------------------
+
+    async def add_trigger(self, trigger: Trigger) -> Trigger:
+        created = trigger.created_at or self._now()  # the scheduling baseline
+        await self._conn.execute(
+            "INSERT INTO triggers (id, name, lane_selector, when_spec, action_spec, "
+            "guard_spec, enabled, created_at, last_fired_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                trigger.id,
+                trigger.name,
+                trigger.lane,
+                WhenAdapter.dump_json(trigger.when).decode(),
+                ActionAdapter.dump_json(trigger.action).decode(),
+                trigger.guard.model_dump_json(),
+                int(trigger.enabled),
+                created.isoformat(),
+                trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
+            ),
+        )
+        await self._conn.commit()
+        return trigger.model_copy(update={"created_at": created})
+
+    async def find_trigger(self, trigger_id: str) -> Trigger | None:
+        async with self._conn.execute("SELECT * FROM triggers WHERE id = ?", (trigger_id,)) as cur:
+            row = await cur.fetchone()
+        return _row_to_trigger(row) if row is not None else None
+
+    async def get_trigger(self, trigger_id: str) -> Trigger:
+        trigger = await self.find_trigger(trigger_id)
+        if trigger is None:
+            raise NotFoundError(f"no trigger {trigger_id!r}")
+        return trigger
+
+    async def list_triggers(self) -> list[Trigger]:
+        async with self._conn.execute("SELECT * FROM triggers ORDER BY id") as cur:
+            rows = await cur.fetchall()
+        return [_row_to_trigger(row) for row in rows]
+
+    async def set_trigger_enabled(self, trigger_id: str, enabled: bool) -> None:
+        await self._conn.execute(
+            "UPDATE triggers SET enabled = ? WHERE id = ?", (int(enabled), trigger_id)
+        )
+        await self._conn.commit()
+
+    async def set_trigger_fired(self, trigger_id: str, when: datetime) -> None:
+        await self._conn.execute(
+            "UPDATE triggers SET last_fired_at = ? WHERE id = ?", (when.isoformat(), trigger_id)
+        )
+        await self._conn.commit()
+
+    async def remove_trigger(self, trigger_id: str) -> bool:
+        cur = await self._conn.execute("DELETE FROM triggers WHERE id = ?", (trigger_id,))
+        await self._conn.commit()
+        return cur.rowcount > 0
+
     # --- audit log ------------------------------------------------------------
 
     async def log_action(
@@ -205,3 +270,21 @@ def _row_dict(row: aiosqlite.Row) -> dict[str, object]:
 
 def _row_to_lane(row: aiosqlite.Row) -> Lane:
     return Lane.model_validate(_row_dict(row))
+
+
+def _row_to_trigger(row: aiosqlite.Row) -> Trigger:
+    data = _row_dict(row)
+    last_fired = data["last_fired_at"]
+    created = data["created_at"]
+    guard_spec = data["guard_spec"]
+    return Trigger(
+        id=str(data["id"]),
+        name=str(data["name"]),
+        lane=str(data["lane_selector"]),
+        when=WhenAdapter.validate_json(str(data["when_spec"])),
+        action=ActionAdapter.validate_json(str(data["action_spec"])),
+        guard=Guard.model_validate_json(str(guard_spec)) if guard_spec else Guard(),
+        enabled=bool(data["enabled"]),
+        created_at=datetime.fromisoformat(str(created)) if created else None,
+        last_fired_at=datetime.fromisoformat(str(last_fired)) if last_fired else None,
+    )

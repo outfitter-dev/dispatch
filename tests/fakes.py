@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from datetime import datetime, timedelta
 
 import structlog
 
@@ -123,3 +124,16 @@ def make_ctx(store: Registry, client: FakeLaneClient | None = None) -> Ctx:
         log=structlog.get_logger(),
         abort=asyncio.Event(),
     )
+
+
+class FakeClock:
+    """A controllable clock for deterministic time-trigger tests."""
+
+    def __init__(self, start: datetime) -> None:
+        self._t = start
+
+    def __call__(self) -> datetime:
+        return self._t
+
+    def advance(self, seconds: float) -> None:
+        self._t = self._t + timedelta(seconds=seconds)
