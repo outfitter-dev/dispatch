@@ -2,15 +2,15 @@
 id: 0009
 slug: mcp-daemon-lifecycle
 title: MCP Daemon Lifecycle — Auto-Start Detached Singleton
-status: proposed
+status: accepted
 created: 2026-06-02
-updated: 2026-06-02
+updated: 2026-06-03
 owners: ['[galligan](https://github.com/galligan)']
 ---
 
 # ADR-0009: MCP Daemon Lifecycle — Auto-Start Detached Singleton
 
-> Proposed. The UX is agreed; the singleton-locking + failure-mode details below must be specified (and not hidden) before implementation.
+> Accepted (2026-06-03) after Phase 5 implemented the detached singleton lifecycle, bounded MCP daemon startup, stale-pid protection, and supervisor restart path. Idle daemon reaping remains deferred.
 
 ## Context
 
@@ -26,10 +26,20 @@ owners: ['[galligan](https://github.com/galligan)']
 
 ## Assumptions / open items (call out, do not bake silently)
 
-- Singleton locking is reliable across the race (pidfile staleness + socket liveness probe handle crashed-daemon cases). **Mechanism to be specified.**
+- Singleton locking is guarded by pidfile/socket liveness probes. Stale pidfiles are not trusted for stop; the daemon must answer on the socket before it is signaled.
 - First-MCP-connect pays a one-time daemon-startup latency; acceptable.
 - **Open:** who reaps an idle daemon (lifetime/GC policy) — deferred past v1.
 - The same auto-start path should back `dispatch up` and CLI commands, so there's one start mechanism, not two.
+
+## Implementation outcome
+
+Phase 5 implemented:
+
+- `dispatch up` / `dispatch down` as a detached singleton lifecycle.
+- MCP startup that connects through the same control socket path and fails with bounded timeouts.
+- Stale pidfile safety: `down` only signals a pid after a live socket probe confirms a daemon is answering.
+- Supervisor restart/re-resume of persisted lanes after app-server EOF.
+- A launchd plist generator; actual `launchctl` installation remains a deliberate user action.
 
 ## Consequences
 

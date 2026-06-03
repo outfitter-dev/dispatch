@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "dispatch": {
+      "command": "uv",
+      "args": ["--directory", "../..", "run", "dispatch", "mcp"],
+      "note": "Local dispatch MCP server. Exposes the same op registry as the dispatch CLI and auto-starts the detached singleton daemon when needed."
+    }
+  }
+}
