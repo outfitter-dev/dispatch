@@ -22,6 +22,12 @@ def db_path() -> Path:
     return Path(override) if override else _base() / "registry.db"
 
 
+def pidfile_path() -> Path:
+    """Pidfile for the singleton daemon (ADR-0009)."""
+    override = os.environ.get("DISPATCH_PIDFILE")
+    return Path(override) if override else _base() / "dispatchd.pid"
+
+
 def ensure_base() -> Path:
     base = _base()
     base.mkdir(parents=True, exist_ok=True)

@@ -60,6 +60,7 @@ class AppServerClient:
         self._id = 0
         self._read_task: asyncio.Task[None] | None = None
         self._closed = False
+        self._closed_event = asyncio.Event()  # set when the read loop ends (EOF or close)
 
     async def start(self) -> None:
         """Begin consuming the transport. Idempotent."""
@@ -80,15 +81,22 @@ class AppServerClient:
 
     async def _read_loop(self) -> None:
         try:
-            while True:
-                message = await self._transport.receive()
-                if message is None:
-                    break
-                self._router.handle(message)
-        except (TransportError, ProtocolError) as exc:
-            self._router.fail_all(exc)
-            return
-        self._router.fail_all(TransportError("app-server stream closed (stdout EOF)"))
+            try:
+                while True:
+                    message = await self._transport.receive()
+                    if message is None:
+                        break
+                    self._router.handle(message)
+            except (TransportError, ProtocolError) as exc:
+                self._router.fail_all(exc)
+                return
+            self._router.fail_all(TransportError("app-server stream closed (stdout EOF)"))
+        finally:
+            self._closed_event.set()  # wake supervisors waiting on wait_closed()
+
+    async def wait_closed(self) -> None:
+        """Block until the read loop ends — EOF (app-server crash) or ``close()``."""
+        await self._closed_event.wait()
 
     def _next_id(self) -> int:
         self._id += 1
@@ -227,3 +235,4 @@ class AppServerClient:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._read_task
         await self._transport.close()
+        self._closed_event.set()

@@ -17,9 +17,13 @@ from .models import (
     LaneInput,
     LaneRef,
     LaneTextInput,
+    LogInput,
+    LogOutput,
     OpenInput,
     Roster,
     RosterInput,
+    StatusInput,
+    StatusOutput,
     TriggerAddInput,
     TriggerIdInput,
     TriggerList,
@@ -200,6 +204,34 @@ TRIGGER_RESUME = define_op(
     examples=[Example("missing", input={"id": "nope"}, raises=NotFoundError)],
 )
 
+STATUS = define_op(
+    id="status",
+    summary="Show daemon health: lane and trigger counts.",
+    input=StatusInput,
+    output=StatusOutput,
+    intent="read",
+    idempotent=True,
+    handler=handlers.status,
+    examples=[
+        Example(
+            "empty",
+            input={},
+            output={"lanes": 0, "idle": 0, "busy": 0, "triggers": 0, "triggers_enabled": 0},
+        )
+    ],
+)
+
+LOG = define_op(
+    id="log",
+    summary="Show the recent actions audit log.",
+    input=LogInput,
+    output=LogOutput,
+    intent="read",
+    idempotent=True,
+    handler=handlers.show_log,
+    examples=[Example("empty", input={"limit": 5}, output={"actions": []})],
+)
+
 _ALL = (
     OPEN,
     ATTACH,
@@ -210,6 +242,8 @@ _ALL = (
     SHOW,
     ROSTER,
     ARCHIVE,
+    STATUS,
+    LOG,
     TRIGGER_ADD,
     TRIGGER_LIST,
     TRIGGER_RM,

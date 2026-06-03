@@ -77,4 +77,24 @@ def build_cli(socket_path: Path | None = None) -> typer.Typer:
 
         run_mcp(path)
 
+    # `up`/`down` manage the daemon PROCESS (not ops, which run inside it).
+    @app.command(name="up", help="Start the daemon (detached singleton).")
+    def _up() -> None:
+        from outfitter.dispatch.daemon import lifecycle
+
+        config.ensure_base()
+        try:
+            started = lifecycle.start_detached(path, config.pidfile_path())
+        except (RuntimeError, TimeoutError) as exc:
+            typer.secho(f"dispatch: {exc}", fg="red", err=True)
+            raise typer.Exit(code=1) from exc
+        typer.echo("dispatchd started" if started else "dispatchd already running")
+
+    @app.command(name="down", help="Stop the daemon.")
+    def _down() -> None:
+        from outfitter.dispatch.daemon import lifecycle
+
+        stopped = lifecycle.stop_daemon(path, config.pidfile_path())
+        typer.echo("dispatchd stopped" if stopped else "dispatchd not running")
+
     return app

@@ -13,8 +13,10 @@ from outfitter.dispatch.core.models import (
     AttachInput,
     LaneInput,
     LaneTextInput,
+    LogInput,
     OpenInput,
     RosterInput,
+    StatusInput,
 )
 from outfitter.dispatch.registry.store import Registry
 from tests.fakes import FakeLaneClient, make_ctx
@@ -109,6 +111,19 @@ async def test_roster_then_archive_flips_status(store: Registry) -> None:
     assert (await handlers.roster(RosterInput(), ctx)).lanes == []
     everything = await handlers.roster(RosterInput(include_archived=True), ctx)
     assert len(everything.lanes) == 1
+
+
+async def test_status_and_log_reflect_activity(store: Registry) -> None:
+    ctx = make_ctx(store)
+    await handlers.open_lane(OpenInput(name="one"), ctx)
+    await handlers.send(LaneTextInput(lane="lane-1", text="hi"), ctx)
+    status = await handlers.status(StatusInput(), ctx)
+    assert status.lanes == 1
+    assert status.idle == 1
+    log = await handlers.show_log(LogInput(limit=10), ctx)
+    ops = [a.op for a in log.actions]
+    assert "open" in ops
+    assert "send" in ops
 
 
 async def test_attach_is_idempotent(store: Registry) -> None:
