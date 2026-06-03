@@ -7,9 +7,13 @@ check:
     uv run mypy src tests
     uv run pytest
 
-# Run the test suite.
+# Run the test suite (unit only; integration is deselected by default).
 test *args:
     uv run pytest {{args}}
+
+# Run integration tests against a real ephemeral codex app-server.
+test-int *args:
+    uv run pytest -m integration {{args}}
 
 # Lint with ruff.
 lint:

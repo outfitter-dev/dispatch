@@ -2,15 +2,15 @@
 id: 0005
 slug: lane-authority-capability-ladder
 title: Lane Authority Capability Ladder
-status: proposed
+status: accepted
 created: 2026-06-02
-updated: 2026-06-02
+updated: 2026-06-03
 owners: ['[galligan](https://github.com/galligan)']
 ---
 
 # ADR-0005: Lane Authority Capability Ladder
 
-> Proposed — gated on the Phase-1 slice-0 cross-process spike. Assumptions are called out below; do not treat full read/write on attached lanes as settled.
+> Accepted (2026-06-03) after the Phase-1 cross-process spike. The spike did **not** clear attached-lane writes — it confirmed the observe-only default and revealed that cross-process observation is not even live. See "Phase-1 spike outcome" below. The gated write rungs remain locked for v0.
 
 ## Context
 
@@ -35,9 +35,20 @@ Authority over a lane is a ladder, not a flag:
 - Honors the user's "full read/write" intent where it is safe today (owned lanes) and stays honest where it is not (attached lanes), instead of shipping an unverified guarantee.
 - The advisory lock is treated as intra-dispatch coordination only — never as cross-process safety.
 
+## Phase-1 spike outcome (2026-06-03)
+
+Two `codex app-server` processes shared one isolated `CODEX_HOME` (modelling our daemon vs the desktop app). Driven through the typed client:
+
+- **Discovery works cross-process:** process B sees A's persisted thread via `thread/list(useStateDbOnly:true)`.
+- **Resume works cross-process:** B can `thread/resume` A's persisted thread and read its history.
+- **Live fan-out does NOT cross processes:** while A ran a turn, B (resumed) received **zero** live events. Live event fan-out is intra-process only (one app-server process). The spike-04 "resume = live co-presence" finding holds only for multiple connections to the *same* server process — which is exactly dispatch's own topology (ADR-0002), not the desktop-vs-daemon case.
+- **Concurrent turns are uncoordinated:** A and B each ran a turn on the shared thread with no error returned, but there is no cross-process interlock (dispatch's advisory lock is dispatch-local and cannot gate the desktop app), so "no error" is not "safe."
+
+**Decision:** keep attached lanes **observe-only** for v0. Observation is limited to resume + history read + periodic re-read (no live cross-process stream). The idle-only-write and full-write rungs stay locked; unlocking them needs a real cross-process interlock, which Codex does not expose today. This is the safe default the ladder already proposed — the spike confirms rather than relaxes it.
+
 ## Alternatives considered
 
-- **Full read/write on attached lanes now** — rejected: unverified; the advisory lock can't gate the desktop app.
+- **Full read/write on attached lanes now** — rejected: the spike shows cross-process turns are uncoordinated and the advisory lock can't gate the desktop app.
 - **Own-lanes-only for v1** — rejected: loses the attach-to-existing value the user wants; the ladder keeps it as a gated opt-in instead.
 
 ## References

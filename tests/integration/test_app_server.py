@@ -1,0 +1,103 @@
+"""Integration tests against a REAL ephemeral codex app-server.
+
+Verifies the primitives dispatch is built on (PLAN Phase 1): initialize, a
+read-only turn answering ``pong``, inject_items recall, thread/list reading
+``result.data``, approval-accept resuming a write turn, and same-connection
+persisted-resume yielding live events. Auto-skips when codex/auth are
+unavailable (see conftest).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import subprocess
+from collections.abc import AsyncIterator
+from pathlib import Path
+
+import pytest
+
+from outfitter.dispatch.client.client import AppServerClient
+from outfitter.dispatch.client.events import LaneEvent, TurnCompleted
+
+from ._drive import run_turn, run_turn_autoapprove
+
+pytestmark = pytest.mark.integration
+
+
+async def test_read_only_turn_returns_pong(client: AppServerClient, work_dir: Path) -> None:
+    thread = await client.thread_start(cwd=str(work_dir), sandbox="read-only", ephemeral=True)
+    text = await run_turn(client, thread.id, "Reply with exactly one word: pong", str(work_dir))
+    assert "pong" in text.lower()
+
+
+async def test_inject_items_then_recall(client: AppServerClient, work_dir: Path) -> None:
+    thread = await client.thread_start(cwd=str(work_dir), sandbox="read-only", ephemeral=True)
+    await client.inject_items(
+        thread.id,
+        [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "REMEMBER: the codeword is BANANA."}],
+            }
+        ],
+    )
+    text = await run_turn(
+        client,
+        thread.id,
+        "What codeword did I tell you earlier? Reply with one word.",
+        str(work_dir),
+    )
+    assert "banana" in text.lower()
+
+
+async def test_thread_list_reads_data_key(client: AppServerClient, work_dir: Path) -> None:
+    thread = await client.thread_start(cwd=str(work_dir), sandbox="read-only", ephemeral=False)
+    # A thread persists (becomes listable + archivable) only after a turn completes.
+    await run_turn(client, thread.id, "Reply with exactly one word: ok", str(work_dir))
+    try:
+        threads = await client.thread_list(limit=100, use_state_db_only=True)
+        assert any(t.id == thread.id for t in threads)  # parsed from result.data
+    finally:
+        await client.thread_archive(thread.id)
+
+
+async def test_approval_accept_resumes_write_turn(client: AppServerClient, work_dir: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=work_dir, check=True)
+    thread = await client.thread_start(
+        cwd=str(work_dir), sandbox="workspace-write", approval_policy="untrusted", ephemeral=True
+    )
+    await run_turn_autoapprove(
+        client,
+        thread.id,
+        "Create a file named notes.txt whose entire contents are exactly: HELLO",
+        str(work_dir),
+    )
+    notes = work_dir / "notes.txt"
+    assert notes.exists(), "approval-accepted write turn did not create the file"
+    assert "HELLO" in notes.read_text()
+
+
+async def test_persisted_resume_yields_live_events(client: AppServerClient, work_dir: Path) -> None:
+    # dispatch's real topology: ONE app-server, many lanes on one connection. Resuming
+    # a persisted thread on that connection yields live events for the next turn.
+    # (Cross-PROCESS live fan-out does NOT happen — recorded in RETRO/ADR-0005 from the
+    # Phase-1 spike; that is why attached lanes stay observe-only.)
+    thread = await client.thread_start(cwd=str(work_dir), sandbox="read-only", ephemeral=False)
+    await run_turn(client, thread.id, "Reply one word: alpha", str(work_dir))  # persist a rollout
+    resumed = await client.thread_resume(thread.id)
+    assert resumed.id == thread.id
+    events = client.events(thread.id)
+    saw_completion = asyncio.create_task(_await_completion(events, thread.id))
+    await run_turn(client, thread.id, "Reply with exactly one word: omega", str(work_dir))
+    try:
+        assert await asyncio.wait_for(saw_completion, timeout=60)
+    finally:
+        await client.thread_archive(thread.id)
+
+
+async def _await_completion(events: AsyncIterator[LaneEvent], lane: str) -> bool:
+    async for event in events:
+        if isinstance(event, TurnCompleted) and event.lane_id == lane:
+            return True
+    return False
