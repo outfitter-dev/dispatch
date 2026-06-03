@@ -68,6 +68,10 @@ namespace_packages = true
 warn_unreachable = true
 enable_error_code = ["redundant-expr", "truthy-bool", "ignore-without-code"]
 
+[[tool.mypy.overrides]]
+module = ["croniter.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

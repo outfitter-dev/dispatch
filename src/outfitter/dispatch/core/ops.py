@@ -5,11 +5,11 @@ capability is adding an op here and nothing else.
 
 from __future__ import annotations
 
-from outfitter.dispatch.contracts.errors import NotFoundError
+from outfitter.dispatch.contracts.errors import NotFoundError, ValidationError
 from outfitter.dispatch.contracts.op import Example, define_op
 from outfitter.dispatch.contracts.registry import OpRegistry
 
-from . import handlers
+from . import handlers, trigger_handlers
 from .models import (
     ActionAck,
     AttachInput,
@@ -20,6 +20,12 @@ from .models import (
     OpenInput,
     Roster,
     RosterInput,
+    TriggerAddInput,
+    TriggerIdInput,
+    TriggerList,
+    TriggerListInput,
+    TriggerRemoved,
+    TriggerView,
 )
 
 OPEN = define_op(
@@ -133,7 +139,83 @@ ARCHIVE = define_op(
     examples=[Example("missing", input={"lane": "nope"}, raises=NotFoundError)],
 )
 
-_ALL = (OPEN, ATTACH, SEND, STEER, BRIEF, INTERRUPT, SHOW, ROSTER, ARCHIVE)
+TRIGGER_ADD = define_op(
+    id="trigger-add",
+    summary="Add a trigger (when -> action -> lane).",
+    input=TriggerAddInput,
+    output=TriggerView,
+    intent="write",
+    idempotent=False,
+    handler=trigger_handlers.trigger_add,
+    examples=[
+        Example(
+            "interval-needs-seconds",
+            input={"name": "p", "lane": "@x", "when": "interval", "action": "send", "text": "hi"},
+            raises=ValidationError,
+        )
+    ],
+)
+
+TRIGGER_LIST = define_op(
+    id="trigger-list",
+    summary="List triggers.",
+    input=TriggerListInput,
+    output=TriggerList,
+    intent="read",
+    idempotent=True,
+    handler=trigger_handlers.trigger_list,
+    examples=[Example("empty", input={}, output={"triggers": []})],
+)
+
+TRIGGER_RM = define_op(
+    id="trigger-rm",
+    summary="Remove a trigger.",
+    input=TriggerIdInput,
+    output=TriggerRemoved,
+    intent="destroy",
+    idempotent=True,
+    handler=trigger_handlers.trigger_rm,
+    examples=[Example("missing", input={"id": "nope"}, raises=NotFoundError)],
+)
+
+TRIGGER_PAUSE = define_op(
+    id="trigger-pause",
+    summary="Pause a trigger.",
+    input=TriggerIdInput,
+    output=TriggerView,
+    intent="write",
+    idempotent=True,
+    handler=trigger_handlers.trigger_pause,
+    examples=[Example("missing", input={"id": "nope"}, raises=NotFoundError)],
+)
+
+TRIGGER_RESUME = define_op(
+    id="trigger-resume",
+    summary="Resume a paused trigger.",
+    input=TriggerIdInput,
+    output=TriggerView,
+    intent="write",
+    idempotent=True,
+    handler=trigger_handlers.trigger_resume,
+    examples=[Example("missing", input={"id": "nope"}, raises=NotFoundError)],
+)
+
+_ALL = (
+    OPEN,
+    ATTACH,
+    SEND,
+    STEER,
+    BRIEF,
+    INTERRUPT,
+    SHOW,
+    ROSTER,
+    ARCHIVE,
+    TRIGGER_ADD,
+    TRIGGER_LIST,
+    TRIGGER_RM,
+    TRIGGER_PAUSE,
+    TRIGGER_RESUME,
+)
 
 
 def build_registry() -> OpRegistry:
