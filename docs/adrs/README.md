@@ -17,4 +17,4 @@ Files are `NNNN-slug.md`. Copy [`template.md`](template.md) to start one. Keep t
 | [0006](0006-handler-context-and-di.md) | Handler Context and Dependency Injection | Accepted |
 | [0007](0007-normalized-internal-lane-events.md) | Normalized Internal LaneEvent Vocabulary | Accepted |
 | [0008](0008-control-socket-protocol.md) | Control-Socket Protocol — JSON-RPC-lite over JSONL | Accepted |
-| [0009](0009-mcp-daemon-lifecycle.md) | MCP Daemon Lifecycle — Auto-Start Detached Singleton | Proposed |
+| [0009](0009-mcp-daemon-lifecycle.md) | MCP Daemon Lifecycle — Auto-Start Detached Singleton | Accepted |

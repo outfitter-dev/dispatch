@@ -3,5 +3,52 @@
 Local control plane for orchestrating Codex agent lanes over the Codex App Server.
 One authored contract per operation, projected to CLI + MCP (+ remote later) with no drift.
 
-See [`docs/development/design.md`](docs/development/design.md) for the design, and
-[`docs/adrs/`](docs/adrs/) for the decisions behind it.
+## Quick Start
+
+From this checkout:
+
+```bash
+uv sync
+uv run dispatch --help
+uv run dispatch up
+uv run dispatch status
+```
+
+Open an owned lane, send it work, and inspect the daemon:
+
+```bash
+uv run dispatch open --name dispatch-docs --cwd /Users/mg/Developer/outfitter/dispatch
+uv run dispatch send --lane @dispatch-docs --text "Please summarize the current stack state."
+uv run dispatch log --limit 10
+uv run dispatch down
+```
+
+Use owned lanes for writes. Existing desktop Codex threads can be attached, but v0 treats
+attached lanes as observe-only: `send`, `steer`, `brief`, `interrupt`, and `archive` are
+blocked for attached lanes by ADR-0005.
+
+For the operator guide, CLI/MCP examples, triggers, and plugin setup, start at
+[`docs/usage/README.md`](docs/usage/README.md).
+
+## Agent And Plugin Support
+
+This repo ships first-party skills in [`skills/`](skills/):
+
+- [`skills/dispatch/SKILL.md`](skills/dispatch/SKILL.md) teaches agents how to operate
+  dispatch safely.
+- [`skills/dm/SKILL.md`](skills/dm/SKILL.md) is the dispatch-backed "dispatch message"
+  workflow for short inter-lane messages.
+
+The workspace-local Codex plugin bundle lives at [`plugins/dispatch/`](plugins/dispatch/),
+with a marketplace entry in [`.agents/plugins/marketplace.json`](.agents/plugins/marketplace.json).
+Restart Codex if the plugin does not appear immediately.
+
+## Project Docs
+
+- [`docs/development/design.md`](docs/development/design.md) - architecture and design notes.
+- [`docs/adrs/`](docs/adrs/) - accepted architecture decisions.
+- [`docs/research/`](docs/research/) - verified Codex App Server findings.
+- [`.agents/plans/v0/RETRO.md`](.agents/plans/v0/RETRO.md) - v0 execution ledger and
+  verification record.
+
+For contributors, [`AGENTS.md`](AGENTS.md) is the canonical fieldguide.

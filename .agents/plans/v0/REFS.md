@@ -11,7 +11,7 @@ Paths are repo-relative.
 
 ## Decisions (`docs/adrs/`)
 - 0000 contract-first/surface-derived · 0001 typed-exceptions-over-Result · 0002 single-daemon-over-one-app-server · 0003 own-scheduler · 0004 single-sourced agent docs.
-- 0005 lane-authority capability ladder (**proposed**, gated on Phase-1 spike) · 0006 handler Ctx/DI · 0007 normalized LaneEvent vocabulary · 0008 control-socket protocol (JSON-RPC-lite/JSONL) · 0009 MCP daemon lifecycle (**proposed**).
+- 0005 lane-authority capability ladder (accepted after Phase-1 spike; attached lanes observe-only) · 0006 handler Ctx/DI · 0007 normalized LaneEvent vocabulary · 0008 control-socket protocol (JSON-RPC-lite/JSONL) · 0009 MCP daemon lifecycle (accepted after Phase 5).
 
 ## Verified research (in-repo)
 - `docs/research/app-server-verification.md` — transports, turn/item grammar, approvals loop, resume fan-out, sandbox encodings, `result.data`, ephemeral default, schema regen (vs `codex-cli 0.136.0-alpha.2`).

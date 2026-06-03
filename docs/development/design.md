@@ -2,7 +2,7 @@
 
 A local control plane for orchestrating Codex agent lanes (threads) over the Codex App Server: spawn/attach lanes, send/steer/brief/interrupt them, and automate pings on time- and event-based triggers. One authored contract per operation is projected onto multiple surfaces — CLI now, MCP now, remote control later — with no drift.
 
-Status: approved design, pre-implementation. Companion research (verified against `codex-cli 0.136.0-alpha.2`): [`docs/research/app-server-verification.md`](../research/app-server-verification.md) and [`docs/research/orchestration-thesis.md`](../research/orchestration-thesis.md). Decisions: [`docs/adrs/`](../adrs/).
+Status: approved design, implemented through v0. Companion research (verified against `codex-cli 0.136.0-alpha.2`): [`docs/research/app-server-verification.md`](../research/app-server-verification.md) and [`docs/research/orchestration-thesis.md`](../research/orchestration-thesis.md). Decisions: [`docs/adrs/`](../adrs/). Execution ledger: [`../../.agents/plans/v0/RETRO.md`](../../.agents/plans/v0/RETRO.md).
 
 ## Naming
 
@@ -11,7 +11,7 @@ Status: approved design, pre-implementation. Companion research (verified agains
 
 ## Goals / non-goals
 
-Goals (v1): a single daemon that owns one Codex app-server and drives many lanes; a typed CLI and an MCP server, both derived from one contract set; time + event triggers; durable registry of lanes and triggers; full read/write on both existing and self-spawned lanes.
+Goals (v1): a single daemon that owns one Codex app-server and drives many lanes; a typed CLI and an MCP server, both derived from one contract set; time + event triggers; durable registry of lanes and triggers; full read/write on self-spawned owned lanes. Existing desktop lanes can be attached, but v0 keeps them observe-only per ADR-0005.
 
 Non-goals (v1): Claude/crew backend; conditional triggers (seam only); dashboard/TUI; full approval policy engine; multi-user; remote-control surface (planned v2).
 
@@ -75,7 +75,7 @@ Projections (pure functions over the registry, mirroring Trails' `derive* → cr
 - Sitrep & lifecycle: `status` · `up` / `down` (daemon) · `log`
 - Roster: `roster` · `attach <thread>` · `open <name> [--cwd]` · `show <lane>` · `archive <lane>`
 - Sending: `send <lane> "…"` · `steer <lane> "…"` · `brief <lane> "…"` · `interrupt <lane>`
-- Triggers: `triggers` · `triggers add …` · `triggers rm <id>` · `triggers pause|resume <id>`
+- Triggers: `trigger-add` · `trigger-list` · `trigger-rm <id>` · `trigger-pause|trigger-resume <id>`
 
 Every command is one MCP tool; the noun for a managed thread is **lane**.
 
@@ -84,7 +84,7 @@ Every command is one MCP tool; the noun for a managed thread is **lane**.
 | Op | App Server call | Notes (verified) |
 | --- | --- | --- |
 | `open` | `thread/start` (then register) | `sandbox` is a STRING enum (`read-only`/`workspace-write`/`danger-full-access`); persists by default (`ephemeral:false`) → spawned lanes show in desktop app, matching the `→ @project:name` convention. |
-| `attach` | `thread/resume` (+ register) | Resume of a *persisted* thread yields full live event fan-out to this connection — this is how the daemon observes existing desktop lanes. Pre-persistence resume errors `no rollout found`. |
+| `attach` | `thread/resume` (+ register) | Cross-process discovery and history resume work, but live fan-out does **not** cross app-server processes. Attached desktop lanes are observe-only in v0 (ADR-0005). Pre-persistence resume errors `no rollout found`. |
 | `send` | `turn/start` | Delivers a message the lane processes + answers. The DM/`send_message_to_thread` equivalent. `sandboxPolicy` here is an OBJECT (`{type:"readOnly"}`) — different encoding than `thread/start.sandbox`. |
 | `steer` | `turn/steer` | Requires `expectedTurnId` (the active turn id from `turn/started`). Interjects into an in-flight turn. |
 | `brief` | `thread/inject_items` | Silent model-visible context injection (Responses-API items); no turn runs. |
@@ -106,9 +106,9 @@ A trigger binds **when → action → lane**, stored in the registry:
 
 The scheduler is **our own** (asyncio): a time wheel for time triggers + the reactor consuming the event stream for event triggers. We do not use Codex's filesystem automations (they're daemon-registered, not protocol; live pickup unconfirmed) — owning the scheduler gives full control and is why this approach was chosen.
 
-## Lanes: existing + own, full read/write
+## Lanes: owned write, attached observe-only
 
-The daemon drives both threads it spawns (`open`) and existing desktop threads (`attach`). Full read/write is enabled. Default operational guard: per-lane **advisory lock + idle-check** before a write, so we don't race the desktop app mid-turn (override-able). The cross-process safety of two app-servers touching one thread via the shared `~/.codex` store is **untested** — the first build slice verifies it empirically before we lean on it.
+The daemon drives threads it spawns (`open`) with full read/write. Existing desktop threads can be registered with `attach`, but they are **observe-only in v0**. The Phase-1 cross-process spike confirmed that a second app-server process can discover and resume persisted history, but live event fan-out does not cross processes and concurrent turns are uncoordinated. Dispatch's advisory lock is dispatch-local; it cannot gate the desktop app. ADR-0005 keeps attached-lane writes locked until there is a real cross-process interlock and an explicit user opt-in.
 
 ## Approvals (v1 minimal)
 
@@ -130,7 +130,7 @@ The client supports the full responder loop. v1 surfaces `waiting_on_approval` a
 
 ## Error handling / resilience
 
-- app-server subprocess crash → daemon detects stdout EOF → restart → re-`resume` attached lanes (persisted in `~/.codex`) → resubscribe.
+- app-server subprocess crash → daemon detects stdout EOF → restart → re-`resume` persisted lanes → restart the reactor.
 - Action on a busy lane → default `idle_only` guard (busy delivery is "accepted/queued" but uncertain; don't race).
 - Reconnect → rebuild via `resume` + `thread/read`; rely on persisted history, not replay.
 - Every action audited; per-lane advisory lock for cross-process safety.
@@ -153,6 +153,6 @@ The client supports the full responder loop. v1 surfaces `waiting_on_approval` a
 
 ## Open risks / questions
 
-- **Cross-process contention** (own vs desktop app-server on one thread) — verify in slice 0; may force the idle-only/advisory-lock guard to be stricter.
+- **Cross-process contention** (dispatch vs desktop app-server on one thread) — resolved for v0 by ADR-0005: attached lanes are observe-only.
 - **MCP transport** — stdio first; SSE/streamable-HTTP later (mirrors Codex/Trails MCP status).
 - **App-server version drift** — pin the binary; the Python SDK pins an older CLI (0.132) than local (0.136), so we drive the binary directly, not via the SDK.

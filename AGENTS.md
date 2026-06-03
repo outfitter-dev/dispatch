@@ -30,9 +30,12 @@ dispatch owns one `codex app-server` subprocess (stdio JSONL, shared `~/.codex`)
 - `docs/development/design.md` — approved design spec.
 - `docs/adrs/` — architecture decision records (start from `template.md`; index in `README.md`).
 - `docs/research/` — App Server verification + orchestration thesis (the findings dispatch is built on).
+- `docs/usage/` — operator docs for the CLI, MCP, triggers, and plugin setup.
 - `.agents/plans/v0/` — phased plan (`PLAN.md`) + references (`REFS.md`); tracked.
 - `spikes/` — App Server probe scripts; seed of the integration suite.
 - `.agents/notes/` — working notes, session recaps, learnings; **gitignored, local only**.
+- `skills/` — first-party Codex skills for operating dispatch (`dispatch`) and dispatch-backed direct messages (`dm`).
+- `plugins/dispatch/` — workspace-local Codex plugin bundle exposing the skills and MCP server.
 
 Read `docs/development/design.md` and `.agents/plans/v0/PLAN.md` before implementing. Record working findings in `.agents/notes/`; promote durable decisions into `docs/adrs/`.
 

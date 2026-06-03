@@ -1,0 +1,114 @@
+---
+name: dm
+description: Use when sending a short, synchronous dispatch-backed direct message to an owned Codex lane, asking a bounded question, identifying inter-lane sender/target handles, or teaching a target lane to reply in a lightweight chat style. Long name: dispatch message. Not for delegation, background work, heartbeats, or autonomous task ownership.
+metadata:
+  short-description: Dispatch message a Codex lane
+---
+
+# DM
+
+Use `$dm` for a short, synchronous conversation with another dispatch-managed
+Codex lane. The long form is "dispatch message": the workflow is backed by
+`dispatch send`, not by a separate `dispatch message` CLI op in v0.
+
+Use a goal/delegation workflow instead when the target lane should own
+background work, source-control follow-through, monitoring, heartbeats, or a
+long-running task.
+
+## Preconditions
+
+Use dispatch first:
+
+```bash
+uv run dispatch roster
+uv run dispatch status
+```
+
+The target should be an owned dispatch lane. Attached lanes are observe-only in
+v0, so dispatch will reject write verbs against them.
+
+If the user wants to message an existing desktop Codex thread, attach it only
+for observation unless they explicitly choose a different authority model after
+reading ADR-0005.
+
+## Handles And URIs
+
+Use bare `@Name` handles for conversational identity. When the thread id is
+known, make the first human-facing mention a Markdown Codex URI. Compose a link
+whose label is the handle and whose destination is the Codex URI:
+
+```markdown
+label: @Target
+destination: codex://threads/<target-thread-id>
+```
+
+Use the lane handle or lane id for `dispatch send --lane`. Use the URI link in
+the message body so the recipient and the human can open the thread directly.
+
+## Message Shape
+
+Send one small request with a one-line envelope:
+
+```text
+From <sender Markdown thread link> to <target Markdown thread link> via $dm:
+
+<freeform message>
+
+Contract: read-only, brief answer, reply in this lane unless asked otherwise.
+```
+
+Then deliver it:
+
+```bash
+uv run dispatch send --lane @Target --text '<message>'
+```
+
+Keep DMs conversational and bounded. Prefer one ask. Include only the context
+needed for the target lane to answer without reading the sender's full
+transcript. Do not use `$dm` to smuggle in broad implementation work.
+
+## Harvesting
+
+`dispatch send` starts the target turn. Use `dispatch show` and `dispatch log`
+to confirm lane state and accepted actions:
+
+```bash
+uv run dispatch show --lane @Target
+uv run dispatch log --limit 10
+```
+
+Important v0 limitation: `dispatch show` is lane metadata, not a transcript
+reader. To read the actual answer, open the Codex thread link or use another
+available thread-read surface. Do not pretend dispatch harvested text it cannot
+currently read.
+
+## Optional Contract Lines
+
+Use one line only when it reduces ambiguity:
+
+```text
+Contract: answer only; no repo/tracker/source-control mutation.
+Contract: 3-6 lines; include evidence paths if you check live files.
+Contract: sanity-check the wording; no implementation.
+Contract: reply back to <sender Markdown thread link> when done.
+```
+
+## Guardrails
+
+- Do not use `$dm` for background execution or task ownership.
+- Do not create new lanes unless the user asks.
+- Do not pin, archive, rename, or stop lanes as part of ordinary DM flow.
+- Do not send secrets, private data, long logs, or unrelated transcript dumps.
+- If the exchange becomes work ownership, stop and switch to a goal/delegation
+  workflow.
+
+## Example
+
+```text
+From <@Docs Markdown thread link> to <@Dispatch Markdown thread link> via $dm:
+
+Quick terminology check: should the usage docs say "lane" everywhere, or is
+"thread" acceptable in the operator guide when referring to raw Codex ids?
+
+Contract: read-only; 3-5 lines; include evidence paths if you check repo docs.
+```
