@@ -71,4 +71,9 @@ enable_error_code = ["redundant-expr", "truthy-bool", "ignore-without-code"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-ra"
+# Integration tests need a real codex app-server; deselect by default (run them
+# with `just test-int`). They also auto-skip when codex/auth are unavailable.
+addopts = "-ra -m 'not integration'"
+markers = [
+    "integration: requires a real ephemeral codex app-server (isolated CODEX_HOME)",
+]

@@ -1,0 +1,78 @@
+"""Integration harness: a REAL ephemeral ``codex app-server`` over an isolated
+``CODEX_HOME``.
+
+Never touches the user's live ``~/.codex`` as CODEX_HOME: a temp dir is used and
+``auth.json`` is copied in read-only so the ephemeral server can reach the model.
+Lanes are ``ephemeral:true`` (or archived). Auto-skips when the ``codex`` binary
+or auth is unavailable (e.g. CI), so these never block the unit gate.
+"""
+
+from __future__ import annotations
+
+import shutil
+import tempfile
+from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
+
+import pytest
+import pytest_asyncio
+
+from outfitter.dispatch.client.client import AppServerClient
+from outfitter.dispatch.client.transport import StdioTransport
+
+_REAL_AUTH = Path.home() / ".codex" / "auth.json"
+
+
+def _why_unavailable() -> str | None:
+    if shutil.which("codex") is None:
+        return "codex binary not on PATH"
+    if not _REAL_AUTH.exists():
+        return "no ~/.codex/auth.json (model auth) available"
+    return None
+
+
+@pytest.fixture
+def codex_home() -> Iterator[Path]:
+    reason = _why_unavailable()
+    if reason is not None:
+        pytest.skip(f"integration unavailable: {reason}")
+    tmp = Path(tempfile.mkdtemp(prefix="dispatch-it-codex-"))
+    shutil.copy2(_REAL_AUTH, tmp / "auth.json")  # read-only copy; user's ~/.codex untouched
+    try:
+        yield tmp
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@pytest.fixture
+def work_dir() -> Iterator[Path]:
+    tmp = Path(tempfile.mkdtemp(prefix="dispatch-it-work-"))
+    try:
+        yield tmp
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+async def connect(codex_home: Path) -> AppServerClient:
+    """Spawn an ephemeral app-server bound to ``codex_home`` and initialize it."""
+    transport = StdioTransport(env={"CODEX_HOME": str(codex_home), "PATH": _path()})
+    await transport.start()
+    client = AppServerClient(transport)
+    await client.start()
+    await client.initialize()
+    return client
+
+
+def _path() -> str:
+    import os
+
+    return os.environ.get("PATH", "/usr/bin:/bin")
+
+
+@pytest_asyncio.fixture
+async def client(codex_home: Path) -> AsyncIterator[AppServerClient]:
+    c = await connect(codex_home)
+    try:
+        yield c
+    finally:
+        await c.close()
