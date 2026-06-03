@@ -1,0 +1,74 @@
+[project]
+name = "outfitter-dispatch"
+version = "0.0.0"
+description = "Local control plane for orchestrating Codex agent lanes over the Codex App Server."
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "Matt Galligan" }]
+dependencies = [
+    "typer>=0.15",
+    "rich>=13",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "aiosqlite>=0.20",
+    "structlog>=24",
+    "croniter>=3",
+    "mcp>=1.2",
+]
+
+[project.scripts]
+dispatch = "outfitter.dispatch.cli:app"
+dispatchd = "outfitter.dispatch.daemon.__main__:main"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# PEP 420 namespace: ship src/outfitter/ (no __init__.py at the outfitter level);
+# the importable package is outfitter.dispatch.
+[tool.hatch.build.targets.wheel]
+packages = ["src/outfitter"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py313"
+# spikes/ are preserved verification probes (reference + seed of the integration
+# suite), promoted into tests/ in Phase 1. Not part of the quality gate as-is.
+extend-exclude = ["spikes"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+    "TID", # flake8-tidy-imports
+    "RUF", # ruff-specific
+]
+
+[tool.mypy]
+strict = true
+python_version = "3.13"
+mypy_path = "src"
+explicit_package_bases = true
+namespace_packages = true
+warn_unreachable = true
+enable_error_code = ["redundant-expr", "truthy-bool", "ignore-without-code"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra"

@@ -23,3 +23,6 @@ dist/
 # macOS / editor
 .DS_Store
 *.swp
+
+# Local Claude settings (per-machine; e.g. bg-isolation opt-out for Graphite stacking)
+.claude/settings.local.json

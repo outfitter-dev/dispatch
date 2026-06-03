@@ -1,0 +1,17 @@
+# Git hooks via lefthook. Mirrors `just check`, split for tighter feedback:
+# lint + types pre-commit, tests pre-push.
+
+pre-commit:
+  parallel: true
+  commands:
+    ruff-check:
+      run: uv run ruff check .
+    ruff-format:
+      run: uv run ruff format --check .
+    mypy:
+      run: uv run mypy src tests
+
+pre-push:
+  commands:
+    pytest:
+      run: uv run pytest
