@@ -34,7 +34,9 @@ Goal: a typed, async client that drives one `codex app-server` over stdio JSONL 
 - `client/router.py`: demux responses by request `id` and notifications by `threadId` into per-lane async queues + a global stream (mirror the verified message-router pattern).
 - `client/models.py`: Pydantic models for the wire messages we use (initialize, thread/turn/item params + notifications, approval req/resp). Derived from the generated JSON schema of the pinned binary.
 - `client/client.py`: primitives — `initialize`, `thread_start/resume/list/read/archive`, `turn_start/steer/interrupt`, `inject_items`, and an approval responder hook. Async `events(thread_id|all)`.
-- **Slice-0 spike (record findings in `.agents/notes/`):** verify cross-process safety — our app-server + a second app-server touching one shared persisted thread. Decide whether the default guard (idle-only + advisory lock) is sufficient.
+- **Slice-0 spikes (record findings in `.agents/notes/`):**
+  - *Cross-process safety:* our app-server + a second app-server touching one shared persisted thread. Gates the ADR-0005 capability ladder (observe-only vs idle/full-write on attached lanes). The advisory lock is dispatch-local and cannot gate the desktop app — design accordingly.
+  - *Concurrent-lane / backpressure (finding F):* drive N lanes with concurrent active turns over one stdio connection; observe interleaving and head-of-line blocking on the shared pipe. Determines whether one chatty lane can stall others.
 
 Tests (integration, isolated `CODEX_HOME`): promote `/tmp/codex_{stdio,dm,lab4,fanout}.py`. Assert: initialize handshake; start thread + run a read-only turn → `pong`; `inject_items` then recall; approval accept loop resumes the turn; persisted-thread resume yields live fan-out; `thread/list` reads `result.data`.
 
@@ -104,5 +106,6 @@ Open/attach lanes (own + existing), send/steer/brief/interrupt, set time + event
 
 - **Cross-process contention** (own vs desktop app-server on one shared thread): resolved/bounded in Phase 1 slice-0 spike; may tighten the default guard.
 - **App-server version drift:** pin the binary; drive it directly (not via `openai-codex`, which pins older CLI 0.132 vs local 0.136). Regenerate schema per binary.
+- **Single-stream backpressure:** one stdio connection multiplexes all lanes; head-of-line blocking under concurrent active turns is untested. Bounded by the Phase-1 concurrent-lane spike (F).
 - **MCP transport:** stdio first; SSE/streamable-HTTP later.
 - **Scheduler correctness:** use a fake/injectable clock so time triggers are deterministically testable.

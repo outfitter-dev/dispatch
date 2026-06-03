@@ -13,4 +13,8 @@ Files are `NNNN-slug.md`. Copy [`template.md`](template.md) to start one. Keep t
 | [0002](0002-single-daemon-over-one-app-server.md) | Single Daemon over One App Server | Accepted |
 | [0003](0003-own-scheduler-not-codex-automations.md) | Own Scheduler, Not Codex Automations | Accepted |
 | 0004 | Single-Sourced Agent Docs (`.claude/rules` ↔ `AGENTS.md` symlinks) | Accepted — see [`.claude/rules/agent-docs.md`](../../.claude/rules/agent-docs.md) |
-| 0005 | Full Read/Write on Existing Threads with Idle-Only Default Guard | Proposed — pending Phase-1 cross-process spike |
+| [0005](0005-lane-authority-capability-ladder.md) | Lane Authority Capability Ladder | Proposed — gated on Phase-1 spike |
+| [0006](0006-handler-context-and-di.md) | Handler Context and Dependency Injection | Accepted |
+| [0007](0007-normalized-internal-lane-events.md) | Normalized Internal LaneEvent Vocabulary | Accepted |
+| [0008](0008-control-socket-protocol.md) | Control-Socket Protocol — JSON-RPC-lite over JSONL | Accepted |
+| [0009](0009-mcp-daemon-lifecycle.md) | MCP Daemon Lifecycle — Auto-Start Detached Singleton | Proposed |
