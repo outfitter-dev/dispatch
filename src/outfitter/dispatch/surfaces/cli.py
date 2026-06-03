@@ -67,4 +67,14 @@ def build_cli(socket_path: Path | None = None) -> typer.Typer:
     # Import the registry lazily so this module stays a thin surface.
     from outfitter.dispatch.core.ops import REGISTRY
 
-    return derive_cli(REGISTRY, partial(invoke_daemon, path))
+    app = derive_cli(REGISTRY, partial(invoke_daemon, path))
+
+    # `dispatch mcp` is a surface launcher, not an op: it serves the same registry
+    # over MCP stdio, routing tool calls to the same daemon.
+    @app.command(name="mcp", help="Serve the op registry as an MCP stdio server.")
+    def _mcp() -> None:
+        from outfitter.dispatch.surfaces.mcp import run_mcp
+
+        run_mcp(path)
+
+    return app

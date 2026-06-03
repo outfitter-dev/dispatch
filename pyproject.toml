@@ -72,6 +72,13 @@ enable_error_code = ["redundant-expr", "truthy-bool", "ignore-without-code"]
 module = ["croniter.*"]
 ignore_missing_imports = true
 
+# The mcp SDK's list_tools()/call_tool() decorators are untyped; relax only the
+# decorator/call strictness in the thin MCP wiring module (its logic stays typed).
+[[tool.mypy.overrides]]
+module = ["outfitter.dispatch.surfaces.mcp"]
+disallow_untyped_decorators = false
+disallow_untyped_calls = false
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
