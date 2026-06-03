@@ -1,13 +1,18 @@
 """``dispatchd`` entrypoint.
 
-Phase 0 stub: a Typer app that resolves and renders help so the console script
-``dispatchd`` exists. The real daemon lifecycle (app-server supervision,
-control socket, ``up``/``down``/``status``) lands in Phase 5.
+The long-lived daemon host. ``dispatchd run`` owns the app-server and serves the
+control socket; ``up``/``down``/``status`` (Phase 5) wrap it with supervision.
 """
 
 from __future__ import annotations
 
+import asyncio
+
 import typer
+
+from outfitter.dispatch import config
+
+from .host import run_daemon
 
 app = typer.Typer(
     name="dispatchd",
@@ -20,6 +25,13 @@ app = typer.Typer(
 @app.callback()
 def _root() -> None:
     """dispatchd — the long-lived dispatch daemon host."""
+
+
+@app.command()
+def run() -> None:
+    """Own the app-server and serve the control socket (foreground)."""
+    config.ensure_base()
+    asyncio.run(run_daemon(config.socket_path(), config.db_path()))
 
 
 def main() -> None:

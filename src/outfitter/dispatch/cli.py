@@ -1,25 +1,15 @@
-"""dispatch CLI entrypoint.
+"""dispatch CLI entrypoint (console script ``dispatch``).
 
-Phase 0 stub: a Typer app that resolves and renders help. In Phase 2 this app is
-replaced by ``surfaces.derive_cli(registry)`` — one command per authored op, no
-hand-written per-op commands (see ``.claude/rules/surfaces.md``).
+The app is *derived* from the op registry — there are no hand-written per-op
+commands here (see ``surfaces/cli.py`` and ``contracts/derive_cli.py``). Adding
+an op makes it appear on the CLI automatically.
 """
 
 from __future__ import annotations
 
-import typer
+from outfitter.dispatch.surfaces.cli import build_cli
 
-app = typer.Typer(
-    name="dispatch",
-    help="Local control plane for orchestrating Codex agent lanes.",
-    no_args_is_help=True,
-    add_completion=False,
-)
-
-
-@app.callback()
-def main() -> None:
-    """dispatch — orchestrate Codex lanes over the App Server."""
+app = build_cli()
 
 
 if __name__ == "__main__":

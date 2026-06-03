@@ -1,0 +1,90 @@
+"""Handler context and dependency injection (ADR-0006).
+
+Every handler is ``async def handler(input, ctx) -> Output``. ``Ctx`` carries
+exactly the four dependencies handlers may touch — no surface-specific concerns
+(argv, MCP session, socket) ever leak onto it. Handlers never import
+infrastructure directly; tests construct a ``Ctx`` with a fake client + temp-dir
+store.
+
+``LaneClient`` is the handler↔client contract — the subset of the App Server
+client handlers use. The real ``AppServerClient`` satisfies it structurally, and
+mypy enforces that conformance, so the protocol can't silently drift.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Protocol
+
+import structlog
+
+from outfitter.dispatch.client.events import LaneEvent
+from outfitter.dispatch.client.models import (
+    ApprovalPolicy,
+    Decision,
+    Effort,
+    SandboxPolicy,
+    ThreadInfo,
+    ThreadSandbox,
+)
+
+if TYPE_CHECKING:
+    from outfitter.dispatch.registry.store import Registry
+
+
+class LaneClient(Protocol):
+    """The App Server primitives handlers depend on (ADR-0006 DI seam)."""
+
+    async def thread_start(
+        self,
+        cwd: str,
+        sandbox: ThreadSandbox = "read-only",
+        approval_policy: ApprovalPolicy = "never",
+        ephemeral: bool = False,
+    ) -> ThreadInfo: ...
+
+    async def thread_resume(self, thread_id: str) -> ThreadInfo: ...
+
+    async def thread_list(
+        self, limit: int = 50, cursor: str | None = None, use_state_db_only: bool | None = None
+    ) -> list[ThreadInfo]: ...
+
+    async def thread_read(self, thread_id: str) -> dict[str, object]: ...
+
+    async def thread_archive(self, thread_id: str) -> None: ...
+
+    async def turn_start(
+        self,
+        thread_id: str,
+        text: str,
+        cwd: str,
+        approval_policy: ApprovalPolicy = "never",
+        sandbox_policy: SandboxPolicy | None = None,
+        effort: Effort | None = None,
+    ) -> dict[str, object]: ...
+
+    async def turn_steer(
+        self, thread_id: str, expected_turn_id: str, text: str
+    ) -> dict[str, object]: ...
+
+    async def turn_interrupt(self, thread_id: str, turn_id: str | None = None) -> None: ...
+
+    async def inject_items(self, thread_id: str, items: list[dict[str, object]]) -> None: ...
+
+    async def respond_approval(self, request_id: int, decision: Decision) -> None: ...
+
+    def events(self, lane: str | None = None) -> AsyncIterator[LaneEvent]: ...
+
+    def raw_events(self, lane: str | None = None) -> AsyncIterator[dict[str, object]]: ...
+
+
+@dataclass
+class Ctx:
+    """Injected into every handler. Small and stable by design."""
+
+    client: LaneClient
+    registry: Registry
+    log: structlog.stdlib.BoundLogger
+    abort: asyncio.Event
