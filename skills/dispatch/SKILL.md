@@ -28,6 +28,7 @@ The v0 ops are:
 
 - lifecycle: `up`, `down`, `status`, `log`
 - lanes: `open`, `attach`, `show`, `roster`, `archive`
+- discovery: `discover`
 - messages: `send`, `steer`, `brief`, `interrupt`
 - triggers: `trigger-add`, `trigger-list`, `trigger-rm`, `trigger-pause`,
   `trigger-resume`
@@ -70,6 +71,25 @@ Attached lanes are observe-only in v0. Do not try to `send`, `steer`, `brief`,
 `interrupt`, or `archive` attached lanes. ADR-0005 keeps those writes locked
 because desktop Codex and dispatch run separate app-server processes and there
 is no cross-process write interlock.
+
+`attach` is bounded: if the app-server stalls, the underlying `thread/resume`
+times out (~15s) and `attach` fails with a clear `app_server` error, registering
+no lane. There is no half-attached state to clean up — just retry once the
+app-server is healthy.
+
+## Discover Sessions
+
+`discover` lists persisted Codex sessions you could attach (desktop threads and
+prior runs), read straight from the Codex state DB. It is read-only and does not
+resume or register anything:
+
+```bash
+uv run dispatch discover --limit 20
+```
+
+Use it to find a session `id`, then `attach --thread <id>`. It is distinct from
+`roster`: `discover` shows attachable sessions (not yet lanes), `roster` shows
+lanes dispatch already manages.
 
 ## Message Verbs
 

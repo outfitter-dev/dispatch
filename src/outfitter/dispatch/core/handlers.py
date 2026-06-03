@@ -7,15 +7,25 @@ observe-only — ``send``/``steer``/``brief``/``interrupt`` raise ``AuthorityErr
 
 from __future__ import annotations
 
-from outfitter.dispatch.client.models import SandboxPolicy
+import asyncio
+
+from outfitter.dispatch.client.models import SandboxPolicy, ThreadInfo
 from outfitter.dispatch.contracts.context import Ctx
-from outfitter.dispatch.contracts.errors import AuthorityError, NotFoundError, ValidationError
+from outfitter.dispatch.contracts.errors import (
+    AppServerError,
+    AuthorityError,
+    NotFoundError,
+    ValidationError,
+)
 from outfitter.dispatch.registry.models import Lane
 
 from .models import (
     ActionAck,
     ActionView,
     AttachInput,
+    DiscoveredSession,
+    DiscoverInput,
+    Discovery,
     LaneDetail,
     LaneInput,
     LaneRef,
@@ -30,6 +40,13 @@ from .models import (
 )
 
 _READ_ONLY = SandboxPolicy(type="readOnly")
+
+# Bound ``thread/resume`` during attach: a persisted resume is a quick state-db read,
+# so a stuck one means the app-server is wedged. Fail with a clear error rather than
+# hang — and never half-register (the registry write only follows a successful resume).
+_RESUME_TIMEOUT_S = 15.0
+
+_PREVIEW_MAX = 80
 
 
 def _ref(lane: Lane) -> LaneRef:
@@ -65,7 +82,14 @@ async def attach_lane(inp: AttachInput, ctx: Ctx) -> LaneRef:
     existing = await ctx.registry.find_lane(inp.thread)
     if existing is not None:
         return _ref(existing)  # idempotent re-attach
-    thread = await ctx.client.thread_resume(inp.thread)
+    try:
+        thread = await asyncio.wait_for(ctx.client.thread_resume(inp.thread), _RESUME_TIMEOUT_S)
+    except TimeoutError as exc:
+        # The registry write below never ran, so no lane is half-registered.
+        raise AppServerError(
+            f"attach timed out: thread/resume for {inp.thread!r} exceeded "
+            f"{_RESUME_TIMEOUT_S:.0f}s (no lane registered)"
+        ) from exc
     handle = thread.name or f"@{inp.thread[:8]}"
     lane = await ctx.registry.add_lane(
         id=thread.id, handle=handle, source="attached", cwd=thread.cwd, status="idle"
@@ -129,6 +153,35 @@ async def show(inp: LaneInput, ctx: Ctx) -> LaneDetail:
 async def roster(inp: RosterInput, ctx: Ctx) -> Roster:
     lanes = await ctx.registry.list_lanes(include_archived=inp.include_archived)
     return Roster(lanes=[_ref(lane) for lane in lanes])
+
+
+def _short(text: str | None, limit: int = _PREVIEW_MAX) -> str | None:
+    if text is None:
+        return None
+    collapsed = " ".join(text.split())  # flatten whitespace/newlines for a one-line preview
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: limit - 1].rstrip() + "…"
+
+
+def _session(thread: ThreadInfo) -> DiscoveredSession:
+    return DiscoveredSession(
+        id=thread.id,
+        name=thread.name,
+        preview=_short(thread.preview),
+        cwd=thread.cwd,
+        status=thread.status.type if thread.status is not None else None,
+        source=thread.source,
+        ephemeral=thread.ephemeral,
+    )
+
+
+async def discover(inp: DiscoverInput, ctx: Ctx) -> Discovery:
+    """List persisted Codex sessions (``thread/list``, state-db only) — read-only and
+    distinct from ``roster``: these are candidates to ``attach``, not managed lanes.
+    Discovery does not resume or register anything (ADR-0005 observe-only is untouched)."""
+    threads = await ctx.client.thread_list(limit=inp.limit, use_state_db_only=True)
+    return Discovery(sessions=[_session(thread) for thread in threads])
 
 
 async def archive(inp: LaneInput, ctx: Ctx) -> LaneRef:

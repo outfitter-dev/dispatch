@@ -72,6 +72,27 @@ Use `interrupt` to cancel the active turn:
 uv run dispatch interrupt --lane @docs-review
 ```
 
+## Discover Sessions
+
+`roster` lists the lanes dispatch already manages. `discover` is the other half: it lists the
+persisted Codex sessions on this machine — desktop threads and prior runs — that you could
+attach. It reads the Codex state DB directly (`thread/list`, state-db only), so it is fast and
+read-only; it never resumes, writes, or registers anything.
+
+```bash
+uv run dispatch discover --limit 20
+```
+
+Each row carries `id`, `name`, a shortened `preview`, `cwd`, `status`, `source`, and
+`ephemeral`. Use the `id` with `attach` to bring a session under management:
+
+```bash
+uv run dispatch attach --thread <id-from-discover>
+```
+
+Keep the two straight: `discover` shows attachable Codex sessions (not yet lanes); `roster`
+shows managed lanes (owned or already attached).
+
 ## Attached Lanes
 
 Attach registers an existing Codex thread by raw thread id:
@@ -84,6 +105,11 @@ Attached lanes are observe-only in v0. Dispatch can register and inspect them, b
 not write to them because the desktop app uses a separate app-server process and there is no
 cross-process write interlock. ADR-0005 is the authoritative decision:
 [`docs/adrs/0005-lane-authority-capability-ladder.md`](../adrs/0005-lane-authority-capability-ladder.md).
+
+Attach is bounded: the underlying `thread/resume` must complete within a short timeout
+(15s). If the app-server is wedged and resume stalls, attach fails with a clear
+`app_server` error and registers no lane — it never leaves a half-attached entry behind.
+Re-run `attach` once the app-server is healthy.
 
 When referring to a Codex thread in docs or prompts, prefer a readable handle with a URI:
 
