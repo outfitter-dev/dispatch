@@ -23,8 +23,11 @@ import structlog
 from outfitter.dispatch.client.events import LaneEvent
 from outfitter.dispatch.client.models import (
     ApprovalPolicy,
+    ApprovalsReviewer,
     Decision,
     Effort,
+    Personality,
+    ReasoningSummary,
     SandboxPolicy,
     ThreadInfo,
     ThreadSandbox,
@@ -39,9 +42,16 @@ class LaneClient(Protocol):
 
     async def thread_start(
         self,
-        cwd: str,
+        cwd: str | None,
         sandbox: ThreadSandbox = "read-only",
         approval_policy: ApprovalPolicy = "never",
+        approvals_reviewer: ApprovalsReviewer | None = None,
+        base_instructions: str | None = None,
+        developer_instructions: str | None = None,
+        personality: Personality | None = None,
+        service_tier: str | None = None,
+        model: str | None = None,
+        model_provider: str | None = None,
         ephemeral: bool = False,
     ) -> ThreadInfo: ...
 
@@ -55,14 +65,21 @@ class LaneClient(Protocol):
 
     async def thread_archive(self, thread_id: str) -> None: ...
 
+    async def thread_set_name(self, thread_id: str, name: str) -> None: ...
+
     async def turn_start(
         self,
         thread_id: str,
         text: str,
         cwd: str,
         approval_policy: ApprovalPolicy = "never",
+        approvals_reviewer: ApprovalsReviewer | None = None,
         sandbox_policy: SandboxPolicy | None = None,
         effort: Effort | None = None,
+        summary: ReasoningSummary | None = None,
+        model: str | None = None,
+        output_schema: dict[str, object] | None = None,
+        personality: Personality | None = None,
     ) -> dict[str, object]: ...
 
     async def turn_steer(

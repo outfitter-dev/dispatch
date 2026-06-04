@@ -21,6 +21,30 @@ def test_thread_start_sandbox_is_string_enum() -> None:
     assert dumped["ephemeral"] is True
 
 
+def test_thread_start_includes_rich_session_options() -> None:
+    params = ThreadStartParams(
+        cwd="/work",
+        sandbox="workspace-write",
+        approval_policy="on-request",
+        approvals_reviewer="auto_review",
+        base_instructions="base",
+        developer_instructions="dev",
+        personality="pragmatic",
+        service_tier="priority",
+        model="gpt-5-codex",
+        model_provider="openai",
+    )
+    dumped = params.model_dump(by_alias=True, exclude_none=True)
+    assert dumped["approvalPolicy"] == "on-request"
+    assert dumped["approvalsReviewer"] == "auto_review"
+    assert dumped["baseInstructions"] == "base"
+    assert dumped["developerInstructions"] == "dev"
+    assert dumped["personality"] == "pragmatic"
+    assert dumped["serviceTier"] == "priority"
+    assert dumped["model"] == "gpt-5-codex"
+    assert dumped["modelProvider"] == "openai"
+
+
 def test_turn_start_sandbox_policy_is_object_and_camelcased() -> None:
     params = TurnStartParams(
         thread_id="t1",
@@ -38,6 +62,27 @@ def test_turn_start_sandbox_policy_is_object_and_camelcased() -> None:
 def test_turn_start_includes_effort_when_set() -> None:
     params = TurnStartParams(thread_id="t1", input=[TextInput(text="hi")], cwd="/w", effort="low")
     assert params.model_dump(by_alias=True, exclude_none=True)["effort"] == "low"
+
+
+def test_turn_start_includes_optional_overrides_when_set() -> None:
+    params = TurnStartParams(
+        thread_id="t1",
+        input=[TextInput(text="hi")],
+        cwd="/w",
+        approvals_reviewer="user",
+        effort="xhigh",
+        summary="concise",
+        model="gpt-5-codex",
+        personality="friendly",
+        output_schema={"type": "object"},
+    )
+    dumped = params.model_dump(by_alias=True, exclude_none=True)
+    assert dumped["approvalsReviewer"] == "user"
+    assert dumped["effort"] == "xhigh"
+    assert dumped["summary"] == "concise"
+    assert dumped["model"] == "gpt-5-codex"
+    assert dumped["personality"] == "friendly"
+    assert dumped["outputSchema"] == {"type": "object"}
 
 
 def test_turn_steer_requires_expected_turn_id_alias() -> None:

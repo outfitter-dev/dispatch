@@ -9,7 +9,7 @@ import inspect
 import typer
 
 from outfitter.dispatch.contracts.derive_cli import derive_cli
-from outfitter.dispatch.contracts.derive_mcp import derive_mcp
+from outfitter.dispatch.contracts.derive_mcp import derive_mcp_projection
 from outfitter.dispatch.contracts.errors import (
     AppServerError,
     AuthorityError,
@@ -35,23 +35,30 @@ def _cli_param_names(app: typer.Typer, op_id: str) -> set[str]:
 
 def test_cli_mcp_model_parity_per_op() -> None:
     app = derive_cli(REGISTRY, _stub_invoke)
-    mcp_tools = {t.name: t for t in derive_mcp(REGISTRY)}
-    assert set(mcp_tools) == set(REGISTRY.ids())
+    projection = derive_mcp_projection(REGISTRY)
+    routes_by_op = {route.op.id: route for route in projection.routes.values()}
+    mcp_tools = {t.name: t for t in projection.tools}
+    assert set(routes_by_op) == set(REGISTRY.ids())
 
     for op in REGISTRY:
         fields = set(op.input.model_fields)
         # CLI options ↔ input model
         assert _cli_param_names(app, op.id) == fields, f"{op.id} CLI options"
-        tool = mcp_tools[op.id]
+        route = routes_by_op[op.id]
+        tool = mcp_tools[route.tool_name]
+        variants = tool.inputSchema["oneOf"]
+        schema = next(
+            variant for variant in variants if variant["properties"]["op"]["const"] == route.action
+        )
         # MCP inputSchema ↔ input model
-        assert set(tool.inputSchema.get("properties", {})) == fields, f"{op.id} MCP inputSchema"
+        assert set(schema.get("properties", {})) == fields | {"op"}, f"{op.id} MCP inputSchema"
         assert tool.outputSchema is not None, f"{op.id} missing outputSchema"
-        # annotations ↔ intent/idempotent
+        assert op.output.model_json_schema() in tool.outputSchema["oneOf"], f"{op.id} outputSchema"
+        # Tool-level safety annotations are exact because groups do not mix intents.
         ann = tool.annotations
         assert ann is not None
         assert ann.readOnlyHint == (op.intent == "read"), op.id
         assert ann.destructiveHint == (op.intent == "destroy"), op.id
-        assert ann.idempotentHint == op.idempotent, op.id
 
 
 def test_error_taxonomy_projects_from_one_table() -> None:

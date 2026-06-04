@@ -27,6 +27,26 @@ def test_open_command_maps_options_to_params() -> None:
     assert captured["params"] == {"name": "x", "cwd": "/w"}
 
 
+def test_new_command_maps_repeated_presets_and_no_send() -> None:
+    captured: dict[str, object] = {}
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        captured["op"] = op_id
+        captured["params"] = params
+        return {"id": "L1", "handle": "@x", "source": "own", "status": "idle", "sent": False}
+
+    app = derive_cli(REGISTRY, invoke)
+    result = runner.invoke(
+        app, ["new", "--name", "x", "--preset", "builder", "--preset", "fast", "--no-send"]
+    )
+    assert result.exit_code == 0
+    assert captured["op"] == "new"
+    params = captured["params"]
+    assert isinstance(params, dict)
+    assert params["preset"] == ["builder", "fast"]
+    assert params["send"] is False
+
+
 def test_destroy_op_prompts_for_confirmation() -> None:
     def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
         return {"id": "L1", "handle": "@x", "source": "own", "status": "archived"}

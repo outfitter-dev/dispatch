@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
 
+from outfitter.dispatch.client.errors import TransportError
 from outfitter.dispatch.client.models import ThreadInfo, ThreadStatus
 from outfitter.dispatch.contracts.errors import AppServerError, AuthorityError, ValidationError
 from outfitter.dispatch.core import handlers
@@ -17,6 +19,7 @@ from outfitter.dispatch.core.models import (
     LaneInput,
     LaneTextInput,
     LogInput,
+    NewInput,
     OpenInput,
     RosterInput,
     StatusInput,
@@ -43,6 +46,86 @@ async def test_open_then_send_owned_lane(store: Registry) -> None:
     ack = await handlers.send(LaneTextInput(lane="lane-1", text="ping"), ctx)
     assert ack.accepted is True
     assert any(name == "turn_start" and kw["thread_id"] == "lane-1" for name, kw in client.calls)
+
+
+async def test_new_lane_sets_name_and_sends_initial_turn(store: Registry, tmp_path: Path) -> None:
+    repo = tmp_path / "dispatch"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.new_lane(
+        NewInput(
+            name="builder",
+            cwd=str(repo),
+            text="start",
+            sandbox="workspace-write",
+            approval_policy="on-request",
+            effort="low",
+            model="gpt-5-codex",
+            developer_instructions="stay focused",
+        ),
+        ctx,
+    )
+
+    assert out.handle == "@[dispatch] builder"
+    assert out.sent is True
+    assert any(
+        name == "thread_start"
+        and kw["sandbox"] == "workspace-write"
+        and kw["approval_policy"] == "on-request"
+        and kw["model"] == "gpt-5-codex"
+        and kw["developer_instructions"] == "stay focused"
+        for name, kw in client.calls
+    )
+    assert any(
+        name == "thread_set_name" and kw["display_name"] == "[dispatch] builder"
+        for name, kw in client.calls
+    )
+    assert any(
+        name == "turn_start"
+        and kw["text"] == "start"
+        and kw["sandbox_policy"] == {"type": "workspaceWrite"}
+        and kw["effort"] == "low"
+        for name, kw in client.calls
+    )
+
+
+async def test_new_lane_no_send_registers_without_turn(store: Registry, tmp_path: Path) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.new_lane(
+        NewInput(name="idle", cwd=str(tmp_path), text="do not send", send=False), ctx
+    )
+
+    assert out.sent is False
+    assert (await store.find_lane("lane-1")) is not None
+    assert not any(name == "turn_start" for name, _ in client.calls)
+
+
+class _FailingTurnClient(FakeLaneClient):
+    async def turn_start(self, *args: object, **kwargs: object) -> dict[str, object]:
+        self._record("turn_start", failed=True)
+        raise TransportError("boom")
+
+
+async def test_new_lane_initial_send_failure_leaves_lane_registered(
+    store: Registry, tmp_path: Path
+) -> None:
+    client = _FailingTurnClient()
+    ctx = make_ctx(store, client)
+
+    with pytest.raises(TransportError):
+        await handlers.new_lane(NewInput(name="still-here", cwd=str(tmp_path), text="boom"), ctx)
+
+    lane = await store.find_lane("lane-1")
+    assert lane is not None
+    log = await handlers.show_log(LogInput(limit=10), ctx)
+    send_records = [record for record in log.actions if record.op == "send"]
+    assert send_records
+    assert send_records[0].outcome == "app_server"
 
 
 async def test_send_resolves_by_handle(store: Registry) -> None:

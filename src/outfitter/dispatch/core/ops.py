@@ -21,6 +21,8 @@ from .models import (
     LaneTextInput,
     LogInput,
     LogOutput,
+    NewInput,
+    NewLane,
     OpenInput,
     Roster,
     RosterInput,
@@ -47,6 +49,29 @@ OPEN = define_op(
             "alpha",
             input={"name": "alpha", "cwd": "."},
             output={"id": "lane-1", "handle": "@alpha", "source": "own", "status": "idle"},
+        )
+    ],
+)
+
+NEW = define_op(
+    id="new",
+    summary="Create a configured owned lane and optionally send an initial message.",
+    input=NewInput,
+    output=NewLane,
+    intent="write",
+    idempotent=False,
+    handler=handlers.new_lane,
+    examples=[
+        Example(
+            "idle",
+            input={"name": "alpha", "send": False},
+            output={
+                "id": "lane-1",
+                "handle": "@[dispatch] alpha",
+                "source": "own",
+                "status": "idle",
+                "sent": False,
+            },
         )
     ],
 )
@@ -247,6 +272,7 @@ LOG = define_op(
 
 _ALL = (
     OPEN,
+    NEW,
     ATTACH,
     SEND,
     STEER,

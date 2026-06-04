@@ -7,6 +7,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from outfitter.dispatch.client.models import (
+    ApprovalPolicy,
+    ApprovalsReviewer,
+    Effort,
+    Personality,
+    ReasoningSummary,
+    ThreadSandbox,
+)
 from outfitter.dispatch.registry.models import LaneSource, LaneStatus
 
 # --- inputs -------------------------------------------------------------------
@@ -15,6 +23,35 @@ from outfitter.dispatch.registry.models import LaneSource, LaneStatus
 class OpenInput(BaseModel):
     name: str = Field(description="Lane name; becomes the @handle.")
     cwd: str = Field(default=".", description="Working directory for the lane.")
+
+
+class NewInput(BaseModel):
+    name: str = Field(description="Lane name; prefix/presets may decorate it.")
+    preset: list[str] = Field(
+        default_factory=list, description="Preset(s) to apply, left to right."
+    )
+    text: str | None = Field(default=None, description="Initial message text.")
+    send: bool = Field(default=True, description="Send the initial message when text is present.")
+    cwd: str | None = Field(default=None, description="Working directory for config discovery.")
+    prefix: str | None = Field(default=None, description="Name prefix template.")
+    sandbox: ThreadSandbox | None = Field(default=None, description="Thread sandbox mode.")
+    approval_policy: ApprovalPolicy | None = Field(default=None, description="Approval policy.")
+    approvals_reviewer: ApprovalsReviewer | None = Field(
+        default=None, description="Where approval requests are routed."
+    )
+    model: str | None = Field(default=None, description="Model override.")
+    model_provider: str | None = Field(default=None, description="Model provider override.")
+    effort: Effort | None = Field(default=None, description="Initial turn reasoning effort.")
+    summary: ReasoningSummary | None = Field(default=None, description="Reasoning summary mode.")
+    personality: Personality | None = Field(default=None, description="Personality override.")
+    service_tier: str | None = Field(default=None, description="Service tier override.")
+    ephemeral: bool | None = Field(default=None, description="Create an ephemeral thread.")
+    base_instructions: str | None = Field(default=None, description="Base instructions text.")
+    base_file: str | None = Field(default=None, description="Base instructions file.")
+    developer_instructions: str | None = Field(
+        default=None, description="Developer instructions text."
+    )
+    developer_file: str | None = Field(default=None, description="Developer instructions file.")
 
 
 class AttachInput(BaseModel):
@@ -46,6 +83,10 @@ class LaneRef(BaseModel):
     handle: str
     source: LaneSource
     status: LaneStatus
+
+
+class NewLane(LaneRef):
+    sent: bool
 
 
 class LaneDetail(LaneRef):

@@ -42,6 +42,8 @@ def _make_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., No
         help_text = field.description or ""
         if field.is_required():
             option = typer.Option(..., help=help_text)
+        elif field.default_factory is not None:
+            option = typer.Option(field.get_default(call_default_factory=True), help=help_text)
         else:
             option = typer.Option(field.default, help=help_text)
         parameters.append(

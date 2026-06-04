@@ -21,8 +21,11 @@ from pydantic.alias_generators import to_camel
 
 ThreadSandbox = Literal["read-only", "workspace-write", "danger-full-access"]
 ApprovalPolicy = Literal["never", "untrusted", "on-request", "on-failure"]
+ApprovalsReviewer = Literal["user", "auto_review", "guardian_subagent"]
 SandboxPolicyType = Literal["readOnly", "workspaceWrite", "externalSandbox", "dangerFullAccess"]
-Effort = Literal["low", "medium", "high"]
+Effort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+ReasoningSummary = Literal["auto", "concise", "detailed", "none"]
+Personality = Literal["none", "friendly", "pragmatic"]
 Decision = Literal["accept", "acceptForSession", "decline", "cancel"]
 
 
@@ -95,14 +98,26 @@ class ThreadInfo(WireModel):
 
 
 class ThreadStartParams(WireModel):
-    cwd: str
+    cwd: str | None = None
     sandbox: ThreadSandbox = "read-only"
     approval_policy: ApprovalPolicy = "never"
+    approvals_reviewer: ApprovalsReviewer | None = None
+    base_instructions: str | None = None
+    developer_instructions: str | None = None
+    personality: Personality | None = None
+    service_tier: str | None = None
+    model: str | None = None
+    model_provider: str | None = None
     ephemeral: bool = False
 
 
 class ThreadResumeParams(WireModel):
     thread_id: str
+
+
+class ThreadSetNameParams(WireModel):
+    thread_id: str
+    name: str
 
 
 class ThreadListParams(WireModel):
@@ -140,8 +155,13 @@ class TurnStartParams(WireModel):
     input: list[TextInput]
     cwd: str
     approval_policy: ApprovalPolicy = "never"
+    approvals_reviewer: ApprovalsReviewer | None = None
     sandbox_policy: SandboxPolicy = SandboxPolicy()
     effort: Effort | None = None
+    summary: ReasoningSummary | None = None
+    model: str | None = None
+    output_schema: dict[str, object] | None = None
+    personality: Personality | None = None
 
 
 class TurnSteerParams(WireModel):

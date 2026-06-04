@@ -15,8 +15,11 @@ import structlog
 from outfitter.dispatch.client.events import LaneEvent
 from outfitter.dispatch.client.models import (
     ApprovalPolicy,
+    ApprovalsReviewer,
     Decision,
     Effort,
+    Personality,
+    ReasoningSummary,
     SandboxPolicy,
     ThreadInfo,
     ThreadSandbox,
@@ -47,9 +50,16 @@ class FakeLaneClient:
 
     async def thread_start(
         self,
-        cwd: str,
+        cwd: str | None,
         sandbox: ThreadSandbox = "read-only",
         approval_policy: ApprovalPolicy = "never",
+        approvals_reviewer: ApprovalsReviewer | None = None,
+        base_instructions: str | None = None,
+        developer_instructions: str | None = None,
+        personality: Personality | None = None,
+        service_tier: str | None = None,
+        model: str | None = None,
+        model_provider: str | None = None,
         ephemeral: bool = False,
     ) -> ThreadInfo:
         self._record(
@@ -57,6 +67,13 @@ class FakeLaneClient:
             cwd=cwd,
             sandbox=sandbox,
             approval_policy=approval_policy,
+            approvals_reviewer=approvals_reviewer,
+            base_instructions=base_instructions,
+            developer_instructions=developer_instructions,
+            personality=personality,
+            service_tier=service_tier,
+            model=model,
+            model_provider=model_provider,
             ephemeral=ephemeral,
         )
         thread = ThreadInfo(id=self.next_thread_id, ephemeral=ephemeral, cwd=cwd)
@@ -80,16 +97,37 @@ class FakeLaneClient:
     async def thread_archive(self, thread_id: str) -> None:
         self._record("thread_archive", thread_id=thread_id)
 
+    async def thread_set_name(self, thread_id: str, name: str) -> None:
+        self._record("thread_set_name", thread_id=thread_id, display_name=name)
+
     async def turn_start(
         self,
         thread_id: str,
         text: str,
         cwd: str,
         approval_policy: ApprovalPolicy = "never",
+        approvals_reviewer: ApprovalsReviewer | None = None,
         sandbox_policy: SandboxPolicy | None = None,
         effort: Effort | None = None,
+        summary: ReasoningSummary | None = None,
+        model: str | None = None,
+        output_schema: dict[str, object] | None = None,
+        personality: Personality | None = None,
     ) -> dict[str, object]:
-        self._record("turn_start", thread_id=thread_id, text=text, cwd=cwd)
+        self._record(
+            "turn_start",
+            thread_id=thread_id,
+            text=text,
+            cwd=cwd,
+            approval_policy=approval_policy,
+            approvals_reviewer=approvals_reviewer,
+            sandbox_policy=sandbox_policy.model_dump(mode="python") if sandbox_policy else None,
+            effort=effort,
+            summary=summary,
+            model=model,
+            output_schema=output_schema,
+            personality=personality,
+        )
         return {}
 
     async def turn_steer(

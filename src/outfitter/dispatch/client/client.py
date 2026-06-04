@@ -19,12 +19,15 @@ from .errors import ProtocolError, TransportError
 from .events import LaneEvent
 from .models import (
     ApprovalPolicy,
+    ApprovalsReviewer,
     ClientInfo,
     Decision,
     Effort,
     InitializeParams,
     InitializeResult,
     InjectItemsParams,
+    Personality,
+    ReasoningSummary,
     SandboxPolicy,
     TextInput,
     ThreadArchiveParams,
@@ -35,6 +38,7 @@ from .models import (
     ThreadResult,
     ThreadResumeParams,
     ThreadSandbox,
+    ThreadSetNameParams,
     ThreadStartParams,
     TurnInterruptParams,
     TurnStartParams,
@@ -144,13 +148,30 @@ class AppServerClient:
 
     async def thread_start(
         self,
-        cwd: str,
+        cwd: str | None,
         sandbox: ThreadSandbox = "read-only",
         approval_policy: ApprovalPolicy = "never",
+        approvals_reviewer: ApprovalsReviewer | None = None,
+        base_instructions: str | None = None,
+        developer_instructions: str | None = None,
+        personality: Personality | None = None,
+        service_tier: str | None = None,
+        model: str | None = None,
+        model_provider: str | None = None,
         ephemeral: bool = False,
     ) -> ThreadInfo:
         params = ThreadStartParams(
-            cwd=cwd, sandbox=sandbox, approval_policy=approval_policy, ephemeral=ephemeral
+            cwd=cwd,
+            sandbox=sandbox,
+            approval_policy=approval_policy,
+            approvals_reviewer=approvals_reviewer,
+            base_instructions=base_instructions,
+            developer_instructions=developer_instructions,
+            personality=personality,
+            service_tier=service_tier,
+            model=model,
+            model_provider=model_provider,
+            ephemeral=ephemeral,
         )
         result = await self._request("thread/start", _dump(params))
         return ThreadResult.model_validate(result).thread
@@ -174,6 +195,11 @@ class AppServerClient:
     async def thread_archive(self, thread_id: str) -> None:
         await self._request("thread/archive", _dump(ThreadArchiveParams(thread_id=thread_id)))
 
+    async def thread_set_name(self, thread_id: str, name: str) -> None:
+        await self._request(
+            "thread/name/set", _dump(ThreadSetNameParams(thread_id=thread_id, name=name))
+        )
+
     # --- turns + injection ----------------------------------------------------
 
     async def turn_start(
@@ -182,16 +208,26 @@ class AppServerClient:
         text: str,
         cwd: str,
         approval_policy: ApprovalPolicy = "never",
+        approvals_reviewer: ApprovalsReviewer | None = None,
         sandbox_policy: SandboxPolicy | None = None,
         effort: Effort | None = None,
+        summary: ReasoningSummary | None = None,
+        model: str | None = None,
+        output_schema: dict[str, object] | None = None,
+        personality: Personality | None = None,
     ) -> dict[str, object]:
         params = TurnStartParams(
             thread_id=thread_id,
             input=[TextInput(text=text)],
             cwd=cwd,
             approval_policy=approval_policy,
+            approvals_reviewer=approvals_reviewer,
             sandbox_policy=sandbox_policy if sandbox_policy is not None else SandboxPolicy(),
             effort=effort,
+            summary=summary,
+            model=model,
+            output_schema=output_schema,
+            personality=personality,
         )
         return await self._request("turn/start", _dump(params))
 

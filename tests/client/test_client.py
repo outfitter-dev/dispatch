@@ -62,6 +62,19 @@ async def test_thread_start_parses_thread_info(
     }
 
 
+async def test_thread_set_name_sends_verified_method(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+    fake.auto = _result_for("thread/name/set", {})
+    await c.thread_set_name("L1", "[dispatch] review")
+    assert fake.sent[-1] == {
+        "id": 1,
+        "method": "thread/name/set",
+        "params": {"threadId": "L1", "name": "[dispatch] review"},
+    }
+
+
 async def test_thread_list_reads_data_key(
     client: tuple[AppServerClient, FakeTransport],
 ) -> None:
