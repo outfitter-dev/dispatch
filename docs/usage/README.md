@@ -124,7 +124,7 @@ uv run dispatch show --lane @docs-review
 
 Use `transcript` when you want persisted turn history. It reads `thread/read` with
 `includeTurns:true` and returns a compact item list; it is a history snapshot, not a
-full execution log.
+full execution log. App Server does not support `includeTurns` on ephemeral threads.
 
 ```bash
 uv run dispatch transcript --lane @docs-review --limit 50
@@ -147,6 +147,8 @@ uv run dispatch goal-set --lane @docs-review --objective "Review until no P2 fin
 uv run dispatch goal-set --lane @docs-review --status complete
 uv run dispatch goal-clear --lane @docs-review
 ```
+
+App Server goals require non-ephemeral threads.
 
 `fork`, `rollback`, and `compact` expose stable App Server history controls:
 

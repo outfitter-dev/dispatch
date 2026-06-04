@@ -128,6 +128,9 @@ Use `transcript` for persisted turn history:
 uv run dispatch transcript --lane @my-lane --limit 50
 ```
 
+`transcript` uses App Server `includeTurns`, which is not available for ephemeral
+threads.
+
 Use `watch` only for a bounded live event sample. It returns raw App Server
 method/params until a limit or timeout, and it is not an infinite tail:
 
@@ -142,6 +145,8 @@ uv run dispatch goal-set --lane @my-lane --objective "Loop until checks are gree
 uv run dispatch goal-get --lane @my-lane
 uv run dispatch goal-clear --lane @my-lane
 ```
+
+Goals require non-ephemeral App Server threads.
 
 Use `fork`, `rollback`, and `compact` carefully:
 

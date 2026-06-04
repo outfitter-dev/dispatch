@@ -33,6 +33,9 @@ Expose the stable App Server primitives through derived ops:
 Keep `show` as the compact lane summary, with optional transcript inclusion for
 convenience, but document `transcript` as the explicit history operation.
 
+Document that App Server goals and `includeTurns` history reads require non-ephemeral
+threads.
+
 Treat `watch` as a bounded sample, not a streaming subscription. A durable live tail
 belongs in a later protocol change that can push events over the control socket.
 
