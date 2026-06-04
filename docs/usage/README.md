@@ -51,7 +51,7 @@ An owned lane is a Codex thread created by dispatch. Owned lanes are writable. U
 ```bash
 uv run dispatch new \
   --name docs-review \
-  --cwd /Users/mg/Developer/outfitter/dispatch \
+  --cwd /path/to/dispatch \
   --text "Review the README for missing usage steps."
 ```
 
@@ -67,7 +67,7 @@ uv run dispatch new --name docs-review --preset reviewer --no-send
 Use `new --no-send` when you want to create the lane first and send later:
 
 ```bash
-uv run dispatch new --name docs-review --cwd /Users/mg/Developer/outfitter/dispatch --no-send
+uv run dispatch new --name docs-review --cwd /path/to/dispatch --no-send
 uv run dispatch lane list
 uv run dispatch send @docs-review "Review the README for missing usage steps."
 ```

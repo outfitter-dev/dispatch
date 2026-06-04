@@ -5,7 +5,7 @@ title: Dispatch Mesh Is Daemon Federation
 status: proposed
 created: 2026-06-03
 updated: 2026-06-03
-owners: ['[galligan](https://github.com/galligan)']
+owners: ['Dispatch maintainers']
 ---
 
 # ADR-0013: Dispatch Mesh Is Daemon Federation

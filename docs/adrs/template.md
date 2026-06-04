@@ -5,7 +5,7 @@ title: Title in Title Case
 status: proposed
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
-owners: ['[galligan](https://github.com/galligan)']
+owners: ['Dispatch maintainers']
 ---
 
 # ADR-NNNN: Title

@@ -5,7 +5,7 @@ title: Handler Context and Dependency Injection
 status: accepted
 created: 2026-06-02
 updated: 2026-06-02
-owners: ['[galligan](https://github.com/galligan)']
+owners: ['Dispatch maintainers']
 ---
 
 # ADR-0006: Handler Context and Dependency Injection

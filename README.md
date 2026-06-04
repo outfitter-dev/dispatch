@@ -19,7 +19,7 @@ Open an owned lane, send it work, and inspect the daemon:
 ```bash
 uv run dispatch new \
   --name docs \
-  --cwd /Users/mg/Developer/outfitter/dispatch \
+  --cwd /path/to/dispatch \
   --text "Please summarize the current stack state."
 uv run dispatch lane tail "@[dispatch] docs" --limit 20
 uv run dispatch goal set "@[dispatch] docs" "Finish the docs review."

@@ -5,7 +5,7 @@ title: Contract-First, Surface-Derived Design
 status: accepted
 created: 2026-06-02
 updated: 2026-06-02
-owners: ['[galligan](https://github.com/galligan)']
+owners: ['Dispatch maintainers']
 ---
 
 # ADR-0000: Contract-First, Surface-Derived Design

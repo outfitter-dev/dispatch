@@ -5,7 +5,7 @@ read the queued issues in [`RETRO.md`](./RETRO.md), then loop until the branch
 is actually good.
 
 ```text
-/goal From `/Users/mg/Developer/outfitter/dispatch`, run the CLI/MCP ergonomics quality loop on branch `feat/cli-mcp-ergonomics`.
+/goal From `/path/to/dispatch`, run the CLI/MCP ergonomics quality loop on branch `feat/cli-mcp-ergonomics`.
 
 Read first: `AGENTS.md`, `.agents/plans/cli-mcp-ergonomics/RETRO.md`, and the touched CLI/MCP/handler tests.
 

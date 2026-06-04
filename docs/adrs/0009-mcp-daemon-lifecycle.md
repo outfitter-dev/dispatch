@@ -5,7 +5,7 @@ title: MCP Daemon Lifecycle — Auto-Start Detached Singleton
 status: accepted
 created: 2026-06-02
 updated: 2026-06-03
-owners: ['[galligan](https://github.com/galligan)']
+owners: ['Dispatch maintainers']
 ---
 
 # ADR-0009: MCP Daemon Lifecycle — Auto-Start Detached Singleton
