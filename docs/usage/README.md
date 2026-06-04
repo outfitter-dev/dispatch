@@ -45,13 +45,55 @@ The lower-level overrides are `DISPATCH_SOCKET`, `DISPATCH_DB`, and `DISPATCH_PI
 
 ## Lanes
 
-An owned lane is a Codex thread created by dispatch. Owned lanes are writable.
+An owned lane is a Codex thread created by dispatch. Owned lanes are writable. Use
+`new` for the configured creation workflow:
+
+```bash
+uv run dispatch new \
+  --name docs-review \
+  --cwd /Users/mg/Developer/outfitter/dispatch \
+  --text "Review the README for missing usage steps."
+```
+
+`new` reads `.dispatch/config.toml` when present, applies presets left-to-right,
+decorates the name with the configured prefix, starts the lane, and sends the initial
+message when `--text` is present. Use `--no-send` to create/configure the lane without
+starting a turn:
+
+```bash
+uv run dispatch new --name docs-review --preset reviewer --no-send
+```
+
+`open` is the lower-level primitive:
 
 ```bash
 uv run dispatch open --name docs-review --cwd /Users/mg/Developer/outfitter/dispatch
 uv run dispatch roster
 uv run dispatch send --lane @docs-review --text "Review the README for missing usage steps."
 ```
+
+Example `.dispatch/config.toml`:
+
+```toml
+[defaults]
+sandbox = "read-only"
+approval_policy = "never"
+prefix = "[${DISPATCH.CWD.REPO}]"
+
+[defaults.instructions]
+developer_file = ".dispatch/instructions/default.md"
+
+[presets.reviewer]
+effort = "high"
+developer_file = ".dispatch/instructions/reviewer.md"
+
+[presets.builder]
+sandbox = "workspace-write"
+approval_policy = "on-request"
+developer_file = ".dispatch/instructions/builder.md"
+```
+
+Preset order matters: later presets win, and CLI flags win over presets.
 
 Use `brief` for silent context injection. It adds model-visible context without starting a
 turn:
@@ -181,6 +223,11 @@ The MCP surface is derived from the same op registry as the CLI. The local entry
 ```bash
 uv run dispatch mcp
 ```
+
+MCP is grouped for agent ergonomics rather than one tool per op. Tools are grouped by
+workflow and safety boundary, for example lane read/write/destroy, trigger
+read/write/destroy, and daemon read tools. Each grouped call chooses an `op` inside the
+tool, and that op's arguments/schema still derive from the same contract registry.
 
 The workspace Codex plugin at [`plugins/dispatch/`](../../plugins/dispatch/) exposes that
 MCP server through [`plugins/dispatch/.mcp.json`](../../plugins/dispatch/.mcp.json). The

@@ -12,6 +12,7 @@ from tests.fakes import make_ctx
 async def test_registry_has_the_v1_ops() -> None:
     assert REGISTRY.ids() == [
         "open",
+        "new",
         "attach",
         "send",
         "steer",

@@ -27,7 +27,7 @@ If dispatch is installed into the environment, `dispatch --help` is fine.
 The v0 ops are:
 
 - lifecycle: `up`, `down`, `status`, `log`
-- lanes: `open`, `attach`, `show`, `roster`, `archive`
+- lanes: `new`, `open`, `attach`, `show`, `roster`, `archive`
 - discovery: `discover`
 - messages: `send`, `steer`, `brief`, `interrupt`
 - triggers: `trigger-add`, `trigger-list`, `trigger-rm`, `trigger-pause`,
@@ -54,7 +54,16 @@ suite uses an isolated `CODEX_HOME`.
 
 ## Lane Rules
 
-Owned lanes are created by dispatch and are writable:
+Owned lanes are created by dispatch and are writable. Prefer `new` for a
+configured lane; it applies `.dispatch/config.toml`, presets, name prefixes, and
+can send an initial turn:
+
+```bash
+uv run dispatch new --name my-lane --cwd /path/to/project --text "Do the bounded thing."
+uv run dispatch new --name my-lane --preset reviewer --no-send
+```
+
+Use `open` only when you need the lower-level primitive:
 
 ```bash
 uv run dispatch open --name my-lane --cwd /path/to/project
@@ -140,8 +149,10 @@ The MCP server is:
 uv run dispatch mcp
 ```
 
-In this repo, the workspace-local Codex plugin lives at `plugins/dispatch`. It
-exposes these skills and the same MCP registry. If the plugin does not appear
+The MCP surface is grouped for agent ergonomics, not one tool per op. Tools are
+grouped by workflow and safety boundary, and each call selects an `op` inside the
+tool. In this repo, the workspace-local Codex plugin lives at `plugins/dispatch`.
+It exposes these skills and the same MCP registry. If the plugin does not appear
 immediately, restart Codex for the workspace.
 
 ## Guardrails

@@ -17,8 +17,10 @@ uv run dispatch status
 Open an owned lane, send it work, and inspect the daemon:
 
 ```bash
-uv run dispatch open --name dispatch-docs --cwd /Users/mg/Developer/outfitter/dispatch
-uv run dispatch send --lane @dispatch-docs --text "Please summarize the current stack state."
+uv run dispatch new \
+  --name docs \
+  --cwd /Users/mg/Developer/outfitter/dispatch \
+  --text "Please summarize the current stack state."
 uv run dispatch log --limit 10
 uv run dispatch down
 ```

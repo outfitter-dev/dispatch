@@ -28,25 +28,38 @@ async def socket_path(socket_dir: Path) -> AsyncIterator[Path]:
 
 
 async def test_tool_calls_open_send_roster(socket_path: Path) -> None:
-    opened = await handle_tool_call(socket_path, "open", {"name": "alpha", "cwd": "/w"})
+    opened = await handle_tool_call(
+        socket_path, "dispatch_lane_write", {"op": "open", "name": "alpha", "cwd": "/w"}
+    )
     assert not opened.isError
     assert opened.structuredContent is not None
     assert opened.structuredContent["handle"] == "@alpha"
 
-    sent = await handle_tool_call(socket_path, "send", {"lane": "lane-1", "text": "hi"})
+    sent = await handle_tool_call(
+        socket_path, "dispatch_lane_write", {"op": "send", "lane": "lane-1", "text": "hi"}
+    )
     assert sent.structuredContent is not None
     assert sent.structuredContent["accepted"] is True
 
-    roster = await handle_tool_call(socket_path, "roster", {})
+    roster = await handle_tool_call(socket_path, "dispatch_lane_read", {"op": "roster"})
     assert roster.structuredContent is not None
     assert len(roster.structuredContent["lanes"]) == 1
 
 
 async def test_tool_call_error_projects_full_taxonomy_into_meta(socket_path: Path) -> None:
-    result = await handle_tool_call(socket_path, "show", {"lane": "ghost"})
+    result = await handle_tool_call(
+        socket_path, "dispatch_lane_read", {"op": "show", "lane": "ghost"}
+    )
     assert result.isError is True
     assert result.meta is not None
     # The DispatchError taxonomy (NotFoundError) projects end-to-end into _meta:
     assert result.meta["code"] == 1004  # rpc_code
     assert result.meta["dispatchCode"] == "not_found"
     assert result.meta["exitCode"] == 4  # same exit code the CLI would use
+
+
+async def test_tool_call_rejects_unknown_grouped_action(socket_path: Path) -> None:
+    result = await handle_tool_call(socket_path, "dispatch_lane_read", {"op": "send"})
+    assert result.isError is True
+    assert result.meta is not None
+    assert result.meta["dispatchCode"] == "mcp_route_error"

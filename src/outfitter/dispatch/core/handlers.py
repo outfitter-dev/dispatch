@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import asyncio
 
-from outfitter.dispatch.client.models import SandboxPolicy, ThreadInfo
+from outfitter.dispatch.client.errors import ClientError
+from outfitter.dispatch.client.models import SandboxPolicy, ThreadInfo, ThreadSandbox
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.contracts.errors import (
     AppServerError,
     AuthorityError,
+    DispatchError,
     NotFoundError,
     ValidationError,
+    project_error,
 )
 from outfitter.dispatch.registry.models import Lane
 
@@ -32,12 +35,15 @@ from .models import (
     LaneTextInput,
     LogInput,
     LogOutput,
+    NewInput,
+    NewLane,
     OpenInput,
     Roster,
     RosterInput,
     StatusInput,
     StatusOutput,
 )
+from .new_config import NewSettings, resolve_new
 
 _READ_ONLY = SandboxPolicy(type="readOnly")
 
@@ -76,6 +82,96 @@ async def open_lane(inp: OpenInput, ctx: Ctx) -> LaneRef:
     await ctx.registry.log_action("open", lane=lane.id, detail=handle)
     ctx.log.info("lane.open", lane=lane.id, handle=handle)
     return _ref(lane)
+
+
+async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
+    resolved = resolve_new(
+        name=inp.name,
+        presets=inp.preset,
+        cli=NewSettings(
+            cwd=inp.cwd,
+            sandbox=inp.sandbox,
+            approval_policy=inp.approval_policy,
+            approvals_reviewer=inp.approvals_reviewer,
+            model=inp.model,
+            model_provider=inp.model_provider,
+            effort=inp.effort,
+            summary=inp.summary,
+            personality=inp.personality,
+            service_tier=inp.service_tier,
+            ephemeral=inp.ephemeral,
+            prefix=inp.prefix,
+            text=inp.text,
+            base_instructions=inp.base_instructions,
+            base_file=inp.base_file,
+            developer_instructions=inp.developer_instructions,
+            developer_file=inp.developer_file,
+        ),
+    )
+    settings = resolved.settings
+    sandbox = settings.sandbox or "read-only"
+    approval_policy = settings.approval_policy or "never"
+    thread = await ctx.client.thread_start(
+        cwd=str(resolved.cwd),
+        sandbox=sandbox,
+        approval_policy=approval_policy,
+        approvals_reviewer=settings.approvals_reviewer,
+        base_instructions=resolved.base_instructions,
+        developer_instructions=resolved.developer_instructions,
+        personality=settings.personality,
+        service_tier=settings.service_tier,
+        model=settings.model,
+        model_provider=settings.model_provider,
+        ephemeral=bool(settings.ephemeral),
+    )
+    lane = await ctx.registry.add_lane(
+        id=thread.id, handle=resolved.handle, source="own", cwd=str(resolved.cwd), status="idle"
+    )
+    await ctx.registry.log_action("new", lane=lane.id, detail=resolved.display_name)
+    try:
+        await ctx.client.thread_set_name(thread.id, resolved.display_name)
+    except ClientError as exc:
+        ctx.log.warning("lane.name_set_failed", lane=lane.id, error=str(exc))
+
+    sent = False
+    if settings.text is not None and inp.send:
+        try:
+            await ctx.client.turn_start(
+                lane.id,
+                settings.text,
+                cwd=str(resolved.cwd),
+                approval_policy=approval_policy,
+                approvals_reviewer=settings.approvals_reviewer,
+                sandbox_policy=_turn_sandbox(sandbox),
+                effort=settings.effort,
+                summary=settings.summary,
+                model=settings.model,
+                output_schema=settings.output_schema,
+                personality=settings.personality,
+            )
+        except (DispatchError, ClientError) as exc:
+            await ctx.registry.log_action(
+                "send",
+                lane=lane.id,
+                detail=settings.text[:120],
+                outcome=project_error(exc).code,
+            )
+            raise
+        await ctx.registry.log_action("send", lane=lane.id, detail=settings.text[:120])
+        sent = True
+    ctx.log.info("lane.new", lane=lane.id, handle=lane.handle, sent=sent)
+    ref = _ref(lane)
+    return NewLane(**ref.model_dump(), sent=sent)
+
+
+def _turn_sandbox(sandbox: ThreadSandbox) -> SandboxPolicy:
+    match sandbox:
+        case "read-only":
+            return SandboxPolicy(type="readOnly")
+        case "workspace-write":
+            return SandboxPolicy(type="workspaceWrite")
+        case "danger-full-access":
+            return SandboxPolicy(type="dangerFullAccess")
 
 
 async def attach_lane(inp: AttachInput, ctx: Ctx) -> LaneRef:

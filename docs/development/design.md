@@ -73,17 +73,20 @@ Projections (pure functions over the registry, mirroring Trails' `derive* → cr
 ## Command surface (v1, locked)
 
 - Sitrep & lifecycle: `status` · `up` / `down` (daemon) · `log`
-- Roster: `roster` · `attach <thread>` · `open <name> [--cwd]` · `show <lane>` · `archive <lane>`
+- Roster: `roster` · `attach <thread>` · `open <name> [--cwd]` · `new <name> [--preset ...] [--text ...]` · `show <lane>` · `archive <lane>`
 - Sending: `send <lane> "…"` · `steer <lane> "…"` · `brief <lane> "…"` · `interrupt <lane>`
 - Triggers: `trigger-add` · `trigger-list` · `trigger-rm <id>` · `trigger-pause|trigger-resume <id>`
 
-Every command is one MCP tool; the noun for a managed thread is **lane**.
+MCP tools are an ergonomic projection of the same ops, grouped by workflow and safety
+boundary rather than forced to be one tool per op. The noun for a managed thread is
+**lane**.
 
 ## App Server integration (verified primitives → ops)
 
 | Op | App Server call | Notes (verified) |
 | --- | --- | --- |
 | `open` | `thread/start` (then register) | `sandbox` is a STRING enum (`read-only`/`workspace-write`/`danger-full-access`); persists by default (`ephemeral:false`) → spawned lanes show in desktop app, matching the `→ @project:name` convention. |
+| `new` | `thread/start` + `thread/name/set` + optional `turn/start` | Applies `.dispatch/config.toml` defaults/presets, name prefixes, verified session/turn options, and optional initial payload. |
 | `attach` | `thread/resume` (+ register) | Cross-process discovery and history resume work, but live fan-out does **not** cross app-server processes. Attached desktop lanes are observe-only in v0 (ADR-0005). Pre-persistence resume errors `no rollout found`. |
 | `send` | `turn/start` | Delivers a message the lane processes + answers. The DM/`send_message_to_thread` equivalent. `sandboxPolicy` here is an OBJECT (`{type:"readOnly"}`) — different encoding than `thread/start.sandbox`. |
 | `steer` | `turn/steer` | Requires `expectedTurnId` (the active turn id from `turn/started`). Interjects into an in-flight turn. |
