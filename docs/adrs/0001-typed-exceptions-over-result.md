@@ -5,7 +5,7 @@ title: Typed Exceptions over a Result Type
 status: accepted
 created: 2026-06-02
 updated: 2026-06-02
-owners: ['Dispatch maintainers']
+owners: ['[galligan](https://github.com/galligan)']
 ---
 
 # ADR-0001: Typed Exceptions over a Result Type
