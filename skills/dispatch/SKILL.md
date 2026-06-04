@@ -24,12 +24,14 @@ uv run dispatch --help
 
 If dispatch is installed into the environment, `dispatch --help` is fine.
 
-The v0 ops are:
+The current ops are:
 
 - lifecycle: `up`, `down`, `status`, `log`
-- lanes: `new`, `open`, `attach`, `show`, `roster`, `archive`
+- lanes: `new`, `open`, `attach`, `show`, `transcript`, `watch`, `roster`, `archive`
 - discovery: `discover`
 - messages: `send`, `steer`, `brief`, `interrupt`
+- goals/history controls: `goal-get`, `goal-set`, `goal-clear`, `fork`, `rollback`,
+  `compact`
 - triggers: `trigger-add`, `trigger-list`, `trigger-rm`, `trigger-pause`,
   `trigger-resume`
 - MCP: `mcp`
@@ -76,10 +78,11 @@ Attached lanes are existing desktop Codex threads registered by raw thread id:
 uv run dispatch attach --thread <codex-thread-id>
 ```
 
-Attached lanes are observe-only in v0. Do not try to `send`, `steer`, `brief`,
-`interrupt`, or `archive` attached lanes. ADR-0005 keeps those writes locked
-because desktop Codex and dispatch run separate app-server processes and there
-is no cross-process write interlock.
+Attached lanes are observe-only in v0. Do not try to run mutating ops such as
+`send`, `steer`, `brief`, `interrupt`, `archive`, `goal-set`, `goal-clear`,
+`fork`, `rollback`, or `compact` on attached lanes. ADR-0005 keeps those writes
+locked because desktop Codex and dispatch run separate app-server processes and
+there is no cross-process write interlock.
 
 `attach` is bounded: if the app-server stalls, the underlying `thread/resume`
 times out (~15s) and `attach` fails with a clear `app_server` error, registering
@@ -110,6 +113,50 @@ lanes dispatch already manages.
 
 For short inter-lane chat, use the companion `$dm` skill, which is a "dispatch
 message" workflow backed by `dispatch send`.
+
+## History, Watch, And Goals
+
+Use `show` for compact lane metadata:
+
+```bash
+uv run dispatch show --lane @my-lane
+```
+
+Use `transcript` for persisted turn history:
+
+```bash
+uv run dispatch transcript --lane @my-lane --limit 50
+```
+
+`transcript` uses App Server `includeTurns`, which is not available for ephemeral
+threads.
+
+Use `watch` only for a bounded live event sample. It returns raw App Server
+method/params until a limit or timeout, and it is not an infinite tail:
+
+```bash
+uv run dispatch watch --lane @my-lane --limit 20 --timeout 10
+```
+
+Use native goals on owned lanes when a worker has a durable objective:
+
+```bash
+uv run dispatch goal-set --lane @my-lane --objective "Loop until checks are green."
+uv run dispatch goal-get --lane @my-lane
+uv run dispatch goal-clear --lane @my-lane
+```
+
+Goals require non-ephemeral App Server threads.
+
+Use `fork`, `rollback`, and `compact` carefully:
+
+```bash
+uv run dispatch fork --lane @my-lane --name my-lane-copy
+uv run dispatch rollback --lane @my-lane --turns 1
+uv run dispatch compact --lane @my-lane
+```
+
+`rollback` truncates persisted App Server history only; it does not revert files.
 
 ## Markdown Thread Links
 
@@ -160,7 +207,8 @@ immediately, restart Codex for the workspace.
 - Do not mutate source files, Git, PRs, Graphite, or tracker state as part of
   ordinary dispatch operation.
 - Do not install launchd autostart unless the user explicitly asks.
-- Do not promise transcript harvesting through `dispatch show`; v0 `show`
-  reports lane metadata, not a full thread transcript.
+- Do not describe `watch` as streaming forever; it is a bounded event sample
+  until dispatch grows a subscription-capable control socket.
+- Do not treat `rollback` as file undo.
 - If a request becomes long-running owned work, use a proper delegated lane or
   goal workflow rather than a casual message.

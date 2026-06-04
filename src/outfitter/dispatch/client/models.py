@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 ThreadSandbox = Literal["read-only", "workspace-write", "danger-full-access"]
@@ -27,6 +27,9 @@ Effort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
 ReasoningSummary = Literal["auto", "concise", "detailed", "none"]
 Personality = Literal["none", "friendly", "pragmatic"]
 Decision = Literal["accept", "acceptForSession", "decline", "cancel"]
+ThreadGoalStatus = Literal[
+    "active", "paused", "blocked", "usageLimited", "budgetLimited", "complete"
+]
 
 
 class WireModel(BaseModel):
@@ -86,12 +89,14 @@ class ThreadInfo(WireModel):
     """Subset of the rich thread object the server returns (extra fields ignored)."""
 
     id: str
+    forked_from_id: str | None = None
     ephemeral: bool | None = None
     status: ThreadStatus | None = None
     cwd: str | None = None
     name: str | None = None
     preview: str | None = None
     source: str | None = None
+    turns: list[dict[str, object]] = Field(default_factory=list)
 
 
 # --- thread/* params + results ------------------------------------------------
@@ -115,6 +120,20 @@ class ThreadResumeParams(WireModel):
     thread_id: str
 
 
+class ThreadForkParams(WireModel):
+    thread_id: str
+    cwd: str | None = None
+    sandbox: ThreadSandbox | None = None
+    approval_policy: ApprovalPolicy | None = None
+    approvals_reviewer: ApprovalsReviewer | None = None
+    base_instructions: str | None = None
+    developer_instructions: str | None = None
+    service_tier: str | None = None
+    model: str | None = None
+    model_provider: str | None = None
+    ephemeral: bool = False
+
+
 class ThreadSetNameParams(WireModel):
     thread_id: str
     name: str
@@ -128,10 +147,50 @@ class ThreadListParams(WireModel):
 
 class ThreadReadParams(WireModel):
     thread_id: str
+    include_turns: bool = False
 
 
 class ThreadArchiveParams(WireModel):
     thread_id: str
+
+
+class ThreadUnarchiveParams(WireModel):
+    thread_id: str
+
+
+class ThreadRollbackParams(WireModel):
+    thread_id: str
+    num_turns: int
+
+
+class ThreadCompactStartParams(WireModel):
+    thread_id: str
+
+
+class ThreadGoalSetParams(WireModel):
+    thread_id: str
+    objective: str | None = None
+    status: ThreadGoalStatus | None = None
+    token_budget: int | None = None
+
+
+class ThreadGoalGetParams(WireModel):
+    thread_id: str
+
+
+class ThreadGoalClearParams(WireModel):
+    thread_id: str
+
+
+class ThreadGoal(WireModel):
+    thread_id: str
+    objective: str
+    status: ThreadGoalStatus
+    tokens_used: int
+    time_used_seconds: int
+    created_at: int
+    updated_at: int
+    token_budget: int | None = None
 
 
 class ThreadResult(WireModel):
@@ -145,6 +204,14 @@ class ThreadListResult(WireModel):
 
     data: list[ThreadInfo] = []
     next_cursor: str | None = None
+
+
+class ThreadGoalResult(WireModel):
+    goal: ThreadGoal
+
+
+class ThreadGoalGetResult(WireModel):
+    goal: ThreadGoal | None = None
 
 
 # --- turn/* + inject_items params ---------------------------------------------

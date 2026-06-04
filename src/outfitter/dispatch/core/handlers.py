@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 
 from outfitter.dispatch.client.errors import ClientError
-from outfitter.dispatch.client.models import SandboxPolicy, ThreadInfo, ThreadSandbox
+from outfitter.dispatch.client.models import SandboxPolicy, ThreadGoal, ThreadInfo, ThreadSandbox
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.contracts.errors import (
     AppServerError,
@@ -26,9 +26,16 @@ from .models import (
     ActionAck,
     ActionView,
     AttachInput,
+    CompactInput,
     DiscoveredSession,
     DiscoverInput,
     Discovery,
+    ForkInput,
+    Goal,
+    GoalClearInput,
+    GoalGetInput,
+    GoalSetInput,
+    GoalView,
     LaneDetail,
     LaneInput,
     LaneRef,
@@ -38,10 +45,18 @@ from .models import (
     NewInput,
     NewLane,
     OpenInput,
+    RollbackInput,
     Roster,
     RosterInput,
+    ShowInput,
     StatusInput,
     StatusOutput,
+    TranscriptInput,
+    TranscriptItem,
+    TranscriptOutput,
+    WatchEvent,
+    WatchInput,
+    WatchOutput,
 )
 from .new_config import NewSettings, resolve_new
 
@@ -57,6 +72,10 @@ _PREVIEW_MAX = 80
 
 def _ref(lane: Lane) -> LaneRef:
     return LaneRef(id=lane.id, handle=lane.handle, source=lane.source, status=lane.status)
+
+
+def _handle(name: str) -> str:
+    return name if name.startswith("@") else f"@{name}"
 
 
 async def _resolve(ctx: Ctx, ref: str) -> Lane:
@@ -75,7 +94,7 @@ def _require_writable(lane: Lane) -> None:
 
 async def open_lane(inp: OpenInput, ctx: Ctx) -> LaneRef:
     thread = await ctx.client.thread_start(cwd=inp.cwd, sandbox="read-only", ephemeral=False)
-    handle = inp.name if inp.name.startswith("@") else f"@{inp.name}"
+    handle = _handle(inp.name)
     lane = await ctx.registry.add_lane(
         id=thread.id, handle=handle, source="own", cwd=inp.cwd, status="idle"
     )
@@ -234,8 +253,12 @@ async def interrupt(inp: LaneInput, ctx: Ctx) -> ActionAck:
     return ActionAck(lane=lane.id, op="interrupt")
 
 
-async def show(inp: LaneInput, ctx: Ctx) -> LaneDetail:
+async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
     lane = await _resolve(ctx, inp.lane)
+    transcript: list[TranscriptItem] = []
+    if inp.include_transcript:
+        result = await ctx.client.thread_read(lane.id, include_turns=True)
+        transcript = _transcript_from_thread(result, limit=inp.max_items)
     return LaneDetail(
         id=lane.id,
         handle=lane.handle,
@@ -243,7 +266,226 @@ async def show(inp: LaneInput, ctx: Ctx) -> LaneDetail:
         status=lane.status,
         cwd=lane.cwd,
         active_turn_id=lane.active_turn_id,
+        transcript=transcript,
     )
+
+
+async def watch(inp: WatchInput, ctx: Ctx) -> WatchOutput:
+    lane = await _resolve(ctx, inp.lane)
+    if inp.timeout == 0:
+        return WatchOutput(lane=lane.id, events=[], timed_out=True)
+    stream = ctx.client.raw_events(lane.id)
+    events: list[WatchEvent] = []
+    timed_out = False
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + inp.timeout
+    try:
+        while len(events) < inp.limit:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                timed_out = True
+                break
+            try:
+                raw = await asyncio.wait_for(anext(stream), timeout=remaining)
+            except TimeoutError:
+                timed_out = True
+                break
+            except StopAsyncIteration:
+                break
+            event = _watch_event(raw)
+            if event is not None:
+                events.append(event)
+    finally:
+        aclose = getattr(stream, "aclose", None)
+        if aclose is not None:
+            await aclose()
+    return WatchOutput(lane=lane.id, events=events, timed_out=timed_out)
+
+
+async def transcript(inp: TranscriptInput, ctx: Ctx) -> TranscriptOutput:
+    lane = await _resolve(ctx, inp.lane)
+    result = await ctx.client.thread_read(lane.id, include_turns=True)
+    return TranscriptOutput(
+        lane=lane.id,
+        items=_transcript_from_thread(result, limit=inp.limit),
+    )
+
+
+def _watch_event(raw: dict[str, object]) -> WatchEvent | None:
+    method = raw.get("method")
+    if not isinstance(method, str):
+        return None
+    params = raw.get("params")
+    request_id = raw.get("id")
+    return WatchEvent(
+        method=method,
+        params=params if isinstance(params, dict) else {},
+        request_id=request_id if isinstance(request_id, int) else None,
+    )
+
+
+def _transcript_from_thread(result: dict[str, object], *, limit: int) -> list[TranscriptItem]:
+    thread = result.get("thread")
+    if not isinstance(thread, dict):
+        return []
+    turns = thread.get("turns")
+    if not isinstance(turns, list):
+        return []
+    items: list[TranscriptItem] = []
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        turn_id = _str(turn, "id")
+        raw_items = turn.get("items")
+        if not isinstance(raw_items, list):
+            continue
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            item_type = _str(item, "type") or "unknown"
+            text = _item_text(item)
+            items.append(
+                TranscriptItem(
+                    turn_id=turn_id,
+                    item_id=_str(item, "id"),
+                    type=item_type,
+                    text=text,
+                )
+            )
+    return items[-limit:]
+
+
+def _item_text(item: dict[str, object]) -> str | None:
+    direct = item.get("text")
+    if isinstance(direct, str):
+        return direct
+    content = item.get("content")
+    if isinstance(content, list):
+        chunks: list[str] = []
+        for entry in content:
+            if not isinstance(entry, dict):
+                continue
+            text = entry.get("text")
+            if isinstance(text, str):
+                chunks.append(text)
+                continue
+            nested = entry.get("content")
+            if isinstance(nested, list):
+                chunks.extend(_content_text(nested))
+        return "\n".join(chunks) if chunks else None
+    return None
+
+
+def _content_text(entries: list[object]) -> list[str]:
+    chunks: list[str] = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            text = entry.get("text")
+            if isinstance(text, str):
+                chunks.append(text)
+    return chunks
+
+
+def _str(data: dict[str, object], key: str) -> str | None:
+    value = data.get(key)
+    return value if isinstance(value, str) else None
+
+
+def _goal(goal: ThreadGoal) -> Goal:
+    return Goal(
+        thread_id=goal.thread_id,
+        objective=goal.objective,
+        status=goal.status,
+        tokens_used=goal.tokens_used,
+        time_used_seconds=goal.time_used_seconds,
+        created_at=goal.created_at,
+        updated_at=goal.updated_at,
+        token_budget=goal.token_budget,
+    )
+
+
+async def goal_get(inp: GoalGetInput, ctx: Ctx) -> GoalView:
+    lane = await _resolve(ctx, inp.lane)
+    goal = await ctx.client.thread_goal_get(lane.id)
+    return GoalView(lane=lane.id, goal=_goal(goal) if goal is not None else None)
+
+
+async def goal_set(inp: GoalSetInput, ctx: Ctx) -> GoalView:
+    lane = await _resolve(ctx, inp.lane)
+    _require_writable(lane)
+    if inp.objective is None and inp.status is None and inp.token_budget is None:
+        raise ValidationError("goal-set requires objective, status, or token_budget")
+    if inp.objective is None and await ctx.client.thread_goal_get(lane.id) is None:
+        raise ValidationError(
+            "goal-set requires objective when creating a goal; status and token_budget "
+            "only update an existing goal"
+        )
+    goal = await ctx.client.thread_goal_set(
+        lane.id,
+        objective=inp.objective,
+        status=inp.status,
+        token_budget=inp.token_budget,
+    )
+    await ctx.registry.log_action("goal-set", lane=lane.id, detail=inp.objective)
+    return GoalView(lane=lane.id, goal=_goal(goal))
+
+
+async def goal_clear(inp: GoalClearInput, ctx: Ctx) -> GoalView:
+    lane = await _resolve(ctx, inp.lane)
+    _require_writable(lane)
+    await ctx.client.thread_goal_clear(lane.id)
+    await ctx.registry.log_action("goal-clear", lane=lane.id)
+    return GoalView(lane=lane.id, goal=None)
+
+
+async def fork(inp: ForkInput, ctx: Ctx) -> LaneRef:
+    source = await _resolve(ctx, inp.lane)
+    _require_writable(source)
+    thread = await ctx.client.thread_fork(
+        source.id,
+        cwd=inp.cwd or source.cwd,
+        sandbox=inp.sandbox,
+        approval_policy=inp.approval_policy,
+        approvals_reviewer=inp.approvals_reviewer,
+        base_instructions=inp.base_instructions,
+        developer_instructions=inp.developer_instructions,
+        service_tier=inp.service_tier,
+        model=inp.model,
+        model_provider=inp.model_provider,
+        ephemeral=inp.ephemeral,
+    )
+    handle = _handle(inp.name)
+    lane = await ctx.registry.add_lane(
+        id=thread.id,
+        handle=handle,
+        source="own",
+        cwd=thread.cwd or inp.cwd or source.cwd,
+        status="idle",
+    )
+    await ctx.registry.log_action("fork", lane=lane.id, detail=f"from {source.id}")
+    try:
+        await ctx.client.thread_set_name(thread.id, handle.removeprefix("@"))
+    except ClientError as exc:
+        ctx.log.warning("lane.name_set_failed", lane=lane.id, error=str(exc))
+    return _ref(lane)
+
+
+async def rollback(inp: RollbackInput, ctx: Ctx) -> LaneRef:
+    lane = await _resolve(ctx, inp.lane)
+    _require_writable(lane)
+    await ctx.client.thread_rollback(lane.id, inp.turns)
+    await ctx.registry.set_active_turn(lane.id, None)
+    await ctx.registry.update_lane_status(lane.id, "idle")
+    await ctx.registry.log_action("rollback", lane=lane.id, detail=f"{inp.turns} turn(s)")
+    return _ref(await ctx.registry.get_lane(lane.id))
+
+
+async def compact(inp: CompactInput, ctx: Ctx) -> ActionAck:
+    lane = await _resolve(ctx, inp.lane)
+    _require_writable(lane)
+    await ctx.client.thread_compact_start(lane.id)
+    await ctx.registry.log_action("compact", lane=lane.id)
+    return ActionAck(lane=lane.id, op="compact")
 
 
 async def roster(inp: RosterInput, ctx: Ctx) -> Roster:

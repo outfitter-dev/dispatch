@@ -7,6 +7,10 @@ This workspace-local plugin exposes:
 - [`.mcp.json`](.mcp.json) - the `dispatch` MCP server, launched with
   `uv --directory ../.. run dispatch mcp`.
 
+The MCP server and skills expose the same derived operation registry as the CLI,
+including lane creation/messaging, bounded watch, transcript snapshots, native goals,
+history controls, triggers, and daemon status/log reads.
+
 `skills` is a symlink to the repo-root [`../../skills`](../../skills) tree so the plugin
 and standalone skill docs cannot drift.
 

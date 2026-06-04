@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from outfitter.dispatch.client.events import (
     ApprovalRequested,
+    GoalCleared,
+    GoalUpdated,
     ItemCompleted,
     LaneIdle,
     StatusChanged,
+    ThreadCompacted,
     TurnCompleted,
     TurnStarted,
     project_notification,
@@ -25,6 +28,12 @@ def test_item_completed_carries_item_id() -> None:
     assert project_notification("item/completed", {"threadId": "L1", "itemId": "I9"}) == [
         ItemCompleted("L1", "I9")
     ]
+
+
+def test_goal_and_compaction_notifications_project_to_activity_events() -> None:
+    assert project_notification("thread/goal/updated", {"threadId": "L1"}) == [GoalUpdated("L1")]
+    assert project_notification("thread/goal/cleared", {"threadId": "L1"}) == [GoalCleared("L1")]
+    assert project_notification("thread/compacted", {"threadId": "L1"}) == [ThreadCompacted("L1")]
 
 
 def test_status_changed_with_no_flags_also_emits_idle() -> None:

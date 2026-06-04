@@ -45,7 +45,14 @@ _GROUPS: tuple[_ToolGroup, ...] = (
         name="dispatch_lane_read",
         summary="Read lane and session state.",
         intent="read",
-        actions=(("roster", "roster"), ("discover", "discover"), ("show", "show")),
+        actions=(
+            ("roster", "roster"),
+            ("discover", "discover"),
+            ("show", "show"),
+            ("transcript", "transcript"),
+            ("watch", "watch"),
+            ("goal_get", "goal-get"),
+        ),
     ),
     _ToolGroup(
         name="dispatch_lane_write",
@@ -59,13 +66,16 @@ _GROUPS: tuple[_ToolGroup, ...] = (
             ("steer", "steer"),
             ("brief", "brief"),
             ("interrupt", "interrupt"),
+            ("goal_set", "goal-set"),
+            ("fork", "fork"),
+            ("compact", "compact"),
         ),
     ),
     _ToolGroup(
         name="dispatch_lane_destroy",
         summary="Destroy or archive lane state.",
         intent="destroy",
-        actions=(("archive", "archive"),),
+        actions=(("archive", "archive"), ("goal_clear", "goal-clear"), ("rollback", "rollback")),
     ),
     _ToolGroup(
         name="dispatch_trigger_read",

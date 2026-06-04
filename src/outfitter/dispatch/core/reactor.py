@@ -7,8 +7,11 @@ from __future__ import annotations
 
 from outfitter.dispatch.client.events import (
     ApprovalRequested,
+    GoalCleared,
+    GoalUpdated,
     ItemCompleted,
     LaneEvent,
+    ThreadCompacted,
     TurnCompleted,
     TurnFailed,
     TurnStarted,
@@ -50,7 +53,7 @@ class Reactor:
             await registry.set_active_turn(lane.id, None)
             await registry.update_lane_status(lane.id, "error")
             await registry.touch_lane_event(lane.id)
-        elif isinstance(event, ItemCompleted):
+        elif isinstance(event, ItemCompleted | GoalUpdated | GoalCleared | ThreadCompacted):
             await registry.touch_lane_event(lane.id)
         elif isinstance(event, ApprovalRequested):
             await registry.update_lane_status(lane.id, "waiting_approval")

@@ -13,6 +13,7 @@ from outfitter.dispatch.client.models import (
     Effort,
     Personality,
     ReasoningSummary,
+    ThreadGoalStatus,
     ThreadSandbox,
 )
 from outfitter.dispatch.registry.models import LaneSource, LaneStatus
@@ -67,6 +68,77 @@ class LaneInput(BaseModel):
     lane: str = Field(description="Lane id or @handle.")
 
 
+class ShowInput(BaseModel):
+    lane: str = Field(description="Lane id or @handle.")
+    include_transcript: bool = Field(
+        default=False, description="Include a compact transcript from thread/read."
+    )
+    max_items: int = Field(default=20, ge=1, description="Max transcript items to return.")
+
+
+class WatchInput(BaseModel):
+    lane: str = Field(description="Lane id or @handle.")
+    limit: int = Field(default=20, ge=1, description="Max live App Server events to collect.")
+    timeout: float = Field(
+        default=10.0,
+        ge=0.0,
+        le=25.0,
+        description="Seconds to wait for live events before returning.",
+    )
+
+
+class TranscriptInput(BaseModel):
+    lane: str = Field(description="Lane id or @handle.")
+    limit: int = Field(default=50, ge=1, description="Max compact transcript items to return.")
+
+
+class GoalGetInput(BaseModel):
+    lane: str = Field(description="Lane id or @handle.")
+
+
+class GoalSetInput(BaseModel):
+    lane: str = Field(description="Lane id or @handle.")
+    objective: str | None = Field(default=None, description="Goal objective text.")
+    status: ThreadGoalStatus | None = Field(default=None, description="Goal status.")
+    token_budget: int | None = Field(default=None, ge=1, description="Optional token budget.")
+
+
+class GoalClearInput(BaseModel):
+    lane: str = Field(description="Lane id or @handle.")
+
+
+class ForkInput(BaseModel):
+    lane: str = Field(description="Source lane id or @handle.")
+    name: str = Field(description="Name for the new forked lane.")
+    cwd: str | None = Field(default=None, description="Working directory override for the fork.")
+    sandbox: ThreadSandbox | None = Field(
+        default=None, description="Sandbox override for the fork."
+    )
+    approval_policy: ApprovalPolicy | None = Field(
+        default=None, description="Approval policy override for the fork."
+    )
+    approvals_reviewer: ApprovalsReviewer | None = Field(
+        default=None, description="Approval reviewer override for the fork."
+    )
+    model: str | None = Field(default=None, description="Model override for the fork.")
+    model_provider: str | None = Field(default=None, description="Model provider override.")
+    base_instructions: str | None = Field(default=None, description="Base instructions override.")
+    developer_instructions: str | None = Field(
+        default=None, description="Developer instructions override."
+    )
+    service_tier: str | None = Field(default=None, description="Service tier override.")
+    ephemeral: bool = Field(default=False, description="Create an ephemeral fork.")
+
+
+class RollbackInput(BaseModel):
+    lane: str = Field(description="Lane id or @handle.")
+    turns: int = Field(default=1, ge=1, description="Turns to drop from the end of history.")
+
+
+class CompactInput(BaseModel):
+    lane: str = Field(description="Lane id or @handle.")
+
+
 class RosterInput(BaseModel):
     include_archived: bool = Field(default=False, description="Include archived lanes.")
 
@@ -92,6 +164,47 @@ class NewLane(LaneRef):
 class LaneDetail(LaneRef):
     cwd: str | None = None
     active_turn_id: str | None = None
+    transcript: list[TranscriptItem] = Field(default_factory=list)
+
+
+class TranscriptItem(BaseModel):
+    turn_id: str | None = None
+    item_id: str | None = None
+    type: str
+    text: str | None = None
+
+
+class WatchEvent(BaseModel):
+    method: str
+    params: dict[str, object] = Field(default_factory=dict)
+    request_id: int | None = None
+
+
+class WatchOutput(BaseModel):
+    lane: str
+    events: list[WatchEvent]
+    timed_out: bool
+
+
+class TranscriptOutput(BaseModel):
+    lane: str
+    items: list[TranscriptItem]
+
+
+class Goal(BaseModel):
+    thread_id: str
+    objective: str
+    status: ThreadGoalStatus
+    tokens_used: int
+    time_used_seconds: int
+    created_at: int
+    updated_at: int
+    token_budget: int | None = None
+
+
+class GoalView(BaseModel):
+    lane: str
+    goal: Goal | None = None
 
 
 class ActionAck(BaseModel):

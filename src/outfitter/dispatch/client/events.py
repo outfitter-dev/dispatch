@@ -73,6 +73,21 @@ class TokenUsageUpdated(LaneEvent):
     pass
 
 
+@dataclass(frozen=True)
+class GoalUpdated(LaneEvent):
+    pass
+
+
+@dataclass(frozen=True)
+class GoalCleared(LaneEvent):
+    pass
+
+
+@dataclass(frozen=True)
+class ThreadCompacted(LaneEvent):
+    pass
+
+
 def _thread_id(params: dict[str, object]) -> str | None:
     tid = params.get("threadId")
     return tid if isinstance(tid, str) else None
@@ -106,6 +121,12 @@ def project_notification(method: str, params: dict[str, object]) -> list[LaneEve
             return [ItemCompleted(lane, _str(params, "itemId"))]
         case "thread/tokenUsage/updated":
             return [TokenUsageUpdated(lane)]
+        case "thread/goal/updated":
+            return [GoalUpdated(lane)]
+        case "thread/goal/cleared":
+            return [GoalCleared(lane)]
+        case "thread/compacted":
+            return [ThreadCompacted(lane)]
         case "thread/status/changed":
             flags = _active_flags(params)
             events: list[LaneEvent] = [StatusChanged(lane, flags)]

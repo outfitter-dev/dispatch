@@ -21,13 +21,16 @@ uv run dispatch new \
   --name docs \
   --cwd /Users/mg/Developer/outfitter/dispatch \
   --text "Please summarize the current stack state."
+uv run dispatch transcript --lane "@[dispatch] docs" --limit 20
+uv run dispatch goal-set --lane "@[dispatch] docs" --objective "Finish the docs review."
 uv run dispatch log --limit 10
 uv run dispatch down
 ```
 
 Use owned lanes for writes. Existing desktop Codex threads can be attached, but v0 treats
-attached lanes as observe-only: `send`, `steer`, `brief`, `interrupt`, and `archive` are
-blocked for attached lanes by ADR-0005.
+attached lanes as observe-only: mutating ops such as `send`, `steer`, `brief`, `interrupt`,
+`archive`, `goal-set`, `fork`, `rollback`, and `compact` are blocked for attached lanes by
+ADR-0005.
 
 For the operator guide, CLI/MCP examples, triggers, and plugin setup, start at
 [`docs/usage/README.md`](docs/usage/README.md).

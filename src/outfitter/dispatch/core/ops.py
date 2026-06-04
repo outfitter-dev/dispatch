@@ -13,8 +13,14 @@ from . import handlers, trigger_handlers
 from .models import (
     ActionAck,
     AttachInput,
+    CompactInput,
     DiscoverInput,
     Discovery,
+    ForkInput,
+    GoalClearInput,
+    GoalGetInput,
+    GoalSetInput,
+    GoalView,
     LaneDetail,
     LaneInput,
     LaneRef,
@@ -24,16 +30,22 @@ from .models import (
     NewInput,
     NewLane,
     OpenInput,
+    RollbackInput,
     Roster,
     RosterInput,
+    ShowInput,
     StatusInput,
     StatusOutput,
+    TranscriptInput,
+    TranscriptOutput,
     TriggerAddInput,
     TriggerIdInput,
     TriggerList,
     TriggerListInput,
     TriggerRemoved,
     TriggerView,
+    WatchInput,
+    WatchOutput,
 )
 
 OPEN = define_op(
@@ -140,12 +152,34 @@ INTERRUPT = define_op(
 SHOW = define_op(
     id="show",
     summary="Show a lane's current detail.",
-    input=LaneInput,
+    input=ShowInput,
     output=LaneDetail,
     intent="read",
     idempotent=True,
     handler=handlers.show,
     examples=[Example("missing", input={"lane": "nope"}, raises=NotFoundError)],
+)
+
+TRANSCRIPT = define_op(
+    id="transcript",
+    summary="Read a compact persisted transcript for a lane.",
+    input=TranscriptInput,
+    output=TranscriptOutput,
+    intent="read",
+    idempotent=True,
+    handler=handlers.transcript,
+    examples=[Example("missing", input={"lane": "nope"}, raises=NotFoundError)],
+)
+
+WATCH = define_op(
+    id="watch",
+    summary="Collect live raw App Server events for a lane.",
+    input=WatchInput,
+    output=WatchOutput,
+    intent="read",
+    idempotent=True,
+    handler=handlers.watch,
+    examples=[Example("missing", input={"lane": "nope", "timeout": 0}, raises=NotFoundError)],
 )
 
 ROSTER = define_op(
@@ -178,6 +212,74 @@ ARCHIVE = define_op(
     intent="destroy",
     idempotent=True,
     handler=handlers.archive,
+    examples=[Example("missing", input={"lane": "nope"}, raises=NotFoundError)],
+)
+
+GOAL_GET = define_op(
+    id="goal-get",
+    summary="Read a lane's native App Server goal.",
+    input=GoalGetInput,
+    output=GoalView,
+    intent="read",
+    idempotent=True,
+    handler=handlers.goal_get,
+    examples=[Example("missing", input={"lane": "nope"}, raises=NotFoundError)],
+)
+
+GOAL_SET = define_op(
+    id="goal-set",
+    summary="Set or update a lane's native App Server goal.",
+    input=GoalSetInput,
+    output=GoalView,
+    intent="write",
+    idempotent=False,
+    handler=handlers.goal_set,
+    examples=[
+        Example("missing", input={"lane": "nope", "objective": "ship"}, raises=NotFoundError)
+    ],
+)
+
+GOAL_CLEAR = define_op(
+    id="goal-clear",
+    summary="Clear a lane's native App Server goal.",
+    input=GoalClearInput,
+    output=GoalView,
+    intent="destroy",
+    idempotent=True,
+    handler=handlers.goal_clear,
+    examples=[Example("missing", input={"lane": "nope"}, raises=NotFoundError)],
+)
+
+FORK = define_op(
+    id="fork",
+    summary="Fork a lane into a new owned lane.",
+    input=ForkInput,
+    output=LaneRef,
+    intent="write",
+    idempotent=False,
+    handler=handlers.fork,
+    examples=[Example("missing", input={"lane": "nope", "name": "copy"}, raises=NotFoundError)],
+)
+
+ROLLBACK = define_op(
+    id="rollback",
+    summary="Rollback persisted lane history; does not revert workspace files.",
+    input=RollbackInput,
+    output=LaneRef,
+    intent="destroy",
+    idempotent=False,
+    handler=handlers.rollback,
+    examples=[Example("missing", input={"lane": "nope"}, raises=NotFoundError)],
+)
+
+COMPACT = define_op(
+    id="compact",
+    summary="Start App Server context compaction for a lane.",
+    input=CompactInput,
+    output=ActionAck,
+    intent="write",
+    idempotent=False,
+    handler=handlers.compact,
     examples=[Example("missing", input={"lane": "nope"}, raises=NotFoundError)],
 )
 
@@ -279,9 +381,17 @@ _ALL = (
     BRIEF,
     INTERRUPT,
     SHOW,
+    TRANSCRIPT,
+    WATCH,
     ROSTER,
     DISCOVER,
     ARCHIVE,
+    GOAL_GET,
+    GOAL_SET,
+    GOAL_CLEAR,
+    FORK,
+    ROLLBACK,
+    COMPACT,
     STATUS,
     LOG,
     TRIGGER_ADD,
