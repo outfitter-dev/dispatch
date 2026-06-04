@@ -5,7 +5,7 @@ title: History, Goals, and Bounded Watch
 status: accepted
 created: 2026-06-04
 updated: 2026-06-04
-owners: ['[galligan](https://github.com/galligan)']
+owners: ['Dispatch maintainers']
 ---
 
 # ADR-0016: History, Goals, and Bounded Watch

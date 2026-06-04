@@ -5,7 +5,7 @@ description = "Local control plane for orchestrating Codex agent lanes over the 
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }
-authors = [{ name = "Matt Galligan" }]
+authors = [{ name = "Dispatch Contributors" }]
 dependencies = [
     "typer>=0.15",
     "rich>=13",

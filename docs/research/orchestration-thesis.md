@@ -1,6 +1,6 @@
 # Codex/Claude orchestration skills → proper tooling thesis (2026-06-02)
 
-Companion to `2026-06-02-codex-app-server-0136-verification.md`. Read of Matt's existing orchestration skills (`~/.config/codex/skills/{delegate,delegate-init,delegate-goal,dm}` and the `crew` skill) plus what they imply for tooling.
+Companion to `2026-06-02-codex-app-server-0136-verification.md`. Read of existing local orchestration skills (`$HOME/.config/codex/skills/{delegate,delegate-init,delegate-goal,dm}` and the `crew` skill) plus what they imply for tooling.
 
 ## What the skills actually are
 

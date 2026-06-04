@@ -5,7 +5,7 @@ title: Surface Projections Are Ergonomic, Not Isomorphic
 status: proposed
 created: 2026-06-03
 updated: 2026-06-03
-owners: ['[galligan](https://github.com/galligan)']
+owners: ['Dispatch maintainers']
 ---
 
 # ADR-0010: Surface Projections Are Ergonomic, Not Isomorphic

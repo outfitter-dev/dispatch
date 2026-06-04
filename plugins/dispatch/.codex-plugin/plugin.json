@@ -3,8 +3,8 @@
   "version": "0.0.0",
   "description": "Operate dispatch, a local control plane for Codex lanes, through bundled skills and the derived MCP surface.",
   "author": {
-    "name": "Matt Galligan",
-    "url": "https://github.com/galligan"
+    "name": "Outfitter",
+    "url": "https://github.com/outfitter-dev/dispatch"
   },
   "homepage": "https://github.com/outfitter-dev/dispatch",
   "repository": "https://github.com/outfitter-dev/dispatch",
