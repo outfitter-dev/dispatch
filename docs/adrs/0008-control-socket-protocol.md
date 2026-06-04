@@ -5,7 +5,7 @@ title: Control-Socket Protocol — JSON-RPC-lite over JSONL
 status: accepted
 created: 2026-06-02
 updated: 2026-06-02
-owners: ['Dispatch maintainers']
+owners: ['[galligan](https://github.com/galligan)']
 ---
 
 # ADR-0008: Control-Socket Protocol — JSON-RPC-lite over JSONL

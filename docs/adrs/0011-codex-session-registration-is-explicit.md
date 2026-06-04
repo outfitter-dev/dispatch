@@ -5,7 +5,7 @@ title: Codex Session Registration Is Explicit
 status: proposed
 created: 2026-06-03
 updated: 2026-06-03
-owners: ['Dispatch maintainers']
+owners: ['[galligan](https://github.com/galligan)']
 ---
 
 # ADR-0011: Codex Session Registration Is Explicit

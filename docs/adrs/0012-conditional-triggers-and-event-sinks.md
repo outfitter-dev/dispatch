@@ -5,7 +5,7 @@ title: Conditional Triggers and Event Sinks
 status: proposed
 created: 2026-06-03
 updated: 2026-06-03
-owners: ['Dispatch maintainers']
+owners: ['[galligan](https://github.com/galligan)']
 ---
 
 # ADR-0012: Conditional Triggers and Event Sinks

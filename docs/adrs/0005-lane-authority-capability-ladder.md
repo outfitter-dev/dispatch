@@ -5,7 +5,7 @@ title: Lane Authority Capability Ladder
 status: accepted
 created: 2026-06-02
 updated: 2026-06-03
-owners: ['Dispatch maintainers']
+owners: ['[galligan](https://github.com/galligan)']
 ---
 
 # ADR-0005: Lane Authority Capability Ladder

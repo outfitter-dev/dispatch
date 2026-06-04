@@ -5,7 +5,7 @@ title: Normalized Internal LaneEvent Vocabulary
 status: accepted
 created: 2026-06-02
 updated: 2026-06-02
-owners: ['Dispatch maintainers']
+owners: ['[galligan](https://github.com/galligan)']
 ---
 
 # ADR-0007: Normalized Internal LaneEvent Vocabulary

@@ -5,7 +5,7 @@ title: Own Scheduler, Not Codex Automations
 status: accepted
 created: 2026-06-02
 updated: 2026-06-02
-owners: ['Dispatch maintainers']
+owners: ['[galligan](https://github.com/galligan)']
 ---
 
 # ADR-0003: Own Scheduler, Not Codex Automations

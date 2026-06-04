@@ -5,7 +5,7 @@ title: Single Daemon over One App Server
 status: accepted
 created: 2026-06-02
 updated: 2026-06-02
-owners: ['Dispatch maintainers']
+owners: ['[galligan](https://github.com/galligan)']
 ---
 
 # ADR-0002: Single Daemon over One App Server
