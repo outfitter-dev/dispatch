@@ -29,6 +29,8 @@ from outfitter.dispatch.client.models import (
     Personality,
     ReasoningSummary,
     SandboxPolicy,
+    ThreadGoal,
+    ThreadGoalStatus,
     ThreadInfo,
     ThreadSandbox,
 )
@@ -57,15 +59,50 @@ class LaneClient(Protocol):
 
     async def thread_resume(self, thread_id: str) -> ThreadInfo: ...
 
+    async def thread_fork(
+        self,
+        thread_id: str,
+        *,
+        cwd: str | None = None,
+        sandbox: ThreadSandbox | None = None,
+        approval_policy: ApprovalPolicy | None = None,
+        approvals_reviewer: ApprovalsReviewer | None = None,
+        base_instructions: str | None = None,
+        developer_instructions: str | None = None,
+        service_tier: str | None = None,
+        model: str | None = None,
+        model_provider: str | None = None,
+        ephemeral: bool = False,
+    ) -> ThreadInfo: ...
+
     async def thread_list(
         self, limit: int = 50, cursor: str | None = None, use_state_db_only: bool | None = None
     ) -> list[ThreadInfo]: ...
 
-    async def thread_read(self, thread_id: str) -> dict[str, object]: ...
+    async def thread_read(
+        self, thread_id: str, include_turns: bool = False
+    ) -> dict[str, object]: ...
 
     async def thread_archive(self, thread_id: str) -> None: ...
 
     async def thread_set_name(self, thread_id: str, name: str) -> None: ...
+
+    async def thread_rollback(self, thread_id: str, num_turns: int) -> ThreadInfo: ...
+
+    async def thread_compact_start(self, thread_id: str) -> None: ...
+
+    async def thread_goal_get(self, thread_id: str) -> ThreadGoal | None: ...
+
+    async def thread_goal_set(
+        self,
+        thread_id: str,
+        *,
+        objective: str | None = None,
+        status: ThreadGoalStatus | None = None,
+        token_budget: int | None = None,
+    ) -> ThreadGoal: ...
+
+    async def thread_goal_clear(self, thread_id: str) -> None: ...
 
     async def turn_start(
         self,

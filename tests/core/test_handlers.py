@@ -10,19 +10,28 @@ import pytest
 import pytest_asyncio
 
 from outfitter.dispatch.client.errors import TransportError
-from outfitter.dispatch.client.models import ThreadInfo, ThreadStatus
+from outfitter.dispatch.client.models import ThreadGoal, ThreadInfo, ThreadStatus
 from outfitter.dispatch.contracts.errors import AppServerError, AuthorityError, ValidationError
 from outfitter.dispatch.core import handlers
 from outfitter.dispatch.core.models import (
     AttachInput,
+    CompactInput,
     DiscoverInput,
+    ForkInput,
+    GoalClearInput,
+    GoalGetInput,
+    GoalSetInput,
     LaneInput,
     LaneTextInput,
     LogInput,
     NewInput,
     OpenInput,
+    RollbackInput,
     RosterInput,
+    ShowInput,
     StatusInput,
+    TranscriptInput,
+    WatchInput,
 )
 from outfitter.dispatch.registry.store import Registry
 from tests.fakes import FakeLaneClient, make_ctx
@@ -134,6 +143,198 @@ async def test_send_resolves_by_handle(store: Registry) -> None:
     await handlers.open_lane(OpenInput(name="beta"), ctx)
     ack = await handlers.send(LaneTextInput(lane="@beta", text="hi"), ctx)
     assert ack.lane == "lane-1"
+
+
+async def test_show_can_include_compact_transcript(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.read_result = {
+        "thread": {
+            "id": "lane-1",
+            "turns": [
+                {
+                    "id": "turn-1",
+                    "items": [
+                        {
+                            "id": "u1",
+                            "type": "userMessage",
+                            "content": [{"type": "text", "text": "hello"}],
+                        },
+                        {"id": "a1", "type": "agentMessage", "text": "hi"},
+                    ],
+                }
+            ],
+        }
+    }
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+
+    out = await handlers.show(ShowInput(lane="@alpha", include_transcript=True, max_items=2), ctx)
+
+    assert [item.text for item in out.transcript] == ["hello", "hi"]
+    assert any(
+        name == "thread_read" and kw["thread_id"] == "lane-1" and kw["include_turns"] is True
+        for name, kw in client.calls
+    )
+
+
+async def test_transcript_reads_persisted_turn_items(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.read_result = {
+        "thread": {
+            "id": "lane-1",
+            "turns": [
+                {
+                    "id": "t1",
+                    "items": [{"id": "a1", "type": "agentMessage", "text": "done"}],
+                }
+            ],
+        }
+    }
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+
+    out = await handlers.transcript(TranscriptInput(lane="lane-1", limit=1), ctx)
+
+    assert out.lane == "lane-1"
+    assert len(out.items) == 1
+    assert out.items[0].text == "done"
+
+
+async def test_watch_collects_bounded_raw_events(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.raw_log = [
+        {"method": "turn/started", "params": {"threadId": "lane-1", "turnId": "t1"}},
+        {"id": 7, "method": "item/tool/requestUserInput", "params": {"threadId": "lane-1"}},
+    ]
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+
+    out = await handlers.watch(WatchInput(lane="lane-1", limit=2, timeout=1), ctx)
+
+    assert out.timed_out is False
+    assert [event.method for event in out.events] == ["turn/started", "item/tool/requestUserInput"]
+    assert out.events[1].request_id == 7
+
+
+async def test_watch_zero_timeout_returns_immediately(store: Registry) -> None:
+    ctx = make_ctx(store)
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+
+    out = await handlers.watch(WatchInput(lane="lane-1", timeout=0), ctx)
+
+    assert out.events == []
+    assert out.timed_out is True
+
+
+async def test_goal_get_set_and_clear_use_native_goal_api(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.goal_result = ThreadGoal(
+        thread_id="lane-1",
+        objective="ship",
+        status="active",
+        tokens_used=5,
+        time_used_seconds=6,
+        created_at=1,
+        updated_at=2,
+    )
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+
+    got = await handlers.goal_get(GoalGetInput(lane="@alpha"), ctx)
+    assert got.goal is not None
+    assert got.goal.objective == "ship"
+
+    set_out = await handlers.goal_set(
+        GoalSetInput(lane="lane-1", objective="finish", token_budget=100),
+        ctx,
+    )
+    assert set_out.goal is not None
+    assert set_out.goal.objective == "finish"
+    assert any(
+        name == "thread_goal_set" and kw["objective"] == "finish" and kw["token_budget"] == 100
+        for name, kw in client.calls
+    )
+
+    cleared = await handlers.goal_clear(GoalClearInput(lane="lane-1"), ctx)
+    assert cleared.goal is None
+    assert any(
+        name == "thread_goal_clear" and kw["thread_id"] == "lane-1" for name, kw in client.calls
+    )
+
+
+async def test_goal_set_requires_a_change(store: Registry) -> None:
+    ctx = make_ctx(store)
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+
+    with pytest.raises(ValidationError):
+        await handlers.goal_set(GoalSetInput(lane="lane-1"), ctx)
+
+
+async def test_fork_registers_new_owned_lane(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="alpha", cwd="/source"), ctx)
+
+    out = await handlers.fork(
+        ForkInput(
+            lane="@alpha",
+            name="alpha-copy",
+            cwd="/fork",
+            sandbox="workspace-write",
+            approval_policy="on-request",
+            ephemeral=True,
+        ),
+        ctx,
+    )
+
+    assert out.id == "lane-1-fork"
+    assert out.handle == "@alpha-copy"
+    lane = await store.find_lane("lane-1-fork")
+    assert lane is not None
+    assert lane.source == "own"
+    assert lane.cwd == "/fork"
+    assert any(
+        name == "thread_fork"
+        and kw["thread_id"] == "lane-1"
+        and kw["sandbox"] == "workspace-write"
+        and kw["approval_policy"] == "on-request"
+        for name, kw in client.calls
+    )
+
+
+async def test_rollback_and_compact_owned_lane(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+    await store.set_active_turn("lane-1", "turn-9")
+    await store.update_lane_status("lane-1", "busy")
+
+    rolled = await handlers.rollback(RollbackInput(lane="lane-1", turns=2), ctx)
+    assert rolled.status == "idle"
+    assert any(
+        name == "thread_rollback" and kw["thread_id"] == "lane-1" and kw["num_turns"] == 2
+        for name, kw in client.calls
+    )
+
+    compacted = await handlers.compact(CompactInput(lane="@alpha"), ctx)
+    assert compacted.op == "compact"
+    assert any(
+        name == "thread_compact_start" and kw["thread_id"] == "lane-1" for name, kw in client.calls
+    )
+
+
+async def test_history_control_ops_on_attached_lane_raise_authority(store: Registry) -> None:
+    ctx = make_ctx(store)
+    await store.add_lane(id="D6", handle="@desktop", source="attached", status="idle")
+
+    with pytest.raises(AuthorityError):
+        await handlers.goal_clear(GoalClearInput(lane="D6"), ctx)
+    with pytest.raises(AuthorityError):
+        await handlers.fork(ForkInput(lane="D6", name="copy"), ctx)
+    with pytest.raises(AuthorityError):
+        await handlers.rollback(RollbackInput(lane="D6"), ctx)
+    with pytest.raises(AuthorityError):
+        await handlers.compact(CompactInput(lane="D6"), ctx)
 
 
 async def test_send_to_attached_lane_raises_authority(store: Registry) -> None:

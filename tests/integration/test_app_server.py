@@ -96,6 +96,51 @@ async def test_persisted_resume_yields_live_events(client: AppServerClient, work
         await client.thread_archive(thread.id)
 
 
+async def test_thread_read_goal_and_history_controls(
+    client: AppServerClient, work_dir: Path
+) -> None:
+    thread = await client.thread_start(cwd=str(work_dir), sandbox="read-only", ephemeral=False)
+    fork_id: str | None = None
+    try:
+        await run_turn(client, thread.id, "Reply with exactly one word: alpha", str(work_dir))
+        read = await client.thread_read(thread.id, include_turns=True)
+        payload = read.get("thread")
+        assert isinstance(payload, dict)
+        turns = payload.get("turns")
+        assert isinstance(turns, list)
+        assert turns, "includeTurns did not populate persisted turns"
+
+        goal = await client.thread_goal_set(thread.id, objective="Finish the integration probe.")
+        assert goal.objective == "Finish the integration probe."
+        assert goal.status == "active"
+        assert (await client.thread_goal_get(thread.id)) is not None
+        await client.thread_goal_clear(thread.id)
+        assert await client.thread_goal_get(thread.id) is None
+
+        fork = await client.thread_fork(thread.id, cwd=str(work_dir), ephemeral=True)
+        fork_id = fork.id
+        assert fork.id != thread.id
+        assert fork.forked_from_id == thread.id
+
+        await run_turn(client, thread.id, "Reply with exactly one word: beta", str(work_dir))
+        before = await client.thread_read(thread.id, include_turns=True)
+        before_thread = before.get("thread")
+        before_turns = before_thread.get("turns") if isinstance(before_thread, dict) else None
+        assert isinstance(before_turns, list)
+        await client.thread_rollback(thread.id, 1)
+        after = await client.thread_read(thread.id, include_turns=True)
+        after_thread = after.get("thread")
+        after_turns = after_thread.get("turns") if isinstance(after_thread, dict) else None
+        assert isinstance(after_turns, list)
+        assert len(after_turns) < len(before_turns)
+
+        await client.thread_compact_start(thread.id)
+    finally:
+        await client.thread_archive(thread.id)
+        if fork_id is not None:
+            await client.thread_archive(fork_id)
+
+
 async def _await_completion(events: AsyncIterator[LaneEvent], lane: str) -> bool:
     async for event in events:
         if isinstance(event, TurnCompleted) and event.lane_id == lane:

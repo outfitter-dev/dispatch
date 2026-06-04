@@ -21,6 +21,8 @@ from outfitter.dispatch.client.models import (
     Personality,
     ReasoningSummary,
     SandboxPolicy,
+    ThreadGoal,
+    ThreadGoalStatus,
     ThreadInfo,
     ThreadSandbox,
 )
@@ -42,6 +44,7 @@ class FakeLaneClient:
         self.threads: dict[str, ThreadInfo] = {}
         self.list_result: list[ThreadInfo] = []
         self.read_result: dict[str, object] = {}
+        self.goal_result: ThreadGoal | None = None
         self.event_log: list[LaneEvent] = []
         self.raw_log: list[dict[str, object]] = []
 
@@ -84,14 +87,47 @@ class FakeLaneClient:
         self._record("thread_resume", thread_id=thread_id)
         return self.threads.get(thread_id, ThreadInfo(id=thread_id))
 
+    async def thread_fork(
+        self,
+        thread_id: str,
+        *,
+        cwd: str | None = None,
+        sandbox: ThreadSandbox | None = None,
+        approval_policy: ApprovalPolicy | None = None,
+        approvals_reviewer: ApprovalsReviewer | None = None,
+        base_instructions: str | None = None,
+        developer_instructions: str | None = None,
+        service_tier: str | None = None,
+        model: str | None = None,
+        model_provider: str | None = None,
+        ephemeral: bool = False,
+    ) -> ThreadInfo:
+        self._record(
+            "thread_fork",
+            thread_id=thread_id,
+            cwd=cwd,
+            sandbox=sandbox,
+            approval_policy=approval_policy,
+            approvals_reviewer=approvals_reviewer,
+            base_instructions=base_instructions,
+            developer_instructions=developer_instructions,
+            service_tier=service_tier,
+            model=model,
+            model_provider=model_provider,
+            ephemeral=ephemeral,
+        )
+        fork = ThreadInfo(id=f"{thread_id}-fork", ephemeral=ephemeral, cwd=cwd)
+        self.threads[fork.id] = fork
+        return fork
+
     async def thread_list(
         self, limit: int = 50, cursor: str | None = None, use_state_db_only: bool | None = None
     ) -> list[ThreadInfo]:
         self._record("thread_list", limit=limit, use_state_db_only=use_state_db_only)
         return self.list_result
 
-    async def thread_read(self, thread_id: str) -> dict[str, object]:
-        self._record("thread_read", thread_id=thread_id)
+    async def thread_read(self, thread_id: str, include_turns: bool = False) -> dict[str, object]:
+        self._record("thread_read", thread_id=thread_id, include_turns=include_turns)
         return self.read_result
 
     async def thread_archive(self, thread_id: str) -> None:
@@ -99,6 +135,49 @@ class FakeLaneClient:
 
     async def thread_set_name(self, thread_id: str, name: str) -> None:
         self._record("thread_set_name", thread_id=thread_id, display_name=name)
+
+    async def thread_rollback(self, thread_id: str, num_turns: int) -> ThreadInfo:
+        self._record("thread_rollback", thread_id=thread_id, num_turns=num_turns)
+        return self.threads.get(thread_id, ThreadInfo(id=thread_id))
+
+    async def thread_compact_start(self, thread_id: str) -> None:
+        self._record("thread_compact_start", thread_id=thread_id)
+
+    async def thread_goal_get(self, thread_id: str) -> ThreadGoal | None:
+        self._record("thread_goal_get", thread_id=thread_id)
+        return self.goal_result
+
+    async def thread_goal_set(
+        self,
+        thread_id: str,
+        *,
+        objective: str | None = None,
+        status: ThreadGoalStatus | None = None,
+        token_budget: int | None = None,
+    ) -> ThreadGoal:
+        self._record(
+            "thread_goal_set",
+            thread_id=thread_id,
+            objective=objective,
+            status=status,
+            token_budget=token_budget,
+        )
+        goal = ThreadGoal(
+            thread_id=thread_id,
+            objective=objective or (self.goal_result.objective if self.goal_result else ""),
+            status=status or (self.goal_result.status if self.goal_result else "active"),
+            tokens_used=0,
+            time_used_seconds=0,
+            created_at=1,
+            updated_at=2,
+            token_budget=token_budget,
+        )
+        self.goal_result = goal
+        return goal
+
+    async def thread_goal_clear(self, thread_id: str) -> None:
+        self._record("thread_goal_clear", thread_id=thread_id)
+        self.goal_result = None
 
     async def turn_start(
         self,

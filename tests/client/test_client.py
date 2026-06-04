@@ -75,6 +75,85 @@ async def test_thread_set_name_sends_verified_method(
     }
 
 
+async def test_thread_read_can_include_turns(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+    fake.auto = _result_for("thread/read", {"thread": {"id": "L1", "turns": []}})
+    result = await c.thread_read("L1", include_turns=True)
+    assert result["thread"] == {"id": "L1", "turns": []}
+    assert fake.sent[-1] == {
+        "id": 1,
+        "method": "thread/read",
+        "params": {"threadId": "L1", "includeTurns": True},
+    }
+
+
+async def test_thread_goal_methods(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+    goal = {
+        "threadId": "L1",
+        "objective": "ship",
+        "status": "active",
+        "tokensUsed": 0,
+        "timeUsedSeconds": 0,
+        "createdAt": 1,
+        "updatedAt": 2,
+    }
+    fake.auto = _result_for("thread/goal/set", {"goal": goal})
+    set_goal = await c.thread_goal_set("L1", objective="ship", token_budget=10)
+    assert set_goal.objective == "ship"
+    assert fake.sent[-1]["params"] == {"threadId": "L1", "objective": "ship", "tokenBudget": 10}
+
+    fake.auto = _result_for("thread/goal/get", {"goal": goal})
+    got = await c.thread_goal_get("L1")
+    assert got is not None
+    assert got.thread_id == "L1"
+
+    fake.auto = _result_for("thread/goal/clear", {"cleared": True})
+    await c.thread_goal_clear("L1")
+    assert fake.sent[-1] == {
+        "id": 3,
+        "method": "thread/goal/clear",
+        "params": {"threadId": "L1"},
+    }
+
+
+async def test_thread_fork_rollback_and_compact_methods(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+    fake.auto = _result_for("thread/fork", {"thread": {"id": "F1", "forkedFromId": "L1"}})
+    fork = await c.thread_fork("L1", cwd="/w", sandbox="workspace-write", ephemeral=True)
+    assert fork.id == "F1"
+    assert fork.forked_from_id == "L1"
+    assert fake.sent[-1]["params"] == {
+        "threadId": "L1",
+        "cwd": "/w",
+        "sandbox": "workspace-write",
+        "ephemeral": True,
+    }
+
+    fake.auto = _result_for("thread/rollback", {"thread": {"id": "L1"}})
+    rolled = await c.thread_rollback("L1", 2)
+    assert rolled.id == "L1"
+    assert fake.sent[-1] == {
+        "id": 2,
+        "method": "thread/rollback",
+        "params": {"threadId": "L1", "numTurns": 2},
+    }
+
+    fake.auto = _result_for("thread/compact/start", {})
+    await c.thread_compact_start("L1")
+    assert fake.sent[-1] == {
+        "id": 3,
+        "method": "thread/compact/start",
+        "params": {"threadId": "L1"},
+    }
+
+
 async def test_thread_list_reads_data_key(
     client: tuple[AppServerClient, FakeTransport],
 ) -> None:

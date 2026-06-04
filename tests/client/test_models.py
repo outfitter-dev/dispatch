@@ -6,7 +6,13 @@ from outfitter.dispatch.client.models import (
     InitializeResult,
     SandboxPolicy,
     TextInput,
+    ThreadCompactStartParams,
+    ThreadForkParams,
+    ThreadGoal,
+    ThreadGoalSetParams,
     ThreadListResult,
+    ThreadReadParams,
+    ThreadRollbackParams,
     ThreadStartParams,
     TurnStartParams,
     TurnSteerParams,
@@ -97,6 +103,62 @@ def test_thread_list_result_reads_data_key() -> None:
     )
     assert [t.id for t in result.data] == ["a", "b"]
     assert result.next_cursor == "c1"
+
+
+def test_thread_read_include_turns_alias() -> None:
+    params = ThreadReadParams(thread_id="t1", include_turns=True)
+    assert params.model_dump(by_alias=True, exclude_none=True) == {
+        "threadId": "t1",
+        "includeTurns": True,
+    }
+
+
+def test_thread_goal_set_aliases_and_goal_parsing() -> None:
+    params = ThreadGoalSetParams(thread_id="t1", objective="ship", status="active", token_budget=10)
+    assert params.model_dump(by_alias=True, exclude_none=True) == {
+        "threadId": "t1",
+        "objective": "ship",
+        "status": "active",
+        "tokenBudget": 10,
+    }
+    goal = ThreadGoal.model_validate(
+        {
+            "threadId": "t1",
+            "objective": "ship",
+            "status": "active",
+            "tokensUsed": 3,
+            "timeUsedSeconds": 4,
+            "createdAt": 1,
+            "updatedAt": 2,
+        }
+    )
+    assert goal.thread_id == "t1"
+    assert goal.tokens_used == 3
+
+
+def test_thread_fork_rollback_and_compact_params() -> None:
+    fork = ThreadForkParams(
+        thread_id="t1",
+        cwd="/w",
+        sandbox="workspace-write",
+        approval_policy="on-request",
+        model="gpt-5-codex",
+        ephemeral=True,
+    )
+    assert fork.model_dump(by_alias=True, exclude_none=True) == {
+        "threadId": "t1",
+        "cwd": "/w",
+        "sandbox": "workspace-write",
+        "approvalPolicy": "on-request",
+        "model": "gpt-5-codex",
+        "ephemeral": True,
+    }
+    assert ThreadRollbackParams(thread_id="t1", num_turns=2).model_dump(
+        by_alias=True, exclude_none=True
+    ) == {"threadId": "t1", "numTurns": 2}
+    assert ThreadCompactStartParams(thread_id="t1").model_dump(
+        by_alias=True, exclude_none=True
+    ) == {"threadId": "t1"}
 
 
 def test_initialize_result_parses_camelcase() -> None:

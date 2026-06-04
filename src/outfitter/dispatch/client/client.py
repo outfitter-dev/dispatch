@@ -31,12 +31,22 @@ from .models import (
     SandboxPolicy,
     TextInput,
     ThreadArchiveParams,
+    ThreadCompactStartParams,
+    ThreadForkParams,
+    ThreadGoal,
+    ThreadGoalClearParams,
+    ThreadGoalGetParams,
+    ThreadGoalGetResult,
+    ThreadGoalResult,
+    ThreadGoalSetParams,
+    ThreadGoalStatus,
     ThreadInfo,
     ThreadListParams,
     ThreadListResult,
     ThreadReadParams,
     ThreadResult,
     ThreadResumeParams,
+    ThreadRollbackParams,
     ThreadSandbox,
     ThreadSetNameParams,
     ThreadStartParams,
@@ -182,6 +192,37 @@ class AppServerClient:
         )
         return ThreadResult.model_validate(result).thread
 
+    async def thread_fork(
+        self,
+        thread_id: str,
+        *,
+        cwd: str | None = None,
+        sandbox: ThreadSandbox | None = None,
+        approval_policy: ApprovalPolicy | None = None,
+        approvals_reviewer: ApprovalsReviewer | None = None,
+        base_instructions: str | None = None,
+        developer_instructions: str | None = None,
+        service_tier: str | None = None,
+        model: str | None = None,
+        model_provider: str | None = None,
+        ephemeral: bool = False,
+    ) -> ThreadInfo:
+        params = ThreadForkParams(
+            thread_id=thread_id,
+            cwd=cwd,
+            sandbox=sandbox,
+            approval_policy=approval_policy,
+            approvals_reviewer=approvals_reviewer,
+            base_instructions=base_instructions,
+            developer_instructions=developer_instructions,
+            service_tier=service_tier,
+            model=model,
+            model_provider=model_provider,
+            ephemeral=ephemeral,
+        )
+        result = await self._request("thread/fork", _dump(params))
+        return ThreadResult.model_validate(result).thread
+
     async def thread_list(
         self, limit: int = 50, cursor: str | None = None, use_state_db_only: bool | None = None
     ) -> list[ThreadInfo]:
@@ -189,8 +230,10 @@ class AppServerClient:
         result = await self._request("thread/list", _dump(params))
         return ThreadListResult.model_validate(result).data
 
-    async def thread_read(self, thread_id: str) -> dict[str, object]:
-        return await self._request("thread/read", _dump(ThreadReadParams(thread_id=thread_id)))
+    async def thread_read(self, thread_id: str, include_turns: bool = False) -> dict[str, object]:
+        return await self._request(
+            "thread/read", _dump(ThreadReadParams(thread_id=thread_id, include_turns=include_turns))
+        )
 
     async def thread_archive(self, thread_id: str) -> None:
         await self._request("thread/archive", _dump(ThreadArchiveParams(thread_id=thread_id)))
@@ -199,6 +242,43 @@ class AppServerClient:
         await self._request(
             "thread/name/set", _dump(ThreadSetNameParams(thread_id=thread_id, name=name))
         )
+
+    async def thread_rollback(self, thread_id: str, num_turns: int) -> ThreadInfo:
+        result = await self._request(
+            "thread/rollback", _dump(ThreadRollbackParams(thread_id=thread_id, num_turns=num_turns))
+        )
+        return ThreadResult.model_validate(result).thread
+
+    async def thread_compact_start(self, thread_id: str) -> None:
+        await self._request(
+            "thread/compact/start", _dump(ThreadCompactStartParams(thread_id=thread_id))
+        )
+
+    async def thread_goal_get(self, thread_id: str) -> ThreadGoal | None:
+        result = await self._request(
+            "thread/goal/get", _dump(ThreadGoalGetParams(thread_id=thread_id))
+        )
+        return ThreadGoalGetResult.model_validate(result).goal
+
+    async def thread_goal_set(
+        self,
+        thread_id: str,
+        *,
+        objective: str | None = None,
+        status: ThreadGoalStatus | None = None,
+        token_budget: int | None = None,
+    ) -> ThreadGoal:
+        params = ThreadGoalSetParams(
+            thread_id=thread_id,
+            objective=objective,
+            status=status,
+            token_budget=token_budget,
+        )
+        result = await self._request("thread/goal/set", _dump(params))
+        return ThreadGoalResult.model_validate(result).goal
+
+    async def thread_goal_clear(self, thread_id: str) -> None:
+        await self._request("thread/goal/clear", _dump(ThreadGoalClearParams(thread_id=thread_id)))
 
     # --- turns + injection ----------------------------------------------------
 
