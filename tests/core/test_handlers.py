@@ -270,6 +270,44 @@ async def test_goal_set_requires_a_change(store: Registry) -> None:
         await handlers.goal_set(GoalSetInput(lane="lane-1"), ctx)
 
 
+async def test_goal_set_requires_objective_for_new_goal(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+
+    with pytest.raises(ValidationError, match="requires objective"):
+        await handlers.goal_set(GoalSetInput(lane="lane-1", status="complete"), ctx)
+
+    assert any(name == "thread_goal_get" for name, _ in client.calls)
+    assert not any(name == "thread_goal_set" for name, _ in client.calls)
+
+
+async def test_goal_set_updates_existing_goal_without_objective(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.goal_result = ThreadGoal(
+        thread_id="lane-1",
+        objective="ship",
+        status="active",
+        tokens_used=0,
+        time_used_seconds=0,
+        created_at=1,
+        updated_at=2,
+    )
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+
+    out = await handlers.goal_set(GoalSetInput(lane="lane-1", status="complete"), ctx)
+
+    assert out.goal is not None
+    assert out.goal.objective == "ship"
+    assert out.goal.status == "complete"
+    assert any(name == "thread_goal_get" for name, _ in client.calls)
+    assert any(
+        name == "thread_goal_set" and kw["status"] == "complete" and kw["objective"] is None
+        for name, kw in client.calls
+    )
+
+
 async def test_fork_registers_new_owned_lane(store: Registry) -> None:
     client = FakeLaneClient()
     ctx = make_ctx(store, client)

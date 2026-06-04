@@ -80,7 +80,10 @@ class WatchInput(BaseModel):
     lane: str = Field(description="Lane id or @handle.")
     limit: int = Field(default=20, ge=1, description="Max live App Server events to collect.")
     timeout: float = Field(
-        default=10.0, ge=0.0, description="Seconds to wait for live events before returning."
+        default=10.0,
+        ge=0.0,
+        le=25.0,
+        description="Seconds to wait for live events before returning.",
     )
 
 

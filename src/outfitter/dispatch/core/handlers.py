@@ -415,6 +415,11 @@ async def goal_set(inp: GoalSetInput, ctx: Ctx) -> GoalView:
     _require_writable(lane)
     if inp.objective is None and inp.status is None and inp.token_budget is None:
         raise ValidationError("goal-set requires objective, status, or token_budget")
+    if inp.objective is None and await ctx.client.thread_goal_get(lane.id) is None:
+        raise ValidationError(
+            "goal-set requires objective when creating a goal; status and token_budget "
+            "only update an existing goal"
+        )
     goal = await ctx.client.thread_goal_set(
         lane.id,
         objective=inp.objective,

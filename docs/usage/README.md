@@ -144,11 +144,11 @@ Native App Server goals can be read, set, and cleared on owned lanes:
 ```bash
 uv run dispatch goal-get --lane @docs-review
 uv run dispatch goal-set --lane @docs-review --objective "Review until no P2 findings remain."
-uv run dispatch goal-set --lane @docs-review --status complete
 uv run dispatch goal-clear --lane @docs-review
 ```
 
-App Server goals require non-ephemeral threads.
+Creating a goal requires `--objective`. After a goal exists, `goal-set` can update
+`--status` or `--token-budget`. App Server goals require non-ephemeral threads.
 
 `fork`, `rollback`, and `compact` expose stable App Server history controls:
 
