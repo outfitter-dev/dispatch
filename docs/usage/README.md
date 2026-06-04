@@ -1,6 +1,6 @@
 # dispatch Usage
 
-This is the operator path for dispatch v0. It covers how to start the daemon, create
+This is the operator path for dispatch. It covers how to start the daemon, create
 lanes, send work, add triggers, and expose the same op registry through MCP.
 
 For implementation guidance, use [`AGENTS.md`](../../AGENTS.md). For design context, use
@@ -113,6 +113,51 @@ Use `interrupt` to cancel the active turn:
 ```bash
 uv run dispatch interrupt --lane @docs-review
 ```
+
+## Lane History And Goals
+
+`show` remains the compact lane summary:
+
+```bash
+uv run dispatch show --lane @docs-review
+```
+
+Use `transcript` when you want persisted turn history. It reads `thread/read` with
+`includeTurns:true` and returns a compact item list; it is a history snapshot, not a
+full execution log.
+
+```bash
+uv run dispatch transcript --lane @docs-review --limit 50
+```
+
+Use `watch` for a bounded live event sample from dispatch's app-server stream. It returns
+raw App Server method names and params for the selected lane until `--limit` events arrive
+or `--timeout` elapses. It is intentionally bounded because the current control socket is
+request/response JSONL, not a subscription protocol.
+
+```bash
+uv run dispatch watch --lane @docs-review --limit 20 --timeout 10
+```
+
+Native App Server goals can be read, set, and cleared on owned lanes:
+
+```bash
+uv run dispatch goal-get --lane @docs-review
+uv run dispatch goal-set --lane @docs-review --objective "Review until no P2 findings remain."
+uv run dispatch goal-set --lane @docs-review --status complete
+uv run dispatch goal-clear --lane @docs-review
+```
+
+`fork`, `rollback`, and `compact` expose stable App Server history controls:
+
+```bash
+uv run dispatch fork --lane @docs-review --name docs-review-copy
+uv run dispatch rollback --lane @docs-review --turns 1
+uv run dispatch compact --lane @docs-review
+```
+
+`rollback` only truncates persisted App Server history. It does not revert local files.
+Treat it as a conversation-history operation, not a source-control undo.
 
 ## Discover Sessions
 
@@ -243,4 +288,7 @@ If Codex does not pick up the plugin immediately, restart Codex for this workspa
   spike confirmed cross-process history discovery/resume, not live co-presence.
 - Do not install the generated launchd plist with `launchctl` unless the user explicitly
   wants persistent autostart.
-- `show` currently reports lane metadata. It is not a transcript viewer yet.
+- `transcript` is a persisted history snapshot. `watch` is a bounded live event sample.
+  Neither is a durable infinite tail yet; that needs a subscription-capable control socket.
+- `rollback` does not revert workspace files. Use Git or another workspace mechanism for
+  file-level undo.

@@ -73,8 +73,9 @@ Projections (pure functions over the registry, mirroring Trails' `derive* → cr
 ## Command surface (v1, locked)
 
 - Sitrep & lifecycle: `status` · `up` / `down` (daemon) · `log`
-- Roster: `roster` · `attach <thread>` · `open <name> [--cwd]` · `new <name> [--preset ...] [--text ...]` · `show <lane>` · `archive <lane>`
+- Roster/history: `roster` · `attach <thread>` · `open <name> [--cwd]` · `new <name> [--preset ...] [--text ...]` · `show <lane>` · `transcript <lane>` · `watch <lane>` · `archive <lane>`
 - Sending: `send <lane> "…"` · `steer <lane> "…"` · `brief <lane> "…"` · `interrupt <lane>`
+- Goals/history controls: `goal-get|goal-set|goal-clear` · `fork` · `rollback` · `compact`
 - Triggers: `trigger-add` · `trigger-list` · `trigger-rm <id>` · `trigger-pause|trigger-resume <id>`
 
 MCP tools are an ergonomic projection of the same ops, grouped by workflow and safety
@@ -94,7 +95,13 @@ boundary rather than forced to be one tool per op. The noun for a managed thread
 | `interrupt` | `turn/interrupt` | Cancels the active turn. |
 | `archive` | `thread/archive` | Reversible via `thread/unarchive`. |
 | `roster` | `thread/list` + registry + status | List results are under `result.data` (NOT `result.threads`); `useStateDbOnly:true` reads the persisted store. |
-| `show` | `thread/read` + event tail | |
+| `show` | registry + optional `thread/read(includeTurns:true)` | Compact lane summary; optional transcript convenience. |
+| `transcript` | `thread/read(includeTurns:true)` | Persisted turn/item snapshot, not a full execution log. |
+| `watch` | raw app-server event stream, bounded by limit/timeout | Request/response bounded sample; a true infinite tail needs a subscription control-socket extension. |
+| `goal-get/set/clear` | `thread/goal/{get,set,clear}` | Native App Server goal lifecycle for owned lanes. |
+| `fork` | `thread/fork` + register | Creates a new owned lane; attached source lanes remain locked until cross-process fork semantics are verified. |
+| `rollback` | `thread/rollback` | Drops persisted turns only; does not revert workspace files. |
+| `compact` | `thread/compact/start` | Starts App Server context compaction. |
 
 Approvals are server→client JSON-RPC requests: while pending the lane emits `thread/status/changed` with `activeFlags:["waitingOnApproval"]`; the client replies `{id, result:{decision}}` (`accept`/`acceptForSession`/`decline`/`cancel`/…); server emits `serverRequest/resolved`. File-change approvals do NOT carry the diff — correlate by `itemId` to the `fileChange` item (`changes[].diff`) and `turn/diff/updated`.
 
