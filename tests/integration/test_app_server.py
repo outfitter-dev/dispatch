@@ -100,7 +100,6 @@ async def test_thread_read_goal_and_history_controls(
     client: AppServerClient, work_dir: Path
 ) -> None:
     thread = await client.thread_start(cwd=str(work_dir), sandbox="read-only", ephemeral=False)
-    fork_id: str | None = None
     try:
         await run_turn(client, thread.id, "Reply with exactly one word: alpha", str(work_dir))
         read = await client.thread_read(thread.id, include_turns=True)
@@ -118,7 +117,6 @@ async def test_thread_read_goal_and_history_controls(
         assert await client.thread_goal_get(thread.id) is None
 
         fork = await client.thread_fork(thread.id, cwd=str(work_dir), ephemeral=True)
-        fork_id = fork.id
         assert fork.id != thread.id
         assert fork.forked_from_id == thread.id
 
@@ -137,8 +135,6 @@ async def test_thread_read_goal_and_history_controls(
         await client.thread_compact_start(thread.id)
     finally:
         await client.thread_archive(thread.id)
-        if fork_id is not None:
-            await client.thread_archive(fork_id)
 
 
 async def _await_completion(events: AsyncIterator[LaneEvent], lane: str) -> bool:
