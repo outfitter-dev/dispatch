@@ -20,8 +20,8 @@ long-running task.
 Use dispatch first:
 
 ```bash
-uv run dispatch roster
-uv run dispatch status
+uv run dispatch lane list
+uv run dispatch daemon status
 ```
 
 The target should be an owned dispatch lane. Attached lanes are observe-only in
@@ -42,7 +42,7 @@ label: @Target
 destination: codex://threads/<target-thread-id>
 ```
 
-Use the lane handle or lane id for `dispatch send --lane`. Use the URI link in
+Use the lane handle or lane id for `dispatch send`. Use the URI link in
 the message body so the recipient and the human can open the thread directly.
 
 ## Message Shape
@@ -60,7 +60,7 @@ Contract: read-only, brief answer, reply in this lane unless asked otherwise.
 Then deliver it:
 
 ```bash
-uv run dispatch send --lane @Target --text '<message>'
+uv run dispatch send @Target '<message>'
 ```
 
 Keep DMs conversational and bounded. Prefer one ask. Include only the context
@@ -69,18 +69,18 @@ transcript. Do not use `$dm` to smuggle in broad implementation work.
 
 ## Harvesting
 
-`dispatch send` starts the target turn. Use `dispatch show` and `dispatch log`
+`dispatch send` starts the target turn. Use `dispatch lane get` and `dispatch daemon log`
 to confirm lane state and accepted actions:
 
 ```bash
-uv run dispatch show --lane @Target
-uv run dispatch log --limit 10
+uv run dispatch lane get @Target
+uv run dispatch daemon log --limit 10
 ```
 
-Important v0 limitation: `dispatch show` is lane metadata, not a transcript
-reader. To read the actual answer, open the Codex thread link or use another
-available thread-read surface. Do not pretend dispatch harvested text it cannot
-currently read.
+Important v0 limitation: `dispatch lane get` is lane metadata, not a transcript
+reader. Use `dispatch lane tail @Target --limit 50` for persisted history when
+the lane is non-ephemeral, or open the Codex thread link. Do not pretend
+dispatch harvested text it cannot currently read.
 
 ## Optional Contract Lines
 

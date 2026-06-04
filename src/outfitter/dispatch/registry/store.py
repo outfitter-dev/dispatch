@@ -22,6 +22,7 @@ from .models import (
     Lane,
     LaneSource,
     LaneStatus,
+    QueuedMessage,
     Trigger,
     WhenAdapter,
 )
@@ -66,6 +67,15 @@ CREATE TABLE IF NOT EXISTS actions_log (
     trigger_id TEXT,
     detail TEXT,
     outcome TEXT NOT NULL DEFAULT 'ok'
+);
+CREATE TABLE IF NOT EXISTS queued_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lane TEXT NOT NULL,
+    text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    error TEXT
 );
 """
 
@@ -167,6 +177,13 @@ class Registry:
         )
         await self._conn.commit()
 
+    async def update_lane_handle(self, lane_id: str, handle: str) -> None:
+        await self._conn.execute(
+            "UPDATE lanes SET handle = ?, updated_at = ? WHERE id = ?",
+            (handle, self._now().isoformat(), lane_id),
+        )
+        await self._conn.commit()
+
     async def set_active_turn(self, lane_id: str, turn_id: str | None) -> None:
         await self._conn.execute(
             "UPDATE lanes SET active_turn_id = ?, updated_at = ? WHERE id = ?",
@@ -181,6 +198,79 @@ class Registry:
             (stamp, self._now().isoformat(), lane_id),
         )
         await self._conn.commit()
+
+    # --- queued messages ------------------------------------------------------
+
+    async def enqueue_message(self, *, lane: str, text: str) -> QueuedMessage:
+        now = self._now().isoformat()
+        cur = await self._conn.execute(
+            "INSERT INTO queued_messages (lane, text, status, created_at, updated_at) "
+            "VALUES (?, ?, 'pending', ?, ?)",
+            (lane, text, now, now),
+        )
+        await self._conn.commit()
+        message_id = cur.lastrowid
+        if message_id is None:
+            raise RuntimeError("queued message insert did not return an id")
+        return await self.get_queued_message(message_id)
+
+    async def get_queued_message(self, message_id: int) -> QueuedMessage:
+        async with self._conn.execute(
+            "SELECT * FROM queued_messages WHERE id = ?", (message_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            raise NotFoundError(f"no queued message {message_id!r}")
+        return QueuedMessage.model_validate(_row_dict(row))
+
+    async def next_pending_message(self, lane: str) -> QueuedMessage | None:
+        async with self._conn.execute(
+            "SELECT * FROM queued_messages WHERE lane = ? AND status = 'pending' "
+            "ORDER BY id LIMIT 1",
+            (lane,),
+        ) as cur:
+            row = await cur.fetchone()
+        return QueuedMessage.model_validate(_row_dict(row)) if row is not None else None
+
+    async def pending_message_count(self, lane: str) -> int:
+        async with self._conn.execute(
+            "SELECT COUNT(*) AS count FROM queued_messages WHERE lane = ? AND status = 'pending'",
+            (lane,),
+        ) as cur:
+            row = await cur.fetchone()
+        return int(row["count"]) if row is not None else 0
+
+    async def claim_queued_message(self, message_id: int) -> bool:
+        cur = await self._conn.execute(
+            "UPDATE queued_messages SET status = 'sending', updated_at = ? "
+            "WHERE id = ? AND status = 'pending'",
+            (self._now().isoformat(), message_id),
+        )
+        await self._conn.commit()
+        return cur.rowcount == 1
+
+    async def complete_queued_message(self, message_id: int) -> None:
+        await self._conn.execute(
+            "UPDATE queued_messages SET status = 'sent', updated_at = ?, error = NULL WHERE id = ?",
+            (self._now().isoformat(), message_id),
+        )
+        await self._conn.commit()
+
+    async def fail_queued_message(self, message_id: int, error: str) -> None:
+        await self._conn.execute(
+            "UPDATE queued_messages SET status = 'error', updated_at = ?, error = ? WHERE id = ?",
+            (self._now().isoformat(), error, message_id),
+        )
+        await self._conn.commit()
+
+    async def reset_sending_messages(self) -> int:
+        cur = await self._conn.execute(
+            "UPDATE queued_messages SET status = 'pending', updated_at = ? "
+            "WHERE status = 'sending'",
+            (self._now().isoformat(),),
+        )
+        await self._conn.commit()
+        return cur.rowcount
 
     # --- triggers -------------------------------------------------------------
 

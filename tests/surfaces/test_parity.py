@@ -1,12 +1,15 @@
-"""Surface parity (the no-drift gate, ADR-0000): per op, the CLI options, the MCP
-inputSchema, and the input model agree; annotations agree with intent/idempotent;
-and the error taxonomy projects from one table. Behavior, not just op names."""
+"""Surface parity (the no-drift gate, ADR-0000/0010).
+
+MCP remains exhaustive per op. The CLI is ergonomic and may group/compose ops, so
+its gate checks representative routes project canonical op params rather than
+requiring one top-level command per op.
+"""
 
 from __future__ import annotations
 
-import inspect
+import json
 
-import typer
+from typer.testing import CliRunner
 
 from outfitter.dispatch.contracts.derive_cli import derive_cli
 from outfitter.dispatch.contracts.derive_mcp import derive_mcp_projection
@@ -26,15 +29,39 @@ def _stub_invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
     return {}
 
 
-def _cli_param_names(app: typer.Typer, op_id: str) -> set[str]:
-    for command in app.registered_commands:
-        if command.name == op_id and command.callback is not None:
-            return set(inspect.signature(command.callback).parameters)
-    raise AssertionError(f"no CLI command for op {op_id!r}")
+runner = CliRunner()
 
 
-def test_cli_mcp_model_parity_per_op() -> None:
-    app = derive_cli(REGISTRY, _stub_invoke)
+_EXPECTED_CLI_SCHEMA_ROUTES = {
+    "send": "send",
+    "stop": "stop",
+    "new": "new",
+    "lane get": "show",
+    "lane status": "show",
+    "lane list": "roster",
+    "lane list --unmanaged": "discover",
+    "lane attach": "attach",
+    "lane rename": "lane-rename",
+    "lane fork": "fork",
+    "lane rollback": "rollback",
+    "lane compact": "compact",
+    "lane archive": "archive",
+    "lane tail": "transcript",
+    "lane tail --follow": "watch",
+    "goal status": "goal-get",
+    "goal set": "goal-set",
+    "goal clear": "goal-clear",
+    "trigger add": "trigger-add",
+    "trigger list": "trigger-list",
+    "trigger rm": "trigger-rm",
+    "trigger pause": "trigger-pause",
+    "trigger resume": "trigger-resume",
+    "daemon status": "status",
+    "daemon log": "log",
+}
+
+
+def test_mcp_model_parity_per_op() -> None:
     projection = derive_mcp_projection(REGISTRY)
     routes_by_op = {route.op.id: route for route in projection.routes.values()}
     mcp_tools = {t.name: t for t in projection.tools}
@@ -42,8 +69,6 @@ def test_cli_mcp_model_parity_per_op() -> None:
 
     for op in REGISTRY:
         fields = set(op.input.model_fields)
-        # CLI options ↔ input model
-        assert _cli_param_names(app, op.id) == fields, f"{op.id} CLI options"
         route = routes_by_op[op.id]
         tool = mcp_tools[route.tool_name]
         variants = tool.inputSchema["oneOf"]
@@ -59,6 +84,48 @@ def test_cli_mcp_model_parity_per_op() -> None:
         assert ann is not None
         assert ann.readOnlyHint == (op.intent == "read"), op.id
         assert ann.destructiveHint == (op.intent == "destroy"), op.id
+
+
+def test_cli_schema_routes_cover_public_ops() -> None:
+    app = derive_cli(REGISTRY, _stub_invoke)
+
+    routed_ops = set(_EXPECTED_CLI_SCHEMA_ROUTES.values())
+    assert set(REGISTRY.ids()) - routed_ops == {"open"}
+
+    for command, op_id in _EXPECTED_CLI_SCHEMA_ROUTES.items():
+        result = runner.invoke(app, ["schema", command])
+        assert result.exit_code == 0, command
+        assert json.loads(result.output)["op"] == op_id
+
+
+def test_cli_composed_routes_invoke_canonical_ops() -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        calls.append((op_id, params))
+        if op_id in {"roster", "discover"}:
+            return {"lanes": []} if op_id == "roster" else {"sessions": []}
+        if op_id == "stop":
+            return {"lane": "L1", "op": "stop", "accepted": True}
+        if op_id == "send":
+            return {"lane": "L1", "op": "send", "accepted": True}
+        if op_id == "goal-get":
+            return {"lane": "L1", "goal": None}
+        return {}
+
+    app = derive_cli(REGISTRY, invoke)
+
+    assert runner.invoke(app, ["send", "@docs", "hi", "--context"]).exit_code == 0
+    assert runner.invoke(app, ["stop", "@docs"]).exit_code == 0
+    assert runner.invoke(app, ["lane", "list", "--unmanaged"]).exit_code == 0
+    assert runner.invoke(app, ["goal", "status", "@docs"]).exit_code == 0
+
+    assert calls == [
+        ("send", {"lane": "@docs", "text": "hi", "mode": "context"}),
+        ("stop", {"lane": "@docs"}),
+        ("discover", {"limit": 50}),
+        ("goal-get", {"lane": "@docs"}),
+    ]
 
 
 def test_error_taxonomy_projects_from_one_table() -> None:

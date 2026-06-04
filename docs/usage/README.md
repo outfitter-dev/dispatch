@@ -20,7 +20,7 @@ Start the singleton daemon:
 
 ```bash
 uv run dispatch up
-uv run dispatch status
+uv run dispatch daemon status
 ```
 
 For foreground debugging, run the daemon directly:
@@ -64,12 +64,12 @@ starting a turn:
 uv run dispatch new --name docs-review --preset reviewer --no-send
 ```
 
-`open` is the lower-level primitive:
+Use `new --no-send` when you want to create the lane first and send later:
 
 ```bash
-uv run dispatch open --name docs-review --cwd /Users/mg/Developer/outfitter/dispatch
-uv run dispatch roster
-uv run dispatch send --lane @docs-review --text "Review the README for missing usage steps."
+uv run dispatch new --name docs-review --cwd /Users/mg/Developer/outfitter/dispatch --no-send
+uv run dispatch lane list
+uv run dispatch send @docs-review "Review the README for missing usage steps."
 ```
 
 Example `.dispatch/config.toml`:
@@ -95,67 +95,81 @@ developer_file = ".dispatch/instructions/builder.md"
 
 Preset order matters: later presets win, and CLI flags win over presets.
 
-Use `brief` for silent context injection. It adds model-visible context without starting a
-turn:
+Use `send --context` for silent context injection. It adds model-visible context without
+starting a turn:
 
 ```bash
-uv run dispatch brief --lane @docs-review --text "Context: attached lanes are observe-only in v0."
+uv run dispatch send @docs-review "Context: attached lanes are observe-only in v0." --context
 ```
 
-Use `steer` only while the lane has an active turn:
+Use `send --steer` only while the lane has an active turn:
 
 ```bash
-uv run dispatch steer --lane @docs-review --text "Focus on operator docs first."
+uv run dispatch send @docs-review "Focus on operator docs first." --steer
 ```
 
-Use `interrupt` to cancel the active turn:
+Use `send --interject` to cancel the active turn and start a replacement message:
 
 ```bash
-uv run dispatch interrupt --lane @docs-review
+uv run dispatch send @docs-review "Stop that and focus on operator docs first." --interject
+```
+
+Use `stop` to cancel the active turn without sending replacement text:
+
+```bash
+uv run dispatch stop @docs-review
+uv run dispatch stop --lane @docs-review
+```
+
+Use `send --queue` when delivery should wait for the lane to become idle. The message is
+stored in dispatch's durable registry and starts one queued turn per idle transition:
+
+```bash
+uv run dispatch send @docs-review "Run this after the active turn." --queue
 ```
 
 ## Lane History And Goals
 
-`show` remains the compact lane summary:
+`lane get` remains the compact lane summary:
 
 ```bash
-uv run dispatch show --lane @docs-review
+uv run dispatch lane get @docs-review
 ```
 
-Use `transcript` when you want persisted turn history. It reads `thread/read` with
+Use `lane tail` when you want persisted turn history. It reads `thread/read` with
 `includeTurns:true` and returns a compact item list; it is a history snapshot, not a
 full execution log. App Server does not support `includeTurns` on ephemeral threads.
 
 ```bash
-uv run dispatch transcript --lane @docs-review --limit 50
+uv run dispatch lane tail @docs-review --limit 50
 ```
 
-Use `watch` for a bounded live event sample from dispatch's app-server stream. It returns
-raw App Server method names and params for the selected lane until `--limit` events arrive
-or `--timeout` elapses. It is intentionally bounded because the current control socket is
-request/response JSONL, not a subscription protocol.
+Use `lane tail --follow` for a bounded live event sample from dispatch's app-server stream.
+It returns raw App Server method names and params for the selected lane until `--limit`
+events arrive or `--timeout` elapses. It is intentionally bounded because the current
+control socket is request/response JSONL, not a subscription protocol.
 
 ```bash
-uv run dispatch watch --lane @docs-review --limit 20 --timeout 10
+uv run dispatch lane tail @docs-review --follow --limit 20 --timeout 10
 ```
 
 Native App Server goals can be read, set, and cleared on owned lanes:
 
 ```bash
-uv run dispatch goal-get --lane @docs-review
-uv run dispatch goal-set --lane @docs-review --objective "Review until no P2 findings remain."
-uv run dispatch goal-clear --lane @docs-review
+uv run dispatch goal status @docs-review
+uv run dispatch goal set @docs-review "Review until no P2 findings remain."
+uv run dispatch goal clear @docs-review
 ```
 
-Creating a goal requires `--objective`. After a goal exists, `goal-set` can update
+Creating a goal requires an objective. After a goal exists, `goal set` can update
 `--status` or `--token-budget`. App Server goals require non-ephemeral threads.
 
 `fork`, `rollback`, and `compact` expose stable App Server history controls:
 
 ```bash
-uv run dispatch fork --lane @docs-review --name docs-review-copy
-uv run dispatch rollback --lane @docs-review --turns 1
-uv run dispatch compact --lane @docs-review
+uv run dispatch lane fork @docs-review --name docs-review-copy
+uv run dispatch lane rollback @docs-review --turns 1
+uv run dispatch lane compact @docs-review
 ```
 
 `rollback` only truncates persisted App Server history. It does not revert local files.
@@ -163,31 +177,31 @@ Treat it as a conversation-history operation, not a source-control undo.
 
 ## Discover Sessions
 
-`roster` lists the lanes dispatch already manages. `discover` is the other half: it lists the
-persisted Codex sessions on this machine — desktop threads and prior runs — that you could
-attach. It reads the Codex state DB directly (`thread/list`, state-db only), so it is fast and
-read-only; it never resumes, writes, or registers anything.
+`lane list` lists the lanes dispatch already manages. `lane list --unmanaged` is the other
+half: it lists the persisted Codex sessions on this machine — desktop threads and prior
+runs — that you could attach. It reads the Codex state DB directly (`thread/list`, state-db
+only), so it is fast and read-only; it never resumes, writes, or registers anything.
 
 ```bash
-uv run dispatch discover --limit 20
+uv run dispatch lane list --unmanaged --limit 20
 ```
 
 Each row carries `id`, `name`, a shortened `preview`, `cwd`, `status`, `source`, and
 `ephemeral`. Use the `id` with `attach` to bring a session under management:
 
 ```bash
-uv run dispatch attach --thread <id-from-discover>
+uv run dispatch lane attach <id-from-lane-list-unmanaged>
 ```
 
-Keep the two straight: `discover` shows attachable Codex sessions (not yet lanes); `roster`
-shows managed lanes (owned or already attached).
+Keep the two straight: `lane list --unmanaged` shows attachable Codex sessions (not yet
+lanes); `lane list` shows managed lanes (owned or already attached).
 
 ## Attached Lanes
 
 Attach registers an existing Codex thread by raw thread id:
 
 ```bash
-uv run dispatch attach --thread <codex-thread-id>
+uv run dispatch lane attach <codex-thread-id>
 ```
 
 Attached lanes are observe-only in v0. Dispatch can register and inspect them, but it must
@@ -215,7 +229,7 @@ A trigger binds `when -> action -> lane`.
 Interval trigger:
 
 ```bash
-uv run dispatch trigger-add \
+uv run dispatch trigger add \
   --name docs-pulse \
   --lane @docs-review \
   --when interval \
@@ -227,7 +241,7 @@ uv run dispatch trigger-add \
 Cron trigger:
 
 ```bash
-uv run dispatch trigger-add \
+uv run dispatch trigger add \
   --name weekday-standup \
   --lane @docs-review \
   --when cron \
@@ -239,7 +253,7 @@ uv run dispatch trigger-add \
 Idle trigger:
 
 ```bash
-uv run dispatch trigger-add \
+uv run dispatch trigger add \
   --name after-idle \
   --lane @docs-review \
   --when idle_for \
@@ -257,10 +271,22 @@ Useful guards:
 Manage triggers:
 
 ```bash
-uv run dispatch trigger-list
-uv run dispatch trigger-pause --id <trigger-id>
-uv run dispatch trigger-resume --id <trigger-id>
-uv run dispatch trigger-rm --id <trigger-id>
+uv run dispatch trigger list
+uv run dispatch trigger pause <trigger-id>
+uv run dispatch trigger resume <trigger-id>
+uv run dispatch trigger rm <trigger-id>
+```
+
+## Schemas
+
+Successful CLI output is JSON-shaped for `jq` by default. Use `--json` when you want to
+make that contract explicit in scripts. `schema` prints the input and output schemas
+derived from the contract registry:
+
+```bash
+uv run dispatch lane list --json
+uv run dispatch schema send
+uv run dispatch schema "goal set"
 ```
 
 ## MCP
@@ -290,7 +316,8 @@ If Codex does not pick up the plugin immediately, restart Codex for this workspa
   spike confirmed cross-process history discovery/resume, not live co-presence.
 - Do not install the generated launchd plist with `launchctl` unless the user explicitly
   wants persistent autostart.
-- `transcript` is a persisted history snapshot. `watch` is a bounded live event sample.
-  Neither is a durable infinite tail yet; that needs a subscription-capable control socket.
+- `lane tail` is a persisted history snapshot. `lane tail --follow` is a bounded live
+  event sample. Neither is a durable infinite tail yet; that needs a subscription-capable
+  control socket.
 - `rollback` does not revert workspace files. Use Git or another workspace mechanism for
   file-level undo.

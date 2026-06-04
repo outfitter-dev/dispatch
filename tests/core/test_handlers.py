@@ -22,12 +22,14 @@ from outfitter.dispatch.core.models import (
     GoalGetInput,
     GoalSetInput,
     LaneInput,
+    LaneRenameInput,
     LaneTextInput,
     LogInput,
     NewInput,
     OpenInput,
     RollbackInput,
     RosterInput,
+    SendInput,
     ShowInput,
     StatusInput,
     TranscriptInput,
@@ -143,6 +145,76 @@ async def test_send_resolves_by_handle(store: Registry) -> None:
     await handlers.open_lane(OpenInput(name="beta"), ctx)
     ack = await handlers.send(LaneTextInput(lane="@beta", text="hi"), ctx)
     assert ack.lane == "lane-1"
+
+
+async def test_send_modes_context_and_interject(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="beta"), ctx)
+    await store.set_active_turn("lane-1", "turn-1")
+
+    context = await handlers.send_message(SendInput(lane="@beta", text="note", mode="context"), ctx)
+    interject = await handlers.send_message(
+        SendInput(lane="@beta", text="replace", mode="interject"), ctx
+    )
+
+    assert context.op == "brief"
+    assert interject.op == "interject"
+    assert any(name == "inject_items" for name, _ in client.calls)
+    assert any(
+        name == "turn_interrupt" and kw["thread_id"] == "lane-1" and kw["turn_id"] == "turn-1"
+        for name, kw in client.calls
+    )
+    assert any(name == "turn_start" and kw["text"] == "replace" for name, kw in client.calls)
+    assert (await store.get_lane("lane-1")).status == "busy"
+
+
+async def test_send_queue_persists_when_lane_is_busy(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="beta"), ctx)
+    await store.update_lane_status("lane-1", "busy")
+
+    ack = await handlers.send_message(SendInput(lane="@beta", text="later", mode="queue"), ctx)
+
+    assert ack.op == "queue"
+    assert "pending=1" in (ack.detail or "")
+    queued = await store.next_pending_message("lane-1")
+    assert queued is not None
+    assert queued.text == "later"
+    assert not any(name == "turn_start" and kw["text"] == "later" for name, kw in client.calls)
+
+
+async def test_send_queue_starts_immediately_when_lane_is_idle(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="beta"), ctx)
+
+    ack = await handlers.send_message(SendInput(lane="@beta", text="now", mode="queue"), ctx)
+
+    assert ack.op == "queue"
+    assert "pending=0" in (ack.detail or "")
+    assert await store.next_pending_message("lane-1") is None
+    assert (await store.get_lane("lane-1")).status == "busy"
+    sent = await store.get_queued_message(1)
+    assert sent.status == "sent"
+    assert any(name == "turn_start" and kw["text"] == "now" for name, kw in client.calls)
+
+
+async def test_lane_rename_updates_registry_and_owned_thread_name(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="old"), ctx)
+
+    out = await handlers.rename_lane(LaneRenameInput(old="@old", new="new"), ctx)
+
+    assert out.handle == "@new"
+    assert await store.find_lane_by_handle("@old") is None
+    assert (await store.get_lane("lane-1")).handle == "@new"
+    assert any(
+        name == "thread_set_name" and kw["thread_id"] == "lane-1" and kw["display_name"] == "new"
+        for name, kw in client.calls
+    )
 
 
 async def test_show_can_include_compact_transcript(store: Registry) -> None:
@@ -405,11 +477,11 @@ async def test_brief_attached_lane_raises_authority(store: Registry) -> None:
         await handlers.brief(LaneTextInput(lane="D4", text="nope"), ctx)
 
 
-async def test_interrupt_attached_lane_raises_authority(store: Registry) -> None:
+async def test_stop_attached_lane_raises_authority(store: Registry) -> None:
     ctx = make_ctx(store)
     await store.add_lane(id="D5", handle="@desktop", source="attached", status="idle")
     with pytest.raises(AuthorityError):
-        await handlers.interrupt(LaneInput(lane="D5"), ctx)
+        await handlers.stop(LaneInput(lane="D5"), ctx)
 
 
 async def test_steer_requires_active_turn(store: Registry) -> None:
@@ -424,6 +496,39 @@ async def test_steer_requires_active_turn(store: Registry) -> None:
     assert any(
         name == "turn_steer" and kw["expected_turn_id"] == "turn-7" for name, kw in client.calls
     )
+
+
+async def test_stop_requires_active_turn(store: Registry) -> None:
+    # App Server turn/interrupt requires a turnId; an idle lane has none.
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="g"), ctx)
+    with pytest.raises(ValidationError):
+        await handlers.stop(LaneInput(lane="lane-1"), ctx)
+    assert not any(name == "turn_interrupt" for name, _ in client.calls)
+    await store.set_active_turn("lane-1", "turn-9")
+    ack = await handlers.stop(LaneInput(lane="lane-1"), ctx)
+    assert ack.op == "stop"
+    assert any(name == "turn_interrupt" and kw["turn_id"] == "turn-9" for name, kw in client.calls)
+
+
+async def test_interrupt_requires_active_turn(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="g"), ctx)
+    with pytest.raises(ValidationError):
+        await handlers.interrupt(LaneInput(lane="lane-1"), ctx)
+    assert not any(name == "turn_interrupt" for name, _ in client.calls)
+
+
+async def test_interject_requires_active_turn(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="g"), ctx)
+    with pytest.raises(ValidationError):
+        await handlers.send_message(SendInput(lane="lane-1", text="replace", mode="interject"), ctx)
+    assert not any(name == "turn_interrupt" for name, _ in client.calls)
+    assert not any(name == "turn_start" for name, _ in client.calls)
 
 
 async def test_roster_then_archive_flips_status(store: Registry) -> None:
@@ -444,7 +549,7 @@ async def test_status_and_log_reflect_activity(store: Registry) -> None:
     await handlers.send(LaneTextInput(lane="lane-1", text="hi"), ctx)
     status = await handlers.status(StatusInput(), ctx)
     assert status.lanes == 1
-    assert status.idle == 1
+    assert status.busy == 1
     log = await handlers.show_log(LogInput(limit=10), ctx)
     ops = [a.op for a in log.actions]
     assert "open" in ops

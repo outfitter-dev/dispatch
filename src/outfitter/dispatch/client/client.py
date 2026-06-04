@@ -319,7 +319,7 @@ class AppServerClient:
         )
         return await self._request("turn/steer", _dump(params))
 
-    async def turn_interrupt(self, thread_id: str, turn_id: str | None = None) -> None:
+    async def turn_interrupt(self, thread_id: str, turn_id: str) -> None:
         await self._request(
             "turn/interrupt", _dump(TurnInterruptParams(thread_id=thread_id, turn_id=turn_id))
         )

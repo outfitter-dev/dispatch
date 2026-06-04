@@ -239,7 +239,7 @@ class TurnSteerParams(WireModel):
 
 class TurnInterruptParams(WireModel):
     thread_id: str
-    turn_id: str | None = None
+    turn_id: str
 
 
 class InjectItemsParams(WireModel):

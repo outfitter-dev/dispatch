@@ -52,7 +52,10 @@ Use the project language consistently:
 
 ## Core rules (summary; full detail in `.claude/rules/`)
 
-- **Author once, derive surfaces.** Add an op in `contracts/`; never hand-write a CLI command or MCP tool. CLI flags, MCP tool defs/annotations, and exit/error codes are derived. See [contract-layer](.claude/rules/contracts.md).
+- **Author once, derive surfaces.** Add behavior as an op in `contracts/`; route
+  it through the derived CLI/MCP projection instead of hand-writing a separate
+  command or tool. CLI flags, MCP grouped-tool schemas/annotations, and
+  exit/error codes are derived. See [contract-layer](.claude/rules/contracts.md).
 - **Typed exceptions, projected at the boundary.** Handlers raise `DispatchError` subclasses; each surface projects them (exit code / MCP `_meta` / remote code). No `Result` type — idiomatic Python.
 - **Examples are tests.** Every op carries examples; `test_examples(registry)` runs them in CI.
 - **intent drives behavior.** `read` = no CLI confirm / MCP `readOnlyHint`; `destroy` = confirm / `destructiveHint`.

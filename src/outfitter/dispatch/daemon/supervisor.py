@@ -15,6 +15,7 @@ from typing import Any, Protocol
 
 from outfitter.dispatch.client.errors import ClientError
 from outfitter.dispatch.contracts.context import Ctx, LaneClient
+from outfitter.dispatch.core.queue import drain_idle_queues
 
 
 class SupervisedClient(LaneClient, Protocol):
@@ -83,6 +84,9 @@ class Supervisor:
                 self._ctx.log.info("lane.resumed", lane=lane.id, source=lane.source)
             except ClientError as exc:
                 self._ctx.log.warning("lane.resume_failed", lane=lane.id, error=str(exc))
+        drained = await drain_idle_queues(self._ctx)
+        if drained:
+            self._ctx.log.info("queue.drained_on_resume", count=drained)
 
     async def stop(self) -> None:
         self._stopped = True

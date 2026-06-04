@@ -22,6 +22,7 @@ from outfitter.dispatch.contracts.errors import (
 )
 from outfitter.dispatch.registry.models import Lane
 
+from . import queue
 from .models import (
     ActionAck,
     ActionView,
@@ -39,6 +40,7 @@ from .models import (
     LaneDetail,
     LaneInput,
     LaneRef,
+    LaneRenameInput,
     LaneTextInput,
     LogInput,
     LogOutput,
@@ -48,6 +50,7 @@ from .models import (
     RollbackInput,
     Roster,
     RosterInput,
+    SendInput,
     ShowInput,
     StatusInput,
     StatusOutput,
@@ -90,6 +93,13 @@ async def _resolve(ctx: Ctx, ref: str) -> Lane:
 def _require_writable(lane: Lane) -> None:
     if lane.source == "attached":
         raise AuthorityError(f"lane {lane.handle} is attached (observe-only; ADR-0005)")
+
+
+def _require_active_turn(lane: Lane, action: str) -> str:
+    # App Server turn/interrupt and turn/steer both require a known turn id.
+    if lane.active_turn_id is None:
+        raise ValidationError(f"lane {lane.handle} has no active turn to {action}")
+    return lane.active_turn_id
 
 
 async def open_lane(inp: OpenInput, ctx: Ctx) -> LaneRef:
@@ -218,16 +228,51 @@ async def send(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
     lane = await _resolve(ctx, inp.lane)
     _require_writable(lane)
     await ctx.client.turn_start(lane.id, inp.text, cwd=lane.cwd or ".", sandbox_policy=_READ_ONLY)
+    await ctx.registry.update_lane_status(lane.id, "busy")
     await ctx.registry.log_action("send", lane=lane.id, detail=inp.text[:120])
     return ActionAck(lane=lane.id, op="send")
+
+
+async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
+    match inp.mode:
+        case "send":
+            return await send(LaneTextInput(lane=inp.lane, text=inp.text), ctx)
+        case "steer":
+            return await steer(LaneTextInput(lane=inp.lane, text=inp.text), ctx)
+        case "context":
+            return await brief(LaneTextInput(lane=inp.lane, text=inp.text), ctx)
+        case "interject":
+            lane = await _resolve(ctx, inp.lane)
+            _require_writable(lane)
+            turn_id = _require_active_turn(lane, "interject")
+            await ctx.client.turn_interrupt(lane.id, turn_id)
+            await ctx.registry.log_action("interrupt", lane=lane.id, detail="interject")
+            await ctx.client.turn_start(
+                lane.id, inp.text, cwd=lane.cwd or ".", sandbox_policy=_READ_ONLY
+            )
+            await ctx.registry.update_lane_status(lane.id, "busy")
+            await ctx.registry.log_action("send", lane=lane.id, detail=inp.text[:120])
+            return ActionAck(lane=lane.id, op="interject")
+        case "queue":
+            lane = await _resolve(ctx, inp.lane)
+            _require_writable(lane)
+            message = await ctx.registry.enqueue_message(lane=lane.id, text=inp.text)
+            await ctx.registry.log_action("queue", lane=lane.id, detail=inp.text[:120])
+            if lane.status == "idle":
+                await queue.drain_next_queued_message(ctx, lane.id)
+            pending = await ctx.registry.pending_message_count(lane.id)
+            return ActionAck(
+                lane=lane.id,
+                op="queue",
+                detail=f"queued message {message.id}; pending={pending}",
+            )
 
 
 async def steer(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
     lane = await _resolve(ctx, inp.lane)
     _require_writable(lane)
-    if lane.active_turn_id is None:
-        raise ValidationError(f"lane {lane.handle} has no active turn to steer")
-    await ctx.client.turn_steer(lane.id, lane.active_turn_id, inp.text)
+    turn_id = _require_active_turn(lane, "steer")
+    await ctx.client.turn_steer(lane.id, turn_id, inp.text)
     await ctx.registry.log_action("steer", lane=lane.id, detail=inp.text[:120])
     return ActionAck(lane=lane.id, op="steer")
 
@@ -248,9 +293,19 @@ async def brief(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
 async def interrupt(inp: LaneInput, ctx: Ctx) -> ActionAck:
     lane = await _resolve(ctx, inp.lane)
     _require_writable(lane)
-    await ctx.client.turn_interrupt(lane.id, lane.active_turn_id)
+    turn_id = _require_active_turn(lane, "interrupt")
+    await ctx.client.turn_interrupt(lane.id, turn_id)
     await ctx.registry.log_action("interrupt", lane=lane.id)
     return ActionAck(lane=lane.id, op="interrupt")
+
+
+async def stop(inp: LaneInput, ctx: Ctx) -> ActionAck:
+    lane = await _resolve(ctx, inp.lane)
+    _require_writable(lane)
+    turn_id = _require_active_turn(lane, "stop")
+    await ctx.client.turn_interrupt(lane.id, turn_id)
+    await ctx.registry.log_action("stop", lane=lane.id)
+    return ActionAck(lane=lane.id, op="stop")
 
 
 async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
@@ -268,6 +323,22 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
         active_turn_id=lane.active_turn_id,
         transcript=transcript,
     )
+
+
+async def rename_lane(inp: LaneRenameInput, ctx: Ctx) -> LaneRef:
+    lane = await _resolve(ctx, inp.old)
+    handle = _handle(inp.new)
+    existing = await ctx.registry.find_lane_by_handle(handle)
+    if existing is not None and existing.id != lane.id:
+        raise ValidationError(f"lane handle {handle!r} is already registered")
+    await ctx.registry.update_lane_handle(lane.id, handle)
+    if lane.source == "own":
+        try:
+            await ctx.client.thread_set_name(lane.id, handle.removeprefix("@"))
+        except ClientError as exc:
+            ctx.log.warning("lane.name_set_failed", lane=lane.id, error=str(exc))
+    await ctx.registry.log_action("lane-rename", lane=lane.id, detail=handle)
+    return _ref(await ctx.registry.get_lane(lane.id))
 
 
 async def watch(inp: WatchInput, ctx: Ctx) -> WatchOutput:
