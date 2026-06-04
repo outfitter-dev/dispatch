@@ -1,6 +1,6 @@
 # dispatch — design spec (2026-06-02)
 
-A local control plane for orchestrating Codex agent lanes (threads) over the Codex App Server: spawn/attach lanes, send/steer/brief/interrupt them, and automate pings on time- and event-based triggers. One authored contract per operation is projected onto multiple surfaces — CLI now, MCP now, remote control later — with no drift.
+A local control plane for orchestrating Codex agent lanes (threads) over the Codex App Server: create/attach lanes, send work or context, queue delivery, stop active turns, and automate pings on time- and event-based triggers. One authored contract per operation is projected onto multiple surfaces — CLI now, MCP now, remote control later — with no drift.
 
 Status: approved design, implemented through v0. Companion research (verified against `codex-cli 0.136.0-alpha.2`): [`docs/research/app-server-verification.md`](../research/app-server-verification.md) and [`docs/research/orchestration-thesis.md`](../research/orchestration-thesis.md). Decisions: [`docs/adrs/`](../adrs/). Execution ledger: [`../../.agents/plans/v0/RETRO.md`](../../.agents/plans/v0/RETRO.md).
 
@@ -62,21 +62,30 @@ An **op** is authored once:
 - `handler`: `async (input, ctx) -> output` running in the daemon; raises typed `DispatchError`s.
 
 Projections (pure functions over the registry, mirroring Trails' `derive* → create* → surface`):
-- `derive_cli(registry) -> Typer app` — one command per op; flags from input fields; `intent` drives confirm prompts.
-- `derive_mcp(registry) -> [McpTool]` — tool name from op id, schema from the input model, annotations from `intent`/`idempotent`.
+- `derive_cli(registry) -> Typer app` — an ergonomic command tree over the op registry; command routes may group/compose ops, but flags and schemas derive from input models and `intent` drives confirm prompts.
+- `derive_mcp(registry) -> [McpTool]` — grouped workflow/safety tools with an `op` selector; per-op schemas derive from input/output models and annotations derive from `intent`/`idempotent`.
 - `derive_remote(registry)` — control-socket method table; later the network surface.
 
 **Error taxonomy** (transport-independent, projected per surface): a `DispatchError` hierarchy (e.g. `NotFoundError`, `LaneBusyError`, `ApprovalRequiredError`, `AppServerError`). Each surface catches and projects: CLI → exit code + Rich-rendered message; MCP → `isError` + `_meta` code; remote → JSON-RPC error. Handlers raise; surfaces normalize. No `Result` type.
 
 **examples = tests**: `test_examples(registry)` runs each op's examples as assertions in CI.
 
-## Command surface (v1, locked)
+## Command surface (v1)
 
-- Sitrep & lifecycle: `status` · `up` / `down` (daemon) · `log`
-- Roster/history: `roster` · `attach <thread>` · `open <name> [--cwd]` · `new <name> [--preset ...] [--text ...]` · `show <lane>` · `transcript <lane>` · `watch <lane>` · `archive <lane>`
-- Sending: `send <lane> "…"` · `steer <lane> "…"` · `brief <lane> "…"` · `interrupt <lane>`
-- Goals/history controls: `goal-get|goal-set|goal-clear` · `fork` · `rollback` · `compact`
-- Triggers: `trigger-add` · `trigger-list` · `trigger-rm <id>` · `trigger-pause|trigger-resume <id>`
+- Daemon lifecycle: `up` / `down` (process) · `daemon status` · `daemon log`
+- Lane creation: `new <name> [--preset ...] [--text ...] [--no-send]`
+- Lane reads/discovery: `lane get <lane>` · `lane status <lane>` · `lane list` ·
+  `lane list --unmanaged` · `lane tail <lane>` · `lane tail <lane> --follow`
+- Lane management/history: `lane attach <thread>` · `lane rename <old> <new>` ·
+  `lane fork <lane>` · `lane rollback <lane>` · `lane compact <lane>` ·
+  `lane archive <lane>`
+- Sending: `send <lane> "…"` with `--mode send|steer|queue|interject|context`
+  and equivalent mutually exclusive `--steer`, `--queue`, `--interject`,
+  `--context`; `stop <lane>` / `stop --lane <lane>` is cancel-only.
+- Goals: `goal status <lane>` · `goal set <lane> <objective>` · `goal clear <lane>`
+- Triggers: `trigger add` · `trigger list` · `trigger rm <id>` ·
+  `trigger pause <id>` · `trigger resume <id>`
+- Schemas: `schema <command>` prints derived input/output schemas for shell automation.
 
 MCP tools are an ergonomic projection of the same ops, grouped by workflow and safety
 boundary rather than forced to be one tool per op. The noun for a managed thread is
@@ -89,16 +98,19 @@ boundary rather than forced to be one tool per op. The noun for a managed thread
 | `open` | `thread/start` (then register) | `sandbox` is a STRING enum (`read-only`/`workspace-write`/`danger-full-access`); persists by default (`ephemeral:false`) → spawned lanes show in desktop app, matching the `→ @project:name` convention. |
 | `new` | `thread/start` + `thread/name/set` + optional `turn/start` | Applies `.dispatch/config.toml` defaults/presets, name prefixes, verified session/turn options, and optional initial payload. |
 | `attach` | `thread/resume` (+ register) | Cross-process discovery and history resume work, but live fan-out does **not** cross app-server processes. Attached desktop lanes are observe-only in v0 (ADR-0005). Pre-persistence resume errors `no rollout found`. |
-| `send` | `turn/start` | Delivers a message the lane processes + answers. The DM/`send_message_to_thread` equivalent. `sandboxPolicy` here is an OBJECT (`{type:"readOnly"}`) — different encoding than `thread/start.sandbox`. |
-| `steer` | `turn/steer` | Requires `expectedTurnId` (the active turn id from `turn/started`). Interjects into an in-flight turn. |
-| `brief` | `thread/inject_items` | Silent model-visible context injection (Responses-API items); no turn runs. |
-| `interrupt` | `turn/interrupt` | Cancels the active turn. |
+| `send` (`mode=send`) | `turn/start` | Delivers a message the lane processes + answers. The DM/`send_message_to_thread` equivalent. `sandboxPolicy` here is an OBJECT (`{type:"readOnly"}`) — different encoding than `thread/start.sandbox`. |
+| `send` (`mode=queue`) | registry queue + later `turn/start` | Persists local queued delivery and starts one queued turn when the lane becomes idle. |
+| `send` (`mode=steer`) | `turn/steer` | Requires `expectedTurnId` (the active turn id from `turn/started`). Adds input to an in-flight turn. |
+| `send` (`mode=context`) | `thread/inject_items` | Silent model-visible context injection (Responses-API items); no turn runs. Trigger actions still call this lower-level behavior `brief`. |
+| `send` (`mode=interject`) | `turn/interrupt` + `turn/start` | Requires an active turn id, cancels that turn, then starts replacement work. |
+| `stop` | `turn/interrupt` | Requires an active turn id and cancels the active turn without replacement text. |
 | `archive` | `thread/archive` | Reversible via `thread/unarchive`. |
-| `roster` | `thread/list` + registry + status | List results are under `result.data` (NOT `result.threads`); `useStateDbOnly:true` reads the persisted store. |
-| `show` | registry + optional `thread/read(includeTurns:true)` | Compact lane summary; optional transcript convenience. |
-| `transcript` | `thread/read(includeTurns:true)` | Persisted turn/item snapshot, not a full execution log. |
-| `watch` | raw app-server event stream, bounded by limit/timeout | Request/response bounded sample; a true infinite tail needs a subscription control-socket extension. |
-| `goal-get/set/clear` | `thread/goal/{get,set,clear}` | Native App Server goal lifecycle for owned lanes. |
+| `roster` (`lane list`) | `thread/list` + registry + status | List results are under `result.data` (NOT `result.threads`); `useStateDbOnly:true` reads the persisted store. |
+| `discover` (`lane list --unmanaged`) | `thread/list` state DB only | Lists persisted Codex sessions that could be attached; it does not resume or register them. |
+| `show` (`lane get/status`) | registry + optional `thread/read(includeTurns:true)` | Compact lane summary; optional transcript convenience. |
+| `transcript` (`lane tail`) | `thread/read(includeTurns:true)` | Persisted turn/item snapshot, not a full execution log. |
+| `watch` (`lane tail --follow`) | raw app-server event stream, bounded by limit/timeout | Request/response bounded sample; a true infinite tail needs a subscription control-socket extension. |
+| `goal-get/set/clear` (`goal status/set/clear`) | `thread/goal/{get,set,clear}` | Native App Server goal lifecycle for owned lanes. |
 | `fork` | `thread/fork` + register | Creates a new owned lane; attached source lanes remain locked until cross-process fork semantics are verified. |
 | `rollback` | `thread/rollback` | Drops persisted turns only; does not revert workspace files. |
 | `compact` | `thread/compact/start` | Starts App Server context compaction. |
@@ -118,7 +130,7 @@ The scheduler is **our own** (asyncio): a time wheel for time triggers + the rea
 
 ## Lanes: owned write, attached observe-only
 
-The daemon drives threads it spawns (`open`) with full read/write. Existing desktop threads can be registered with `attach`, but they are **observe-only in v0**. The Phase-1 cross-process spike confirmed that a second app-server process can discover and resume persisted history, but live event fan-out does not cross processes and concurrent turns are uncoordinated. Dispatch's advisory lock is dispatch-local; it cannot gate the desktop app. ADR-0005 keeps attached-lane writes locked until there is a real cross-process interlock and an explicit user opt-in.
+The daemon drives threads it spawns (`new`, backed by the lower-level `open` op) with full read/write. Existing desktop threads can be registered with `attach`, but they are **observe-only in v0**. The Phase-1 cross-process spike confirmed that a second app-server process can discover and resume persisted history, but live event fan-out does not cross processes and concurrent turns are uncoordinated. Dispatch's advisory lock is dispatch-local; it cannot gate the desktop app. ADR-0005 keeps attached-lane writes locked until there is a real cross-process interlock and an explicit user opt-in.
 
 ## Approvals (v1 minimal)
 
@@ -141,7 +153,9 @@ The client supports the full responder loop. v1 surfaces `waiting_on_approval` a
 ## Error handling / resilience
 
 - app-server subprocess crash → daemon detects stdout EOF → restart → re-`resume` persisted lanes → restart the reactor.
-- Action on a busy lane → default `idle_only` guard (busy delivery is "accepted/queued" but uncertain; don't race).
+- Action on a busy lane → direct `send` starts a turn immediately; `send --queue`
+  persists local queued delivery and starts one queued turn when the lane next
+  becomes idle.
 - Reconnect → rebuild via `resume` + `thread/read`; rely on persisted history, not replay.
 - Every action audited; per-lane advisory lock for cross-process safety.
 
@@ -154,9 +168,9 @@ The client supports the full responder loop. v1 surfaces `waiting_on_approval` a
 ## Rough build slices (detailed by the implementation plan)
 
 0. **Spike:** client + ephemeral integration harness; verify cross-process two-app-server safety on a shared thread.
-1. **Contract layer + registry + CLI surface:** ops `open/attach/send/show/roster/archive` end-to-end via daemon control socket.
+1. **Contract layer + registry + CLI surface:** ops for lane creation/attachment, `send`, lane reads/lists, and archive end-to-end via daemon control socket.
 2. **Scheduler + reactor + triggers:** time + event, `idle_only` guard, audit log.
-3. **MCP surface:** derive tools from the same contracts; stdio server.
+3. **MCP surface:** derive grouped tools from the same contracts; stdio server.
 4. **Daemon lifecycle polish:** supervision, launchd plist, `up`/`down`, `status`/`log`.
 
 (v2: remote-control surface; conditional-trigger guards; approval policy engine.)

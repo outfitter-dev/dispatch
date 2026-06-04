@@ -107,10 +107,12 @@ async def trigger_rm(inp: TriggerIdInput, ctx: Ctx) -> TriggerRemoved:
 async def trigger_pause(inp: TriggerIdInput, ctx: Ctx) -> TriggerView:
     trigger = await ctx.registry.get_trigger(inp.id)
     await ctx.registry.set_trigger_enabled(inp.id, False)
+    await ctx.registry.log_action("trigger-pause", trigger_id=inp.id)
     return _view(trigger.model_copy(update={"enabled": False}))
 
 
 async def trigger_resume(inp: TriggerIdInput, ctx: Ctx) -> TriggerView:
     trigger = await ctx.registry.get_trigger(inp.id)
     await ctx.registry.set_trigger_enabled(inp.id, True)
+    await ctx.registry.log_action("trigger-resume", trigger_id=inp.id)
     return _view(trigger.model_copy(update={"enabled": True}))

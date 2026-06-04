@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 import pytest_asyncio
 
-from outfitter.dispatch.client.events import ApprovalRequested, TurnCompleted, TurnStarted
+from outfitter.dispatch.client.events import ApprovalRequested, LaneIdle, TurnCompleted, TurnStarted
 from outfitter.dispatch.core.reactor import Reactor
 from outfitter.dispatch.core.scheduler import Scheduler
 from outfitter.dispatch.core.triggers import TriggerRunner
@@ -160,6 +160,36 @@ async def test_reactor_turn_lifecycle_updates_lane_state(store: Registry) -> Non
     lane = await store.get_lane("L1")
     assert lane.status == "idle"
     assert lane.active_turn_id is None
+
+
+async def test_reactor_drains_one_queued_message_on_turn_completed(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    reactor = Reactor(ctx, TriggerRunner(ctx, lambda: _T0))
+    await store.add_lane(id="L1", handle="@x", source="own", status="busy")
+    await store.enqueue_message(lane="L1", text="first")
+    await store.enqueue_message(lane="L1", text="second")
+
+    await reactor.handle(TurnCompleted("L1", "turn-1"))
+
+    assert (await store.get_queued_message(1)).status == "sent"
+    assert (await store.get_queued_message(2)).status == "pending"
+    assert (await store.get_lane("L1")).status == "busy"
+    sent = [kw["text"] for name, kw in client.calls if name == "turn_start"]
+    assert sent == ["first"]
+
+
+async def test_reactor_drains_queued_message_on_lane_idle_event(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    reactor = Reactor(ctx, TriggerRunner(ctx, lambda: _T0))
+    await store.add_lane(id="L1", handle="@x", source="own", status="busy")
+    await store.enqueue_message(lane="L1", text="queued")
+
+    await reactor.handle(LaneIdle("L1"))
+
+    assert (await store.get_queued_message(1)).status == "sent"
+    assert any(name == "turn_start" and kw["text"] == "queued" for name, kw in client.calls)
 
 
 async def test_reactor_fires_turn_completed_trigger_and_audits(store: Registry) -> None:

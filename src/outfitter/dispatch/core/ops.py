@@ -24,7 +24,7 @@ from .models import (
     LaneDetail,
     LaneInput,
     LaneRef,
-    LaneTextInput,
+    LaneRenameInput,
     LogInput,
     LogOutput,
     NewInput,
@@ -33,6 +33,7 @@ from .models import (
     RollbackInput,
     Roster,
     RosterInput,
+    SendInput,
     ShowInput,
     StatusInput,
     StatusOutput,
@@ -107,45 +108,25 @@ ATTACH = define_op(
 
 SEND = define_op(
     id="send",
-    summary="Send a message to a lane (starts a turn).",
-    input=LaneTextInput,
+    summary="Send, steer, interject, queue, or inject context into a lane.",
+    input=SendInput,
     output=ActionAck,
     intent="write",
     idempotent=False,
-    handler=handlers.send,
-    examples=[Example("missing", input={"lane": "nope", "text": "hi"}, raises=NotFoundError)],
+    handler=handlers.send_message,
+    examples=[
+        Example("missing", input={"lane": "nope", "text": "hi"}, raises=NotFoundError),
+    ],
 )
 
-STEER = define_op(
-    id="steer",
-    summary="Interject into a lane's active turn.",
-    input=LaneTextInput,
-    output=ActionAck,
-    intent="write",
-    idempotent=False,
-    handler=handlers.steer,
-    examples=[Example("missing", input={"lane": "nope", "text": "x"}, raises=NotFoundError)],
-)
-
-BRIEF = define_op(
-    id="brief",
-    summary="Silently inject context into a lane (no turn runs).",
-    input=LaneTextInput,
-    output=ActionAck,
-    intent="write",
-    idempotent=False,
-    handler=handlers.brief,
-    examples=[Example("missing", input={"lane": "nope", "text": "fyi"}, raises=NotFoundError)],
-)
-
-INTERRUPT = define_op(
-    id="interrupt",
+STOP = define_op(
+    id="stop",
     summary="Cancel a lane's active turn.",
     input=LaneInput,
     output=ActionAck,
     intent="write",
     idempotent=True,
-    handler=handlers.interrupt,
+    handler=handlers.stop,
     examples=[Example("missing", input={"lane": "nope"}, raises=NotFoundError)],
 )
 
@@ -158,6 +139,17 @@ SHOW = define_op(
     idempotent=True,
     handler=handlers.show,
     examples=[Example("missing", input={"lane": "nope"}, raises=NotFoundError)],
+)
+
+LANE_RENAME = define_op(
+    id="lane-rename",
+    summary="Rename a managed lane handle.",
+    input=LaneRenameInput,
+    output=LaneRef,
+    intent="write",
+    idempotent=False,
+    handler=handlers.rename_lane,
+    examples=[Example("missing", input={"old": "nope", "new": "docs"}, raises=NotFoundError)],
 )
 
 TRANSCRIPT = define_op(
@@ -377,10 +369,9 @@ _ALL = (
     NEW,
     ATTACH,
     SEND,
-    STEER,
-    BRIEF,
-    INTERRUPT,
+    STOP,
     SHOW,
+    LANE_RENAME,
     TRANSCRIPT,
     WATCH,
     ROSTER,

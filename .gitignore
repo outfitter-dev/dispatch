@@ -26,3 +26,4 @@ dist/
 
 # Local Claude settings (per-machine; e.g. bg-isolation opt-out for Graphite stacking)
 .claude/settings.local.json
+.claude/worktrees/

@@ -217,7 +217,7 @@ class FakeLaneClient:
         )
         return {}
 
-    async def turn_interrupt(self, thread_id: str, turn_id: str | None = None) -> None:
+    async def turn_interrupt(self, thread_id: str, turn_id: str) -> None:
         self._record("turn_interrupt", thread_id=thread_id, turn_id=turn_id)
 
     async def inject_items(self, thread_id: str, items: list[dict[str, object]]) -> None:

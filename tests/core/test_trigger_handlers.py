@@ -67,6 +67,12 @@ async def test_pause_then_resume(store: Registry) -> None:
     assert (await store.get_trigger(added.id)).enabled is False
     resumed = await trigger_handlers.trigger_resume(TriggerIdInput(id=added.id), ctx)
     assert resumed.enabled is True
+    actions = await store.recent_actions(limit=5)
+    assert [record.op for record in actions[:3]] == [
+        "trigger-resume",
+        "trigger-pause",
+        "trigger-add",
+    ]
 
 
 async def test_remove_missing_raises(store: Registry) -> None:

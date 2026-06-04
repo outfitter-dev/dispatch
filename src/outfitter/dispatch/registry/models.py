@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, TypeAdapter
 
 LaneSource = Literal["own", "attached"]
 LaneStatus = Literal["idle", "busy", "waiting_approval", "archived", "error", "unknown"]
+QueuedMessageStatus = Literal["pending", "sending", "sent", "error"]
 
 
 class Lane(BaseModel):
@@ -37,6 +38,18 @@ class ActionRecord(BaseModel):
     trigger_id: str | None = None
     detail: str | None = None  # request/decision summary (JSON or text)
     outcome: str = "ok"  # "ok" or a DispatchError code
+
+
+class QueuedMessage(BaseModel):
+    """A durable queued lane message waiting for the lane to become idle."""
+
+    id: int
+    lane: str
+    text: str
+    status: QueuedMessageStatus = "pending"
+    created_at: datetime
+    updated_at: datetime
+    error: str | None = None
 
 
 # --- triggers -----------------------------------------------------------------

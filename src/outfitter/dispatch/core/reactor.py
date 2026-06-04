@@ -11,6 +11,7 @@ from outfitter.dispatch.client.events import (
     GoalUpdated,
     ItemCompleted,
     LaneEvent,
+    LaneIdle,
     ThreadCompacted,
     TurnCompleted,
     TurnFailed,
@@ -19,6 +20,7 @@ from outfitter.dispatch.client.events import (
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.registry.models import EventWhen
 
+from .queue import drain_next_queued_message
 from .triggers import TriggerRunner, resolve_lane
 
 
@@ -49,10 +51,16 @@ class Reactor:
             await registry.update_lane_status(lane.id, "idle")
             await registry.touch_lane_event(lane.id)
             await self._fire_event(lane.id, "turn_completed")
+            await drain_next_queued_message(self._ctx, lane.id)
         elif isinstance(event, TurnFailed):
             await registry.set_active_turn(lane.id, None)
             await registry.update_lane_status(lane.id, "error")
             await registry.touch_lane_event(lane.id)
+        elif isinstance(event, LaneIdle):
+            await registry.set_active_turn(lane.id, None)
+            await registry.update_lane_status(lane.id, "idle")
+            await registry.touch_lane_event(lane.id)
+            await drain_next_queued_message(self._ctx, lane.id)
         elif isinstance(event, ItemCompleted | GoalUpdated | GoalCleared | ThreadCompacted):
             await registry.touch_lane_event(lane.id)
         elif isinstance(event, ApprovalRequested):

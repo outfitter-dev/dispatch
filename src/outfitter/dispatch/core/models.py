@@ -20,6 +20,8 @@ from outfitter.dispatch.registry.models import LaneSource, LaneStatus
 
 # --- inputs -------------------------------------------------------------------
 
+SendMode = Literal["send", "steer", "queue", "interject", "context"]
+
 
 class OpenInput(BaseModel):
     name: str = Field(description="Lane name; becomes the @handle.")
@@ -64,8 +66,25 @@ class LaneTextInput(BaseModel):
     text: str = Field(description="Message text.")
 
 
+class SendInput(LaneTextInput):
+    mode: SendMode = Field(
+        default="send",
+        description=(
+            "Delivery mode: send starts a turn, steer adds to an active turn, "
+            "queue stores durable delivery for the next idle transition, "
+            "interject cancels then starts a replacement turn, context injects "
+            "model-visible context."
+        ),
+    )
+
+
 class LaneInput(BaseModel):
     lane: str = Field(description="Lane id or @handle.")
+
+
+class LaneRenameInput(BaseModel):
+    old: str = Field(description="Existing lane id or @handle.")
+    new: str = Field(description="New lane handle; @ is optional.")
 
 
 class ShowInput(BaseModel):

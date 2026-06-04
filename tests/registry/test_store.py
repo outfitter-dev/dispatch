@@ -63,3 +63,27 @@ async def test_log_action_and_recent(store: Registry) -> None:
     recent = await store.recent_actions(limit=10)
     assert [r.op for r in recent] == ["archive", "send"]  # newest first
     assert recent[1].detail == "hi"
+
+
+async def test_queued_messages_are_claimed_and_recovered(store: Registry) -> None:
+    first = await store.enqueue_message(lane="L1", text="one")
+    second = await store.enqueue_message(lane="L1", text="two")
+
+    assert first.id < second.id
+    assert await store.pending_message_count("L1") == 2
+    pending = await store.next_pending_message("L1")
+    assert pending is not None
+    assert pending.text == "one"
+
+    assert await store.claim_queued_message(first.id) is True
+    assert await store.claim_queued_message(first.id) is False
+    assert (await store.get_queued_message(first.id)).status == "sending"
+    assert await store.reset_sending_messages() == 1
+    assert (await store.get_queued_message(first.id)).status == "pending"
+
+    await store.complete_queued_message(first.id)
+    await store.fail_queued_message(second.id, "app_server")
+    assert (await store.get_queued_message(first.id)).status == "sent"
+    failed = await store.get_queued_message(second.id)
+    assert failed.status == "error"
+    assert failed.error == "app_server"
