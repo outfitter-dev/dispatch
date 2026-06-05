@@ -16,7 +16,7 @@ from outfitter.dispatch.client.models import (
     ThreadGoalStatus,
     ThreadSandbox,
 )
-from outfitter.dispatch.registry.models import LaneSource, LaneStatus
+from outfitter.dispatch.registry.models import LaneSource, LaneStatus, SyncState
 
 # --- inputs -------------------------------------------------------------------
 
@@ -59,6 +59,7 @@ class NewInput(BaseModel):
 
 class AttachInput(BaseModel):
     thread: str = Field(description="App Server threadId of an existing (desktop) lane.")
+    sync: bool = Field(default=False, description="Run a quick sync after attaching.")
 
 
 class LaneTextInput(BaseModel):
@@ -80,6 +81,11 @@ class SendInput(LaneTextInput):
 
 class LaneInput(BaseModel):
     lane: str = Field(description="Lane id or @handle.")
+
+
+class LaneSyncInput(BaseModel):
+    lane: str = Field(description="Lane id or @handle.")
+    full: bool = Field(default=False, description="Scan the full source file instead of top+tail.")
 
 
 class LaneRenameInput(BaseModel):
@@ -176,6 +182,21 @@ class LaneRef(BaseModel):
     status: LaneStatus
 
 
+class LaneSyncView(BaseModel):
+    state: SyncState = "unknown"
+    last_synced_at: str | None = None
+    source_path: str | None = None
+    source_size: int | None = None
+    latest_event_at: str | None = None
+    latest_turn_id: str | None = None
+    transcript_partial: bool = True
+    error: str | None = None
+
+
+class LaneListItem(LaneRef):
+    sync: LaneSyncView = Field(default_factory=LaneSyncView)
+
+
 class NewLane(LaneRef):
     sent: bool
 
@@ -183,6 +204,7 @@ class NewLane(LaneRef):
 class LaneDetail(LaneRef):
     cwd: str | None = None
     active_turn_id: str | None = None
+    sync: LaneSyncView = Field(default_factory=LaneSyncView)
     transcript: list[TranscriptItem] = Field(default_factory=list)
 
 
@@ -233,8 +255,13 @@ class ActionAck(BaseModel):
     detail: str | None = None
 
 
+class LaneSyncResult(BaseModel):
+    lane: str
+    sync: LaneSyncView
+
+
 class Roster(BaseModel):
-    lanes: list[LaneRef]
+    lanes: list[LaneListItem]
 
 
 class DiscoveredSession(BaseModel):

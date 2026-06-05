@@ -1,5 +1,4 @@
-"""Supervisor: restart the app-server on crash and re-resume lanes (recoverable
-daemon — the v0 DoD)."""
+"""Supervisor: restart the app-server on crash and restore lane observation."""
 
 from __future__ import annotations
 
@@ -27,7 +26,7 @@ async def store() -> AsyncIterator[Registry]:
         await s.close()
 
 
-async def test_supervisor_restarts_and_reresumes_lanes_on_crash(store: Registry) -> None:
+async def test_supervisor_restarts_and_restores_lanes_on_crash(store: Registry) -> None:
     await store.add_lane(id="D1", handle="@desktop", source="attached", status="idle")
     await store.add_lane(id="O1", handle="@own", source="own", status="idle")
     ctx = make_ctx(store)
@@ -45,17 +44,26 @@ async def test_supervisor_restarts_and_reresumes_lanes_on_crash(store: Registry)
     task = asyncio.create_task(supervisor.supervise(first))
     await asyncio.sleep(0.05)
 
-    # On first start, both persisted lanes are re-resumed and ctx.client is set.
-    assert sorted(clients[0].resumed) == ["D1", "O1"]
+    # Owned lanes are resumed for event observation; attached lanes stay
+    # metadata-only after restart (ADR-0017).
+    assert clients[0].resumed == ["O1"]
+    assert any(
+        name == "thread_read" and kw["thread_id"] == "D1" and kw["include_turns"] is False
+        for name, kw in clients[0].calls
+    )
     assert ctx.client is clients[0]
 
     # Simulate app-server crash (stdout EOF → wait_closed returns).
     clients[0].closed.set()
     await asyncio.sleep(0.05)
 
-    # Supervisor started a fresh client and re-resumed the lanes on it.
+    # Supervisor started a fresh client and restored lanes on it.
     assert len(clients) == 2
-    assert sorted(clients[1].resumed) == ["D1", "O1"]
+    assert clients[1].resumed == ["O1"]
+    assert any(
+        name == "thread_read" and kw["thread_id"] == "D1" and kw["include_turns"] is False
+        for name, kw in clients[1].calls
+    )
     assert ctx.client is clients[1]
 
     await supervisor.stop()

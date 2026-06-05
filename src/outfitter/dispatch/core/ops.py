@@ -25,6 +25,8 @@ from .models import (
     LaneInput,
     LaneRef,
     LaneRenameInput,
+    LaneSyncInput,
+    LaneSyncResult,
     LogInput,
     LogOutput,
     NewInput,
@@ -172,6 +174,17 @@ WATCH = define_op(
     idempotent=True,
     handler=handlers.watch,
     examples=[Example("missing", input={"lane": "nope", "timeout": 0}, raises=NotFoundError)],
+)
+
+SYNC = define_op(
+    id="sync",
+    summary="Progressively sync an attached lane's local Codex thread index.",
+    input=LaneSyncInput,
+    output=LaneSyncResult,
+    intent="write",
+    idempotent=True,
+    handler=handlers.sync_lane,
+    examples=[Example("missing", input={"lane": "nope"}, raises=NotFoundError)],
 )
 
 ROSTER = define_op(
@@ -374,6 +387,7 @@ _ALL = (
     LANE_RENAME,
     TRANSCRIPT,
     WATCH,
+    SYNC,
     ROSTER,
     DISCOVER,
     ARCHIVE,

@@ -29,7 +29,7 @@ The current operator grammar is:
 - daemon reads: `daemon status`, `daemon log`
 - create/send: `new`, `send`, `stop`
 - lanes: `lane get`, `lane status`, `lane list`, `lane list --unmanaged`,
-  `lane attach`, `lane rename`, `lane tail`, `lane fork`, `lane rollback`,
+  `lane attach`, `lane sync`, `lane rename`, `lane tail`, `lane fork`, `lane rollback`,
   `lane compact`, `lane archive`
 - goals: `goal status`, `goal set`, `goal clear`
 - triggers: `trigger add`, `trigger list`, `trigger rm`, `trigger pause`,
@@ -79,6 +79,7 @@ Attached lanes are existing desktop Codex threads registered by raw thread id:
 
 ```bash
 uv run dispatch lane attach <codex-thread-id>
+uv run dispatch lane attach <codex-thread-id> --sync
 ```
 
 Attached lanes are observe-only in v0. Do not try mutating commands such as
@@ -87,17 +88,26 @@ Attached lanes are observe-only in v0. Do not try mutating commands such as
 writes locked because desktop Codex and dispatch run separate app-server
 processes and there is no cross-process write interlock.
 
-Attach is bounded: if the app-server stalls, the underlying `thread/resume`
-times out (~15s) and `attach` fails with a clear `app_server` error, registering
-no lane. There is no half-attached state to clean up. Large persisted histories
-are supported; attach should not fail only because a resumed thread has more than
-64 KiB of turns.
+Attach is compact by default: it verifies the thread with
+`thread/read(includeTurns:false)`, registers metadata, and does not resume turn
+history. Use `--sync` or `lane sync` when you want dispatch to refresh its local
+indexed view.
+
+```bash
+uv run dispatch lane sync <lane>
+uv run dispatch lane sync <lane> --full
+```
+
+Sync indexes source identity, sync state, latest event time, latest turn id, and
+bounded top+tail JSONL facts when Codex exposes a rollout path. It does not copy
+the full transcript by default and it does not grant write authority to attached
+lanes.
 
 ## Discover Sessions
 
 `lane list` shows lanes dispatch already manages. `lane list --unmanaged` lists
-persisted Codex sessions you could attach, read straight from the Codex state DB.
-It is read-only and does not resume or register anything:
+persisted Codex sessions you could attach through App Server `thread/list` in
+state-db-only mode. It is read-only and does not resume or register anything:
 
 ```bash
 uv run dispatch lane list

@@ -62,6 +62,7 @@ _GROUPS: tuple[_ToolGroup, ...] = (
             ("open", "open"),
             ("new", "new"),
             ("attach", "attach"),
+            ("sync", "sync"),
             ("rename", "lane-rename"),
             ("send", "send"),
             ("stop", "stop"),

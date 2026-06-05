@@ -128,6 +128,9 @@ class FakeLaneClient:
 
     async def thread_read(self, thread_id: str, include_turns: bool = False) -> dict[str, object]:
         self._record("thread_read", thread_id=thread_id, include_turns=include_turns)
+        if not self.read_result:
+            thread = self.threads.get(thread_id, ThreadInfo(id=thread_id))
+            return {"thread": thread.model_dump(by_alias=True, exclude_none=True)}
         return self.read_result
 
     async def thread_archive(self, thread_id: str) -> None:

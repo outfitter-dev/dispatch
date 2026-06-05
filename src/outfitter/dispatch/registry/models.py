@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, TypeAdapter
 
 LaneSource = Literal["own", "attached"]
 LaneStatus = Literal["idle", "busy", "waiting_approval", "archived", "error", "unknown"]
+SyncState = Literal["unknown", "metadata", "partial", "complete", "error"]
 QueuedMessageStatus = Literal["pending", "sending", "sent", "error"]
 
 
@@ -50,6 +51,35 @@ class QueuedMessage(BaseModel):
     created_at: datetime
     updated_at: datetime
     error: str | None = None
+
+
+class LaneSync(BaseModel):
+    """Compact sync/index state for a managed lane."""
+
+    lane: str
+    state: SyncState
+    source_path: str | None = None
+    source_device: int | None = None
+    source_inode: int | None = None
+    source_size: int | None = None
+    source_mtime_ns: int | None = None
+    line_count: int | None = None
+    first_offset: int | None = None
+    tail_offset: int | None = None
+    last_synced_at: str | None = None
+    error: str | None = None
+    display_name: str | None = None
+    preview: str | None = None
+    cwd: str | None = None
+    source: str | None = None
+    thread_source: str | None = None
+    model_provider: str | None = None
+    model: str | None = None
+    reasoning_effort: str | None = None
+    session_id: str | None = None
+    latest_event_at: str | None = None
+    latest_turn_id: str | None = None
+    transcript_partial: bool = True
 
 
 # --- triggers -----------------------------------------------------------------

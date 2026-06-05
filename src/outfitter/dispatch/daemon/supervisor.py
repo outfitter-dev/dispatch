@@ -1,5 +1,5 @@
 """App-server supervision: detect a crash (stdout EOF) and recover — restart the
-app-server, re-resume persisted lanes, and restart the reactor subscription.
+app-server, restore lane observations, and restart the reactor subscription.
 
 The supervisor swaps ``ctx.client`` in place so the control server, scheduler, and
 handlers transparently use the new connection after a restart (recoverable daemon
@@ -48,7 +48,7 @@ class Supervisor:
         while True:  # not `while not self._stopped` — stop() flips it during the await below
             self._ctx.client = client
             self._client = client
-            await self._resume_lanes(client)
+            await self._restore_lanes(client)
             reactor_task = asyncio.create_task(self._run_reactor())
             await client.wait_closed()  # blocks until app-server dies or we stop
             reactor_task.cancel()
@@ -75,15 +75,23 @@ class Supervisor:
                 self._ctx.log.exception("app_server.spawn_failed", backoff=self._backoff)
         return None
 
-    async def _resume_lanes(self, client: SupervisedClient) -> None:
-        """Re-resume persisted lanes on the (re)connected app-server so the daemon
-        observes them again after a restart."""
+    async def _restore_lanes(self, client: SupervisedClient) -> None:
+        """Restore persisted lane observation on the (re)connected app-server.
+
+        Owned lanes are resumed so their app-server event stream is reattached.
+        Attached lanes stay metadata-only per ADR-0017; restarting the daemon must
+        not turn an observe-only registration into an implicit resume.
+        """
         for lane in await self._ctx.registry.list_lanes():
             try:
-                await client.thread_resume(lane.id)
-                self._ctx.log.info("lane.resumed", lane=lane.id, source=lane.source)
+                if lane.source == "own":
+                    await client.thread_resume(lane.id)
+                    self._ctx.log.info("lane.resumed", lane=lane.id, source=lane.source)
+                else:
+                    await client.thread_read(lane.id, include_turns=False)
+                    self._ctx.log.info("lane.metadata_read", lane=lane.id, source=lane.source)
             except ClientError as exc:
-                self._ctx.log.warning("lane.resume_failed", lane=lane.id, error=str(exc))
+                self._ctx.log.warning("lane.restore_failed", lane=lane.id, error=str(exc))
         drained = await drain_idle_queues(self._ctx)
         if drained:
             self._ctx.log.info("queue.drained_on_resume", count=drained)

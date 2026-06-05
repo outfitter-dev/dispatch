@@ -4,7 +4,7 @@ slug: mcp-daemon-lifecycle
 title: MCP Daemon Lifecycle — Auto-Start Detached Singleton
 status: accepted
 created: 2026-06-02
-updated: 2026-06-03
+updated: 2026-06-05
 owners: ['[galligan](https://github.com/galligan)']
 ---
 
@@ -38,7 +38,7 @@ Phase 5 implemented:
 - `dispatch up` / `dispatch down` as a detached singleton lifecycle.
 - MCP startup that connects through the same control socket path and fails with bounded timeouts.
 - Stale pidfile safety: `down` only signals a pid after a live socket probe confirms a daemon is answering.
-- Supervisor restart/re-resume of persisted lanes after app-server EOF.
+- Supervisor restart that resumes owned lanes and keeps attached lanes metadata-only after app-server EOF.
 - A launchd plist generator; actual `launchctl` installation remains a deliberate user action.
 
 ## Consequences

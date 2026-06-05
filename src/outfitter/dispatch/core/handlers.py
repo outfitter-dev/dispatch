@@ -9,9 +9,17 @@ from __future__ import annotations
 
 import asyncio
 
+from pydantic import ValidationError as PydanticValidationError
+
 from outfitter.dispatch.client.errors import AppServerError as ClientAppServerError
 from outfitter.dispatch.client.errors import ClientError
-from outfitter.dispatch.client.models import SandboxPolicy, ThreadGoal, ThreadInfo, ThreadSandbox
+from outfitter.dispatch.client.models import (
+    SandboxPolicy,
+    ThreadGoal,
+    ThreadInfo,
+    ThreadResult,
+    ThreadSandbox,
+)
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.contracts.errors import (
     AppServerError,
@@ -21,7 +29,7 @@ from outfitter.dispatch.contracts.errors import (
     ValidationError,
     project_error,
 )
-from outfitter.dispatch.registry.models import Lane
+from outfitter.dispatch.registry.models import Lane, LaneSync, SyncState
 
 from . import queue
 from .models import (
@@ -40,8 +48,12 @@ from .models import (
     GoalView,
     LaneDetail,
     LaneInput,
+    LaneListItem,
     LaneRef,
     LaneRenameInput,
+    LaneSyncInput,
+    LaneSyncResult,
+    LaneSyncView,
     LaneTextInput,
     LogInput,
     LogOutput,
@@ -63,19 +75,38 @@ from .models import (
     WatchOutput,
 )
 from .new_config import NewSettings, resolve_new
+from .sync import scan_codex_jsonl
 
 _READ_ONLY = SandboxPolicy(type="readOnly")
 
-# Bound ``thread/resume`` during attach: a persisted resume is a quick state-db read,
-# so a stuck one means the app-server is wedged. Fail with a clear error rather than
-# hang — and never half-register (the registry write only follows a successful resume).
-_RESUME_TIMEOUT_S = 15.0
+# Bound attach metadata reads: if the app-server is wedged, fail clearly and never
+# half-register (the registry write only follows a successful metadata read).
+_ATTACH_METADATA_TIMEOUT_S = 10.0
 
 _PREVIEW_MAX = 80
 
 
 def _ref(lane: Lane) -> LaneRef:
     return LaneRef(id=lane.id, handle=lane.handle, source=lane.source, status=lane.status)
+
+
+def _sync_view(sync: LaneSync | None) -> LaneSyncView:
+    if sync is None:
+        return LaneSyncView()
+    return LaneSyncView(
+        state=sync.state,
+        last_synced_at=sync.last_synced_at,
+        source_path=sync.source_path,
+        source_size=sync.source_size,
+        latest_event_at=sync.latest_event_at,
+        latest_turn_id=sync.latest_turn_id,
+        transcript_partial=sync.transcript_partial,
+        error=sync.error,
+    )
+
+
+def _list_item(lane: Lane, sync: LaneSync | None) -> LaneListItem:
+    return LaneListItem(**_ref(lane).model_dump(), sync=_sync_view(sync))
 
 
 def _handle(name: str) -> str:
@@ -207,22 +238,137 @@ def _turn_sandbox(sandbox: ThreadSandbox) -> SandboxPolicy:
 async def attach_lane(inp: AttachInput, ctx: Ctx) -> LaneRef:
     existing = await ctx.registry.find_lane(inp.thread)
     if existing is not None:
+        if inp.sync:
+            await _sync_lane(existing, ctx, full=False)
         return _ref(existing)  # idempotent re-attach
     try:
-        thread = await asyncio.wait_for(ctx.client.thread_resume(inp.thread), _RESUME_TIMEOUT_S)
+        thread = await asyncio.wait_for(
+            _read_thread_metadata(ctx, inp.thread), _ATTACH_METADATA_TIMEOUT_S
+        )
     except TimeoutError as exc:
         # The registry write below never ran, so no lane is half-registered.
         raise AppServerError(
-            f"attach timed out: thread/resume for {inp.thread!r} exceeded "
-            f"{_RESUME_TIMEOUT_S:.0f}s (no lane registered)"
+            f"attach timed out: thread/read metadata for {inp.thread!r} exceeded "
+            f"{_ATTACH_METADATA_TIMEOUT_S:.0f}s (no lane registered)"
         ) from exc
     handle = thread.name or f"@{inp.thread[:8]}"
-    lane = await ctx.registry.add_lane(
-        id=thread.id, handle=handle, source="attached", cwd=thread.cwd, status="idle"
+    sync = (
+        await _sync_from_thread(thread.id, thread, full=False)
+        if inp.sync
+        else _metadata_sync(thread.id, thread, state="metadata")
     )
-    await ctx.registry.log_action("attach", lane=lane.id, detail=handle)
+    lane, _ = await ctx.registry.add_lane_with_sync(
+        id=thread.id,
+        handle=handle,
+        source="attached",
+        cwd=thread.cwd,
+        status="idle",
+        sync=sync,
+        audit_op="attach",
+        audit_detail=handle,
+    )
     ctx.log.info("lane.attach", lane=lane.id, handle=handle)
     return _ref(lane)
+
+
+async def _read_thread_metadata(ctx: Ctx, thread_id: str) -> ThreadInfo:
+    result = await ctx.client.thread_read(thread_id, include_turns=False)
+    try:
+        return ThreadResult.model_validate(result).thread
+    except PydanticValidationError as exc:
+        raise AppServerError(
+            f"thread/read metadata for {thread_id!r} returned an invalid payload"
+        ) from exc
+
+
+async def _sync_lane(
+    lane: Lane, ctx: Ctx, *, full: bool, metadata: ThreadInfo | None = None
+) -> LaneSync:
+    thread = metadata or await _read_thread_metadata(ctx, lane.id)
+    return await ctx.registry.upsert_lane_sync(await _sync_from_thread(lane.id, thread, full=full))
+
+
+async def _sync_from_thread(lane_id: str, thread: ThreadInfo, *, full: bool) -> LaneSync:
+    if thread.path is None:
+        return _metadata_sync(lane_id, thread, state="metadata")
+    facts = await asyncio.to_thread(scan_codex_jsonl, thread.path, full=full)
+    state = facts.state
+    return _metadata_sync(
+        lane_id,
+        thread,
+        state=state,
+        source_path=facts.source.path if facts.source else thread.path,
+        source_device=facts.source.device if facts.source else None,
+        source_inode=facts.source.inode if facts.source else None,
+        source_size=facts.source.size if facts.source else None,
+        source_mtime_ns=facts.source.mtime_ns if facts.source else None,
+        line_count=facts.line_count,
+        first_offset=facts.first_offset,
+        tail_offset=facts.tail_offset,
+        error=facts.error,
+        cwd=facts.cwd,
+        source=facts.source_kind,
+        thread_source=facts.thread_source,
+        model_provider=facts.model_provider,
+        model=facts.model,
+        reasoning_effort=facts.reasoning_effort,
+        session_id=facts.session_id,
+        latest_event_at=facts.latest_event_at,
+        latest_turn_id=facts.latest_turn_id,
+        transcript_partial=state != "complete",
+    )
+
+
+def _metadata_sync(
+    lane_id: str,
+    thread: ThreadInfo,
+    *,
+    state: SyncState,
+    source_path: str | None = None,
+    source_device: int | None = None,
+    source_inode: int | None = None,
+    source_size: int | None = None,
+    source_mtime_ns: int | None = None,
+    line_count: int | None = None,
+    first_offset: int | None = None,
+    tail_offset: int | None = None,
+    error: str | None = None,
+    cwd: str | None = None,
+    source: str | None = None,
+    thread_source: str | None = None,
+    model_provider: str | None = None,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+    session_id: str | None = None,
+    latest_event_at: str | None = None,
+    latest_turn_id: str | None = None,
+    transcript_partial: bool = True,
+) -> LaneSync:
+    return LaneSync(
+        lane=lane_id,
+        state=state,
+        source_path=source_path or thread.path,
+        source_device=source_device,
+        source_inode=source_inode,
+        source_size=source_size,
+        source_mtime_ns=source_mtime_ns,
+        line_count=line_count,
+        first_offset=first_offset,
+        tail_offset=tail_offset,
+        error=error,
+        display_name=thread.name,
+        preview=_short(thread.preview, limit=200),
+        cwd=cwd or thread.cwd,
+        source=source or thread.source,
+        thread_source=thread_source or thread.thread_source,
+        model_provider=model_provider or thread.model_provider,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        session_id=session_id or thread.session_id,
+        latest_event_at=latest_event_at,
+        latest_turn_id=latest_turn_id,
+        transcript_partial=transcript_partial,
+    )
 
 
 async def send(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
@@ -311,6 +457,7 @@ async def stop(inp: LaneInput, ctx: Ctx) -> ActionAck:
 
 async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
     lane = await _resolve(ctx, inp.lane)
+    sync = await ctx.registry.get_lane_sync(lane.id)
     transcript: list[TranscriptItem] = []
     if inp.include_transcript:
         result = await ctx.client.thread_read(lane.id, include_turns=True)
@@ -322,8 +469,18 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
         status=lane.status,
         cwd=lane.cwd,
         active_turn_id=lane.active_turn_id,
+        sync=_sync_view(sync),
         transcript=transcript,
     )
+
+
+async def sync_lane(inp: LaneSyncInput, ctx: Ctx) -> LaneSyncResult:
+    lane = await _resolve(ctx, inp.lane)
+    sync = await _sync_lane(lane, ctx, full=inp.full)
+    await ctx.registry.log_action(
+        "sync", lane=lane.id, detail=f"state={sync.state}; full={inp.full}"
+    )
+    return LaneSyncResult(lane=lane.id, sync=_sync_view(sync))
 
 
 async def rename_lane(inp: LaneRenameInput, ctx: Ctx) -> LaneRef:
@@ -562,7 +719,8 @@ async def compact(inp: CompactInput, ctx: Ctx) -> ActionAck:
 
 async def roster(inp: RosterInput, ctx: Ctx) -> Roster:
     lanes = await ctx.registry.list_lanes(include_archived=inp.include_archived)
-    return Roster(lanes=[_ref(lane) for lane in lanes])
+    syncs = await ctx.registry.get_lane_sync_many([lane.id for lane in lanes])
+    return Roster(lanes=[_list_item(lane, syncs.get(lane.id)) for lane in lanes])
 
 
 def _short(text: str | None, limit: int = _PREVIEW_MAX) -> str | None:

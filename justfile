@@ -6,6 +6,7 @@ check:
     uv run ruff format --check .
     uv run mypy src tests
     uv run pytest
+    rm -f dist/*.whl dist/*.tar.gz
     uv build
     uv run python scripts/check_package_contents.py
 
