@@ -23,6 +23,7 @@ Invoker = Callable[[str, dict[str, object]], dict[str, object]]
 Renderer = Callable[[Op, dict[str, object]], None]
 
 _SendMode = Literal["send", "steer", "queue", "interject", "context"]
+_SearchSortKey = Literal["created_at", "updated_at"]
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,9 @@ class CliRoute:
 
 _ROUTES: tuple[CliRoute, ...] = (
     CliRoute(("new",), "new"),
+    CliRoute(("rename",), "lane-rename", ("old", "new")),
+    CliRoute(("archive",), "archive", ("target",)),
+    CliRoute(("restore",), "restore", ("target",)),
     CliRoute(("lane", "get"), "show", ("lane",)),
     CliRoute(("lane", "status"), "show", ("lane",)),
     CliRoute(("lane", "attach"), "attach", ("thread",)),
@@ -42,7 +46,8 @@ _ROUTES: tuple[CliRoute, ...] = (
     CliRoute(("lane", "fork"), "fork", ("lane",)),
     CliRoute(("lane", "rollback"), "rollback", ("lane",)),
     CliRoute(("lane", "compact"), "compact", ("lane",)),
-    CliRoute(("lane", "archive"), "archive", ("lane",)),
+    CliRoute(("lane", "archive"), "archive", ("target",)),
+    CliRoute(("lane", "restore"), "restore", ("target",)),
     CliRoute(("goal", "status"), "goal-get", ("lane",)),
     CliRoute(("goal", "clear"), "goal-clear", ("lane",)),
     CliRoute(("trigger", "add"), "trigger-add"),
@@ -68,7 +73,14 @@ def derive_cli(
 
     _register_command(app, ("send",), _send_command(registry.get("send"), invoke, renderer))
     _register_command(app, ("stop",), _stop_command(registry.get("stop"), invoke, renderer))
+    _register_command(app, ("search",), _search_command(registry.get("search"), invoke, renderer))
     _register_command(app, ("lane", "list"), _lane_list_command(registry, invoke, renderer), groups)
+    _register_command(
+        app,
+        ("lane", "search"),
+        _lane_search_command(registry.get("search"), invoke, renderer),
+        groups,
+    )
     _register_command(app, ("lane", "tail"), _lane_tail_command(registry, invoke, renderer), groups)
     _register_command(
         app,
@@ -227,6 +239,172 @@ def _stop_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., No
     return command
 
 
+def _search_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., None]:
+    def command(
+        query: Annotated[str, typer.Argument(help="Substring/full-text query.")],
+        lane: Annotated[
+            str | None, typer.Option("--lane", help="Limit to one lane/thread id.")
+        ] = None,
+        directory: Annotated[
+            str | None,
+            typer.Option("--directory", "--dir", help="Only include threads under this directory."),
+        ] = None,
+        repo: Annotated[
+            str | None, typer.Option("--repo", help="Only include threads under this repo root.")
+        ] = None,
+        managed: Annotated[bool, typer.Option("--managed", help="Only managed lanes.")] = False,
+        unmanaged: Annotated[
+            bool, typer.Option("--unmanaged", help="Only unmanaged Codex threads.")
+        ] = False,
+        archived: Annotated[
+            bool, typer.Option("--archived", help="Search archived threads.")
+        ] = False,
+        since: Annotated[
+            str | None, typer.Option("--since", help="Inclusive ISO date/time lower bound.")
+        ] = None,
+        until: Annotated[
+            str | None, typer.Option("--until", help="Inclusive ISO date/time upper bound.")
+        ] = None,
+        date_field: Annotated[
+            _SearchSortKey, typer.Option("--date-field", help="Timestamp field for date filters.")
+        ] = "updated_at",
+        sort: Annotated[_SearchSortKey, typer.Option("--sort", help="App Server sort key.")] = (
+            "updated_at"
+        ),
+        ascending: Annotated[bool, typer.Option("--ascending", help="Sort oldest first.")] = False,
+        limit: Annotated[int, typer.Option(help="Max matches to return.")] = 20,
+        max_scan: Annotated[
+            int, typer.Option("--max-scan", help="Max App Server matches to scan.")
+        ] = 200,
+        json: Annotated[
+            bool, typer.Option("--json", help="Render machine-readable JSON output.")
+        ] = False,
+    ) -> None:
+        _invoke_search(
+            op,
+            invoke,
+            render,
+            query=query,
+            lane=lane,
+            directory=directory,
+            repo=repo,
+            managed=managed,
+            unmanaged=unmanaged,
+            archived=archived,
+            since=since,
+            until=until,
+            date_field=date_field,
+            sort=sort,
+            ascending=ascending,
+            limit=limit,
+            max_scan=max_scan,
+            json=json,
+        )
+
+    command.__doc__ = op.summary
+    return command
+
+
+def _lane_search_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., None]:
+    def command(
+        lane: Annotated[str, typer.Argument(help="Lane id, @handle, or raw Codex thread id.")],
+        query: Annotated[str, typer.Argument(help="Substring/full-text query.")],
+        directory: Annotated[
+            str | None,
+            typer.Option("--directory", "--dir", help="Only include threads under this directory."),
+        ] = None,
+        repo: Annotated[
+            str | None, typer.Option("--repo", help="Only include threads under this repo root.")
+        ] = None,
+        archived: Annotated[
+            bool, typer.Option("--archived", help="Search archived threads.")
+        ] = False,
+        since: Annotated[
+            str | None, typer.Option("--since", help="Inclusive ISO date/time lower bound.")
+        ] = None,
+        until: Annotated[
+            str | None, typer.Option("--until", help="Inclusive ISO date/time upper bound.")
+        ] = None,
+        date_field: Annotated[
+            _SearchSortKey, typer.Option("--date-field", help="Timestamp field for date filters.")
+        ] = "updated_at",
+        limit: Annotated[int, typer.Option(help="Max matches to return.")] = 20,
+        max_scan: Annotated[
+            int, typer.Option("--max-scan", help="Max transcript items to scan.")
+        ] = 200,
+        json: Annotated[
+            bool, typer.Option("--json", help="Render machine-readable JSON output.")
+        ] = False,
+    ) -> None:
+        _invoke_search(
+            op,
+            invoke,
+            render,
+            query=query,
+            lane=lane,
+            directory=directory,
+            repo=repo,
+            managed=False,
+            unmanaged=False,
+            archived=archived,
+            since=since,
+            until=until,
+            date_field=date_field,
+            sort="updated_at",
+            ascending=False,
+            limit=limit,
+            max_scan=max_scan,
+            json=json,
+        )
+
+    command.__doc__ = op.summary
+    return command
+
+
+def _invoke_search(
+    op: Op,
+    invoke: Invoker,
+    render: Renderer,
+    *,
+    query: str,
+    lane: str | None,
+    directory: str | None,
+    repo: str | None,
+    managed: bool,
+    unmanaged: bool,
+    archived: bool,
+    since: str | None,
+    until: str | None,
+    date_field: str,
+    sort: str,
+    ascending: bool,
+    limit: int,
+    max_scan: int,
+    json: bool,
+) -> None:
+    result = invoke(
+        op.id,
+        {
+            "query": query,
+            "lane": lane,
+            "directory": directory,
+            "repo": repo,
+            "managed": managed,
+            "unmanaged": unmanaged,
+            "archived": archived,
+            "since": since,
+            "until": until,
+            "date_field": date_field,
+            "sort": sort,
+            "ascending": ascending,
+            "limit": limit,
+            "max_scan": max_scan,
+        },
+    )
+    render(op, result)
+    _ignore_json(json)
+
+
 def _lane_list_command(
     registry: OpRegistry, invoke: Invoker, render: Renderer
 ) -> Callable[..., None]:
@@ -346,6 +524,10 @@ def _schema_command(registry: OpRegistry) -> Callable[..., None]:
 def _schema_op_id(command: str) -> str:
     aliases = {
         "stop": "stop",
+        "search": "search",
+        "rename": "lane-rename",
+        "archive": "archive",
+        "restore": "restore",
         "lane-get": "show",
         "lane-status": "show",
         "lane-list": "roster",
@@ -353,10 +535,12 @@ def _schema_op_id(command: str) -> str:
         "lane-attach": "attach",
         "lane-sync": "sync",
         "lane-rename": "lane-rename",
+        "lane-search": "search",
         "lane-fork": "fork",
         "lane-rollback": "rollback",
         "lane-compact": "compact",
         "lane-archive": "archive",
+        "lane-restore": "restore",
         "lane-tail": "transcript",
         "goal-status": "goal-get",
         "goal-set": "goal-set",

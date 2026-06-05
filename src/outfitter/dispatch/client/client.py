@@ -29,6 +29,7 @@ from .models import (
     Personality,
     ReasoningSummary,
     SandboxPolicy,
+    SortDirection,
     TextInput,
     ThreadArchiveParams,
     ThreadCompactStartParams,
@@ -48,8 +49,13 @@ from .models import (
     ThreadResumeParams,
     ThreadRollbackParams,
     ThreadSandbox,
+    ThreadSearchParams,
+    ThreadSearchResult,
     ThreadSetNameParams,
+    ThreadSortKey,
+    ThreadSourceKind,
     ThreadStartParams,
+    ThreadUnarchiveParams,
     TurnInterruptParams,
     TurnStartParams,
     TurnSteerParams,
@@ -151,7 +157,7 @@ class AppServerClient:
     ) -> InitializeResult:
         params = InitializeParams(
             client_info=client_info,
-            capabilities=capabilities if capabilities is not None else {"experimentalApi": False},
+            capabilities=capabilities if capabilities is not None else {"experimentalApi": True},
         )
         result = await self._request("initialize", _dump(params))
         await self._notify("initialized", {})
@@ -241,10 +247,39 @@ class AppServerClient:
     async def thread_archive(self, thread_id: str) -> None:
         await self._request("thread/archive", _dump(ThreadArchiveParams(thread_id=thread_id)))
 
+    async def thread_unarchive(self, thread_id: str) -> ThreadInfo:
+        result = await self._request(
+            "thread/unarchive", _dump(ThreadUnarchiveParams(thread_id=thread_id))
+        )
+        return ThreadResult.model_validate(result).thread
+
     async def thread_set_name(self, thread_id: str, name: str) -> None:
         await self._request(
             "thread/name/set", _dump(ThreadSetNameParams(thread_id=thread_id, name=name))
         )
+
+    async def thread_search(
+        self,
+        search_term: str,
+        *,
+        archived: bool | None = None,
+        cursor: str | None = None,
+        limit: int | None = None,
+        sort_direction: SortDirection | None = None,
+        sort_key: ThreadSortKey | None = None,
+        source_kinds: list[ThreadSourceKind] | None = None,
+    ) -> ThreadSearchResult:
+        params = ThreadSearchParams(
+            search_term=search_term,
+            archived=archived,
+            cursor=cursor,
+            limit=limit,
+            sort_direction=sort_direction,
+            sort_key=sort_key,
+            source_kinds=source_kinds,
+        )
+        result = await self._request("thread/search", _dump(params))
+        return ThreadSearchResult.model_validate(result)
 
     async def thread_rollback(self, thread_id: str, num_turns: int) -> ThreadInfo:
         result = await self._request(

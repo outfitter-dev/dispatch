@@ -11,7 +11,7 @@ Status: approved design, implemented through v0. Companion research (verified ag
 
 ## Goals / non-goals
 
-Goals (v1): a single daemon that owns one Codex app-server and drives many lanes; a typed CLI and an MCP server, both derived from one contract set; time + event triggers; durable registry of lanes and triggers; full read/write on self-spawned owned lanes. Existing desktop lanes can be attached, but v0 keeps them observe-only per ADR-0005.
+Goals (v1): a single daemon that owns one Codex app-server and drives many lanes; a typed CLI and an MCP server, both derived from one contract set; time + event triggers; durable registry of lanes and triggers; full read/write on self-spawned owned lanes. Existing desktop lanes can be attached as managed lanes. They remain blocked for turn-writing and history-mutating ops per ADR-0005, while explicit metadata/lifecycle actions and search can target managed or unmanaged Codex threads per ADR-0018.
 
 Non-goals (v1): Claude/crew backend; conditional triggers (seam only); dashboard/TUI; full approval policy engine; multi-user; remote-control surface (planned v2).
 
@@ -43,7 +43,7 @@ contracts ──────►├── MCP (mcp SDK) ─┤──► daemon co
 ## Module layout (clean layers; `client` + `registry` importable without the daemon)
 
 `src/outfitter/dispatch/` (PEP 420 namespace — no `__init__.py` at the `outfitter/` level):
-- `client/` — typed App Server client. Spawns app-server, stdio JSONL, message router, async event streams. Primitives: initialize · thread start/resume/list/read/archive · turn start/steer/interrupt · inject_items · approval responder. Pydantic models for wire messages. Importable standalone.
+- `client/` — typed App Server client. Spawns app-server, stdio JSONL, message router, async event streams. Primitives: initialize · thread start/resume/list/read/archive/unarchive/search/name-set · turn start/steer/interrupt · inject_items · approval responder. Pydantic models for wire messages. Importable standalone.
 - `contracts/` — the op definitions (one per operation) + the registry + projection functions (`derive_cli`, `derive_mcp`, `derive_remote`) + error taxonomy.
 - `registry/` — SQLite (aiosqlite) store of lanes, triggers, and an actions audit log. Importable standalone.
 - `core/` — scheduler (time triggers), reactor (event triggers), trigger model + guards, and the handlers that fulfill the contracts.
@@ -77,9 +77,11 @@ Projections (pure functions over the registry, mirroring Trails' `derive* → cr
 - Lane reads/discovery: `lane get <lane>` · `lane status <lane>` · `lane list` ·
   `lane list --unmanaged` · `lane sync <lane>` · `lane tail <lane>` ·
   `lane tail <lane> --follow`
-- Lane management/history: `lane attach <thread> [--sync]` · `lane rename <old> <new>` ·
+- Lane management/history: `rename <target> <new>` · `archive <target>` ·
+  `restore <target>` · `search <query>` with lane/repo/directory/date filters ·
+  `lane attach <thread> [--sync]` · `lane rename <old> <new>` ·
   `lane fork <lane>` · `lane rollback <lane>` · `lane compact <lane>` ·
-  `lane archive <lane>`
+  `lane archive <target>` · `lane restore <target>` · `lane search <lane> <query>`
 - Sending: `send <lane> "…"` with `--mode send|steer|queue|interject|context`
   and equivalent mutually exclusive `--steer`, `--queue`, `--interject`,
   `--context`; `stop <lane>` / `stop --lane <lane>` is cancel-only.
@@ -98,7 +100,7 @@ boundary rather than forced to be one tool per op. The noun for a managed thread
 | --- | --- | --- |
 | `open` | `thread/start` (then register) | `sandbox` is a STRING enum (`read-only`/`workspace-write`/`danger-full-access`); persists by default (`ephemeral:false`) → spawned lanes show in desktop app, matching the `→ @project:name` convention. |
 | `new` | `thread/start` + `thread/name/set` + optional `turn/start` | Applies `.dispatch/config.toml` defaults/presets, name prefixes, verified session/turn options, and optional initial payload. |
-| `attach` | `thread/read(includeTurns:false)` (+ register) | Metadata-only by default: verifies the thread id, registers an observe-only attached lane, and stores sync state without loading turn history. `--sync` runs a quick local index refresh after registration. |
+| `attach` | `thread/read(includeTurns:false)` (+ register) | Metadata-only by default: verifies the thread id, registers a turn-write locked attached lane, and stores sync state without loading turn history. `--sync` runs a quick local index refresh after registration. |
 | `sync` (`lane sync`) | `thread/read(includeTurns:false)` + bounded local JSONL parsing | Refreshes dispatch's index/cache for a lane: source file identity, sync state, latest event timestamp, latest turn id, preview, and selected metadata. Does not copy transcripts wholesale or grant attached-lane write authority. |
 | `send` (`mode=send`) | `turn/start` | Delivers a message the lane processes + answers. The DM/`send_message_to_thread` equivalent. `sandboxPolicy` here is an OBJECT (`{type:"readOnly"}`) — different encoding than `thread/start.sandbox`. |
 | `send` (`mode=queue`) | registry queue + later `turn/start` | Persists local queued delivery and starts one queued turn when the lane becomes idle. |
@@ -106,7 +108,10 @@ boundary rather than forced to be one tool per op. The noun for a managed thread
 | `send` (`mode=context`) | `thread/inject_items` | Silent model-visible context injection (Responses-API items); no turn runs. Trigger actions still call this lower-level behavior `brief`. |
 | `send` (`mode=interject`) | `turn/interrupt` + `turn/start` | Requires an active turn id, cancels that turn, then starts replacement work. |
 | `stop` | `turn/interrupt` | Requires an active turn id and cancels the active turn without replacement text. |
-| `archive` | `thread/archive` | Reversible via `thread/unarchive` for persisted lanes. If App Server reports `no rollout found` for an owned no-rollout lane, dispatch archives the local registry entry so throwaway lanes can be cleaned up. |
+| `lane-rename` (`rename`, `lane rename`) | `thread/name/set` (+ registry update when managed) | Accepts a managed lane id/handle or a raw unmanaged Codex thread id. Unresolved `@handles` fail as missing lanes rather than falling through as raw ids. |
+| `archive` (`archive`, `lane archive`) | `thread/archive` | Accepts managed lanes or unmanaged raw thread ids. If App Server reports `no rollout found` for an owned no-rollout lane, dispatch archives the local registry entry so throwaway lanes can be cleaned up. |
+| `restore` (`restore`, `lane restore`) | `thread/unarchive` | Restores the archived Codex thread only; does not resume or start a new turn. |
+| `search` (`search`, `lane search`) | experimental `thread/search` for broad search; `thread/read(includeTurns:true)` for one-lane search | Broad search uses App Server search plus dispatch-side managed/unmanaged, repo/directory, and date filters. Lane-focused search reads one transcript and scans locally because App Server search has no thread-id filter. |
 | `roster` (`lane list`) | `thread/list` + registry + status | List results are under `result.data` (NOT `result.threads`); `useStateDbOnly:true` reads the persisted store. |
 | `discover` (`lane list --unmanaged`) | `thread/list` state DB only | Lists persisted Codex sessions that could be attached; it does not resume or register them. |
 | `show` (`lane get/status`) | registry + optional `thread/read(includeTurns:true)` | Compact lane summary; optional transcript convenience. |
@@ -130,9 +135,11 @@ A trigger binds **when → action → lane**, stored in the registry:
 
 The scheduler is **our own** (asyncio): a time wheel for time triggers + the reactor consuming the event stream for event triggers. We do not use Codex's filesystem automations (they're daemon-registered, not protocol; live pickup unconfirmed) — owning the scheduler gives full control and is why this approach was chosen.
 
-## Lanes: owned write, attached observe-only
+## Lanes: owned write, attached managed, unmanaged raw threads
 
-The daemon drives threads it spawns (`new`, backed by the lower-level `open` op) with full read/write. Existing desktop threads can be registered with `attach`, but they are **observe-only in v0**. The Phase-1 cross-process spike confirmed that a second app-server process can discover and read persisted history, but live event fan-out does not cross processes and concurrent turns are uncoordinated. Dispatch's advisory lock is dispatch-local; it cannot gate the desktop app. ADR-0005 keeps attached-lane writes locked until there is a real cross-process interlock and an explicit user opt-in.
+The daemon drives threads it spawns (`new`, backed by the lower-level `open` op) with full read/write. Existing desktop threads can be registered with `attach`, becoming **managed attached lanes**. The Phase-1 cross-process spike confirmed that a second app-server process can discover and read persisted history, but live event fan-out does not cross processes and concurrent turns are uncoordinated. Dispatch's advisory lock is dispatch-local; it cannot gate the desktop app.
+
+ADR-0005 keeps turn-writing and history-mutating ops locked on attached lanes until there is a real cross-process interlock and an explicit user opt-in. ADR-0018 carves out explicit metadata/lifecycle actions (`rename`, `archive`, `restore`) and search because they do not start turns, steer turns, or mutate turn history. **Unmanaged** means a persisted Codex thread visible to App Server but not registered in dispatch; sync remains a separate managed-lane index refresh.
 
 ## Approvals (v1 minimal)
 
@@ -181,6 +188,6 @@ The client supports the full responder loop. v1 surfaces `waiting_on_approval` a
 
 ## Open risks / questions
 
-- **Cross-process contention** (dispatch vs desktop app-server on one thread) — resolved for v0 by ADR-0005: attached lanes are observe-only.
+- **Cross-process contention** (dispatch vs desktop app-server on one thread) — resolved for v0 by ADR-0005/0018: attached lanes are turn-write locked, while metadata/lifecycle actions are explicit.
 - **MCP transport** — stdio first; SSE/streamable-HTTP later (mirrors Codex/Trails MCP status).
 - **App-server version drift** — pin the binary; the Python SDK pins an older CLI (0.132) than local (0.136), so we drive the binary directly, not via the SDK.

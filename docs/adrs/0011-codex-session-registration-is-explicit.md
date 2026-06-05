@@ -12,7 +12,7 @@ owners: ['[galligan](https://github.com/galligan)']
 
 ## Context
 
-dispatch can discover persisted Codex sessions and attach them as lanes, but ADR-0005 keeps attached lanes observe-only by default because desktop Codex and dispatch run separate app-server processes over shared state. Automatically "picking up" every new Codex session would surprise users who do not want all agents visible to dispatch, a mesh peer, an MCP client, or automation triggers.
+dispatch can discover persisted Codex sessions and attach them as lanes, but ADR-0005 keeps attached lanes blocked for turn-writing by default because desktop Codex and dispatch run separate app-server processes over shared state. Automatically "picking up" every new Codex session would surprise users who do not want all agents visible to dispatch, a mesh peer, an MCP client, or automation triggers.
 
 Some users will want the opposite: a smooth path where sessions created in Codex become known to dispatch without manual `attach`. Codex hooks on session/thread start could provide that path by registering a session intentionally at creation time.
 

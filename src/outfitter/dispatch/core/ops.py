@@ -35,10 +35,14 @@ from .models import (
     RollbackInput,
     Roster,
     RosterInput,
+    SearchInput,
+    SearchOutput,
     SendInput,
     ShowInput,
     StatusInput,
     StatusOutput,
+    ThreadActionRef,
+    ThreadTargetInput,
     TranscriptInput,
     TranscriptOutput,
     TriggerAddInput,
@@ -93,7 +97,7 @@ NEW = define_op(
 
 ATTACH = define_op(
     id="attach",
-    summary="Attach to an existing lane (observe-only; ADR-0005).",
+    summary="Attach to an existing lane (turn-write locked; ADR-0005).",
     input=AttachInput,
     output=LaneRef,
     intent="write",
@@ -145,13 +149,25 @@ SHOW = define_op(
 
 LANE_RENAME = define_op(
     id="lane-rename",
-    summary="Rename a managed lane handle.",
+    summary="Rename a lane handle or Codex thread.",
     input=LaneRenameInput,
-    output=LaneRef,
+    output=ThreadActionRef,
     intent="write",
     idempotent=False,
     handler=handlers.rename_lane,
-    examples=[Example("missing", input={"old": "nope", "new": "docs"}, raises=NotFoundError)],
+    examples=[
+        Example(
+            "unmanaged",
+            input={"old": "T1", "new": "docs"},
+            output={
+                "id": "T1",
+                "handle": None,
+                "managed": False,
+                "source": "unmanaged",
+                "status": None,
+            },
+        )
+    ],
 )
 
 TRANSCRIPT = define_op(
@@ -209,15 +225,73 @@ DISCOVER = define_op(
     examples=[Example("empty", input={"limit": 50}, output={"sessions": []})],
 )
 
+SEARCH = define_op(
+    id="search",
+    summary="Search Codex thread history.",
+    input=SearchInput,
+    output=SearchOutput,
+    intent="read",
+    idempotent=True,
+    handler=handlers.search,
+    examples=[
+        Example(
+            "empty",
+            input={"query": "needle"},
+            output={
+                "query": "needle",
+                "matches": [],
+                "scanned": 0,
+                "next_cursor": None,
+                "experimental": True,
+            },
+        )
+    ],
+)
+
 ARCHIVE = define_op(
     id="archive",
-    summary="Archive a lane (reversible).",
-    input=LaneInput,
-    output=LaneRef,
+    summary="Archive a lane or unmanaged Codex thread.",
+    input=ThreadTargetInput,
+    output=ThreadActionRef,
     intent="destroy",
     idempotent=True,
     handler=handlers.archive,
-    examples=[Example("missing", input={"lane": "nope"}, raises=NotFoundError)],
+    examples=[
+        Example(
+            "unmanaged",
+            input={"target": "T1"},
+            output={
+                "id": "T1",
+                "handle": None,
+                "managed": False,
+                "source": "unmanaged",
+                "status": "archived",
+            },
+        )
+    ],
+)
+
+RESTORE = define_op(
+    id="restore",
+    summary="Restore an archived lane or unmanaged Codex thread.",
+    input=ThreadTargetInput,
+    output=ThreadActionRef,
+    intent="write",
+    idempotent=True,
+    handler=handlers.restore,
+    examples=[
+        Example(
+            "unmanaged",
+            input={"target": "T1"},
+            output={
+                "id": "T1",
+                "handle": None,
+                "managed": False,
+                "source": "unmanaged",
+                "status": "unknown",
+            },
+        )
+    ],
 )
 
 GOAL_GET = define_op(
@@ -390,7 +464,9 @@ _ALL = (
     SYNC,
     ROSTER,
     DISCOVER,
+    SEARCH,
     ARCHIVE,
+    RESTORE,
     GOAL_GET,
     GOAL_SET,
     GOAL_CLEAR,

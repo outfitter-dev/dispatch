@@ -13,7 +13,7 @@ Files are `NNNN-slug.md`. Copy [`template.md`](template.md) to start one. Keep t
 | [0002](0002-single-daemon-over-one-app-server.md) | Single Daemon over One App Server | Accepted |
 | [0003](0003-own-scheduler-not-codex-automations.md) | Own Scheduler, Not Codex Automations | Accepted |
 | 0004 | Single-Sourced Agent Docs (`.claude/rules` ↔ `AGENTS.md` symlinks) | Accepted — see [`.claude/rules/agent-docs.md`](../../.claude/rules/agent-docs.md) |
-| [0005](0005-lane-authority-capability-ladder.md) | Lane Authority Capability Ladder | Accepted — Phase-1 spike confirmed attached=observe-only |
+| [0005](0005-lane-authority-capability-ladder.md) | Lane Authority Capability Ladder | Accepted — Phase-1 spike keeps attached lanes turn-write locked |
 | [0006](0006-handler-context-and-di.md) | Handler Context and Dependency Injection | Accepted |
 | [0007](0007-normalized-internal-lane-events.md) | Normalized Internal LaneEvent Vocabulary | Accepted |
 | [0008](0008-control-socket-protocol.md) | Control-Socket Protocol — JSON-RPC-lite over JSONL | Accepted |
@@ -26,3 +26,4 @@ Files are `NNNN-slug.md`. Copy [`template.md`](template.md) to start one. Keep t
 | [0015](0015-new-command-config-presets-and-name-prefixes.md) | New Command, Config Presets, and Name Prefixes | Proposed |
 | [0016](0016-history-goals-and-bounded-watch.md) | History, Goals, and Bounded Watch | Accepted |
 | [0017](0017-progressive-thread-sync-index.md) | Progressive Thread Sync Index | Accepted |
+| [0018](0018-top-level-thread-actions-and-search.md) | Top-Level Thread Actions and Search | Accepted |

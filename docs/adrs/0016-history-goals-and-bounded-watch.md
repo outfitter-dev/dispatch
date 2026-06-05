@@ -40,7 +40,7 @@ Treat `watch` as a bounded sample, not a streaming subscription. A durable live 
 belongs in a later protocol change that can push events over the control socket.
 
 Keep mutating history/goal operations locked to owned lanes. Attached lanes remain
-observe-only until cross-process semantics are verified.
+turn-write locked until cross-process semantics are verified.
 
 ## Consequences
 
@@ -48,8 +48,8 @@ observe-only until cross-process semantics are verified.
 
 - Agents can harvest history, inspect goals, and control long-running lanes without
   leaving the contract-derived CLI/MCP architecture.
-- The implementation uses stable App Server methods and avoids experimental
-  `thread/turns/list` or `thread/search`.
+- The implementation uses stable App Server methods for transcript, goal, and history
+  controls. ADR-0018 separately allows broad search on experimental `thread/search`.
 - The watch surface is honest about current transport limits.
 
 ### Negative
@@ -65,5 +65,7 @@ observe-only until cross-process semantics are verified.
   and existing operator docs made `show` the summary command.
 - **Expose a fake infinite `tail` over request/response JSONL** — rejected: it would
   be misleading and fragile.
-- **Use experimental `thread/turns/list` and `thread/search` now** — rejected: stable
-  `thread/read(includeTurns:true)` is enough for the first history surface.
+- **Use experimental `thread/turns/list` for transcript now** — rejected: stable
+  `thread/read(includeTurns:true)` is enough for the first history surface. ADR-0018 later
+  accepts experimental `thread/search` only for broad search, where stable App Server
+  primitives do not provide an equivalent.

@@ -197,7 +197,7 @@ Use `send --context` for silent context injection. It adds model-visible context
 starting a turn:
 
 ```bash
-uv run dispatch send @docs-review "Context: attached lanes are observe-only in v0." --context
+uv run dispatch send @docs-review "Context: attached lanes are not turn-writable in v0." --context
 ```
 
 Use `send --steer` only while the lane has an active turn:
@@ -273,6 +273,45 @@ uv run dispatch lane compact @docs-review
 `rollback` only truncates persisted App Server history. It does not revert local files.
 Treat it as a conversation-history operation, not a source-control undo.
 
+## Thread Actions And Search
+
+`rename`, `archive`, and `restore` are top-level thread actions. They accept a managed
+lane id, a managed `@handle`, or a raw unmanaged Codex thread id:
+
+```bash
+uv run dispatch rename @docs-review docs-review-final
+uv run dispatch archive @docs-review
+uv run dispatch restore <codex-thread-id>
+```
+
+`restore` unarchives the thread only; it does not resume the thread or start a new turn.
+Use the `lane` group when you want the same actions to read as lane management:
+
+```bash
+uv run dispatch lane rename @docs-review docs-review-final
+uv run dispatch lane archive @docs-review
+uv run dispatch lane restore @docs-review
+```
+
+Use `search` to search Codex thread history without first attaching every thread:
+
+```bash
+uv run dispatch search "schema drift"
+uv run dispatch search "schema drift" --managed
+uv run dispatch search "schema drift" --unmanaged
+uv run dispatch search "schema drift" --lane @docs-review
+uv run dispatch search "schema drift" --repo .
+uv run dispatch search "schema drift" --dir /path/to/project
+uv run dispatch search "schema drift" --since 2026-06-01 --until 2026-06-05
+uv run dispatch lane search @docs-review "schema drift"
+```
+
+Broad search uses the App Server experimental `thread/search` primitive, then applies
+dispatch-side filters for managed/unmanaged state, repo/directory, and date bounds. Lane
+focused search reads that one thread with `thread/read(includeTurns:true)` and performs a
+local substring scan. Date bounds accept ISO dates or datetimes and default to filtering
+`updated_at`; use `--date-field created_at` when creation time matters.
+
 ## Discover Sessions
 
 `lane list` lists the lanes dispatch already manages. `lane list --unmanaged` is the other
@@ -292,8 +331,10 @@ uv run dispatch lane attach <id-from-lane-list-unmanaged>
 uv run dispatch lane attach <id-from-lane-list-unmanaged> --sync
 ```
 
-Keep the two straight: `lane list --unmanaged` shows attachable Codex sessions (not yet
-lanes); `lane list` shows managed lanes (owned or already attached).
+Keep the two straight: `lane list --unmanaged` shows unmanaged Codex sessions that are not
+registered in dispatch; `lane list` shows managed lanes (owned or already attached). Sync is
+separate from both: `lane sync` refreshes dispatch's local index for a managed lane, but it
+does not change ownership or write authority.
 
 ## Attached Lanes
 
@@ -304,10 +345,12 @@ uv run dispatch lane attach <codex-thread-id>
 uv run dispatch lane sync <lane>
 ```
 
-Attached lanes are observe-only in v0. Dispatch can register and inspect them, but it must
-not write to them because the desktop app uses a separate app-server process and there is no
-cross-process write interlock. ADR-0005 is the authoritative decision:
-[`docs/adrs/0005-lane-authority-capability-ladder.md`](../adrs/0005-lane-authority-capability-ladder.md).
+Attached lanes allow observation, sync, and explicit metadata/lifecycle actions such as
+`rename`, `archive`, and `restore`. Dispatch still must not write turns or mutate history on
+attached lanes because the desktop app uses a separate app-server process and there is no
+cross-process write interlock. ADR-0005 and ADR-0018 are the authoritative decisions:
+[`docs/adrs/0005-lane-authority-capability-ladder.md`](../adrs/0005-lane-authority-capability-ladder.md)
+and [`docs/adrs/0018-top-level-thread-actions-and-search.md`](../adrs/0018-top-level-thread-actions-and-search.md).
 
 Attach is compact by default: it verifies the thread with App Server
 `thread/read(includeTurns:false)`, registers the lane, and stores metadata sync state. It

@@ -1,13 +1,17 @@
 """Op handlers. Surface-agnostic: input + ctx in, output or raise out. They never
 import CLI/MCP/socket types; side effects go through ``ctx`` (ADR-0006).
 
-Authority guard (ADR-0005): owned lanes are read/write; attached lanes are
-observe-only — ``send``/``steer``/``brief``/``interrupt`` raise ``AuthorityError``.
+Authority guard (ADR-0005/0018): owned lanes are read/write; attached lanes can
+be observed and have explicit metadata/lifecycle actions, but turn-writing and
+history-mutating ops still raise ``AuthorityError``.
 """
 
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, time
+from pathlib import Path
+from typing import cast
 
 from pydantic import ValidationError as PydanticValidationError
 
@@ -29,7 +33,7 @@ from outfitter.dispatch.contracts.errors import (
     ValidationError,
     project_error,
 )
-from outfitter.dispatch.registry.models import Lane, LaneSync, SyncState
+from outfitter.dispatch.registry.models import Lane, LaneStatus, LaneSync, SyncState
 
 from . import queue
 from .models import (
@@ -63,10 +67,15 @@ from .models import (
     RollbackInput,
     Roster,
     RosterInput,
+    SearchInput,
+    SearchMatch,
+    SearchOutput,
     SendInput,
     ShowInput,
     StatusInput,
     StatusOutput,
+    ThreadActionRef,
+    ThreadTargetInput,
     TranscriptInput,
     TranscriptItem,
     TranscriptOutput,
@@ -88,6 +97,23 @@ _PREVIEW_MAX = 80
 
 def _ref(lane: Lane) -> LaneRef:
     return LaneRef(id=lane.id, handle=lane.handle, source=lane.source, status=lane.status)
+
+
+def _action_ref(
+    *,
+    thread_id: str,
+    lane: Lane | None = None,
+    status: str | None = None,
+) -> ThreadActionRef:
+    if lane is None:
+        return ThreadActionRef(id=thread_id, managed=False, source="unmanaged", status=status)
+    return ThreadActionRef(
+        id=lane.id,
+        handle=lane.handle,
+        managed=True,
+        source=lane.source,
+        status=status or lane.status,
+    )
 
 
 def _sync_view(sync: LaneSync | None) -> LaneSyncView:
@@ -114,17 +140,31 @@ def _handle(name: str) -> str:
 
 
 async def _resolve(ctx: Ctx, ref: str) -> Lane:
-    lane = await ctx.registry.find_lane(ref)
-    if lane is None:
-        lane = await ctx.registry.find_lane_by_handle(ref)
+    lane = await _find_lane(ctx, ref)
     if lane is None:
         raise NotFoundError(f"no lane {ref!r}")
     return lane
 
 
+async def _find_lane(ctx: Ctx, ref: str) -> Lane | None:
+    lane = await ctx.registry.find_lane(ref)
+    if lane is None:
+        lane = await ctx.registry.find_lane_by_handle(ref)
+    return lane
+
+
+async def _resolve_thread_target(ctx: Ctx, ref: str) -> tuple[str, Lane | None]:
+    lane = await _find_lane(ctx, ref)
+    if lane is not None:
+        return lane.id, lane
+    if ref.startswith("@"):
+        raise NotFoundError(f"no lane {ref!r}")
+    return ref, None
+
+
 def _require_writable(lane: Lane) -> None:
     if lane.source == "attached":
-        raise AuthorityError(f"lane {lane.handle} is attached (observe-only; ADR-0005)")
+        raise AuthorityError(f"lane {lane.handle} is attached (turn-write locked; ADR-0005/0018)")
 
 
 def _require_active_turn(lane: Lane, action: str) -> str:
@@ -483,20 +523,21 @@ async def sync_lane(inp: LaneSyncInput, ctx: Ctx) -> LaneSyncResult:
     return LaneSyncResult(lane=lane.id, sync=_sync_view(sync))
 
 
-async def rename_lane(inp: LaneRenameInput, ctx: Ctx) -> LaneRef:
-    lane = await _resolve(ctx, inp.old)
+async def rename_lane(inp: LaneRenameInput, ctx: Ctx) -> ThreadActionRef:
+    thread_id, lane = await _resolve_thread_target(ctx, inp.old)
+    if lane is None:
+        await ctx.client.thread_set_name(thread_id, inp.new.removeprefix("@"))
+        await ctx.registry.log_action("lane-rename", lane=thread_id, detail=inp.new)
+        return _action_ref(thread_id=thread_id)
+
     handle = _handle(inp.new)
     existing = await ctx.registry.find_lane_by_handle(handle)
     if existing is not None and existing.id != lane.id:
         raise ValidationError(f"lane handle {handle!r} is already registered")
+    await ctx.client.thread_set_name(lane.id, handle.removeprefix("@"))
     await ctx.registry.update_lane_handle(lane.id, handle)
-    if lane.source == "own":
-        try:
-            await ctx.client.thread_set_name(lane.id, handle.removeprefix("@"))
-        except ClientError as exc:
-            ctx.log.warning("lane.name_set_failed", lane=lane.id, error=str(exc))
     await ctx.registry.log_action("lane-rename", lane=lane.id, detail=handle)
-    return _ref(await ctx.registry.get_lane(lane.id))
+    return _action_ref(thread_id=lane.id, lane=await ctx.registry.get_lane(lane.id))
 
 
 async def watch(inp: WatchInput, ctx: Ctx) -> WatchOutput:
@@ -537,6 +578,67 @@ async def transcript(inp: TranscriptInput, ctx: Ctx) -> TranscriptOutput:
     return TranscriptOutput(
         lane=lane.id,
         items=_transcript_from_thread(result, limit=inp.limit),
+    )
+
+
+async def search(inp: SearchInput, ctx: Ctx) -> SearchOutput:
+    if inp.managed and inp.unmanaged:
+        raise ValidationError("search can filter --managed or --unmanaged, not both")
+    if inp.limit > inp.max_scan:
+        raise ValidationError("search limit cannot exceed max_scan")
+
+    lane_map = {lane.id: lane for lane in await ctx.registry.list_lanes(include_archived=True)}
+    root_filters = _search_roots(inp)
+    since = _parse_bound(inp.since, start=True)
+    until = _parse_bound(inp.until, start=False)
+
+    if inp.lane is not None:
+        return await _search_one_thread(inp, ctx, lane_map, root_filters, since, until)
+
+    matches: list[SearchMatch] = []
+    scanned = 0
+    cursor: str | None = None
+    next_cursor: str | None = None
+    page_limit = min(max(inp.limit * 4, 20), 100)
+    while len(matches) < inp.limit and scanned < inp.max_scan:
+        response = await ctx.client.thread_search(
+            inp.query,
+            archived=inp.archived,
+            cursor=cursor,
+            limit=min(page_limit, inp.max_scan - scanned),
+            sort_direction="asc" if inp.ascending else "desc",
+            sort_key=inp.sort,
+        )
+        if not response.data:
+            next_cursor = response.next_cursor
+            break
+        for candidate in response.data:
+            scanned += 1
+            match = _search_match(
+                candidate.thread,
+                candidate.snippet,
+                lane_map=lane_map,
+                managed_only=inp.managed,
+                unmanaged_only=inp.unmanaged,
+                roots=root_filters,
+                date_field=inp.date_field,
+                since=since,
+                until=until,
+            )
+            if match is not None:
+                matches.append(match)
+            if len(matches) >= inp.limit or scanned >= inp.max_scan:
+                break
+        cursor = response.next_cursor
+        next_cursor = response.next_cursor
+        if cursor is None:
+            break
+
+    return SearchOutput(
+        query=inp.query,
+        matches=matches,
+        scanned=scanned,
+        next_cursor=next_cursor,
     )
 
 
@@ -582,6 +684,157 @@ def _transcript_from_thread(result: dict[str, object], *, limit: int) -> list[Tr
                 )
             )
     return items[-limit:]
+
+
+async def _search_one_thread(
+    inp: SearchInput,
+    ctx: Ctx,
+    lane_map: dict[str, Lane],
+    roots: tuple[Path, ...],
+    since: float | None,
+    until: float | None,
+) -> SearchOutput:
+    assert inp.lane is not None
+    thread_id, _lane = await _resolve_thread_target(ctx, inp.lane)
+    result = await ctx.client.thread_read(thread_id, include_turns=True)
+    try:
+        thread = ThreadResult.model_validate(result).thread
+    except PydanticValidationError as exc:
+        raise AppServerError(
+            f"thread/read transcript for {thread_id!r} returned an invalid payload"
+        ) from exc
+
+    if inp.managed and thread.id not in lane_map:
+        return SearchOutput(query=inp.query, matches=[], scanned=0)
+    if inp.unmanaged and thread.id in lane_map:
+        return SearchOutput(query=inp.query, matches=[], scanned=0)
+    if _outside_roots(thread.cwd, roots) or _outside_date(
+        thread, inp.date_field, since=since, until=until
+    ):
+        return SearchOutput(query=inp.query, matches=[], scanned=0)
+
+    query = inp.query.casefold()
+    items = _transcript_from_thread(result, limit=inp.max_scan)
+    matches: list[SearchMatch] = []
+    scanned = 0
+    for item in items:
+        scanned += 1
+        if item.text is None or query not in item.text.casefold():
+            continue
+        match = _search_match(
+            thread,
+            _short(item.text, limit=200) or "",
+            lane_map=lane_map,
+            managed_only=False,
+            unmanaged_only=False,
+            roots=(),
+            date_field=inp.date_field,
+            since=None,
+            until=None,
+        )
+        if match is not None:
+            matches.append(match)
+        if len(matches) >= inp.limit:
+            break
+    return SearchOutput(query=inp.query, matches=matches, scanned=scanned)
+
+
+def _search_roots(inp: SearchInput) -> tuple[Path, ...]:
+    roots: list[Path] = []
+    if inp.directory is not None:
+        roots.append(_normalize_path(inp.directory))
+    if inp.repo is not None:
+        roots.append(_repo_root(inp.repo))
+    return tuple(roots)
+
+
+def _normalize_path(path: str) -> Path:
+    return Path(path).expanduser().resolve(strict=False)
+
+
+def _repo_root(path: str) -> Path:
+    current = _normalize_path(path)
+    if current.is_file():
+        current = current.parent
+    for candidate in (current, *current.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    raise ValidationError(f"no git repo found at or above {path!r}")
+
+
+def _parse_bound(value: str | None, *, start: bool) -> float | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        raise ValidationError("date bound cannot be empty")
+    try:
+        if len(text) == 10 and text[4] == "-" and text[7] == "-":
+            day = datetime.fromisoformat(text).date()
+            dt = datetime.combine(day, time.min if start else time.max)
+        else:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValidationError(f"invalid ISO date/time: {value!r}") from exc
+    return dt.timestamp()
+
+
+def _search_match(
+    thread: ThreadInfo,
+    snippet: str,
+    *,
+    lane_map: dict[str, Lane],
+    managed_only: bool,
+    unmanaged_only: bool,
+    roots: tuple[Path, ...],
+    date_field: str,
+    since: float | None,
+    until: float | None,
+) -> SearchMatch | None:
+    lane = lane_map.get(thread.id)
+    if managed_only and lane is None:
+        return None
+    if unmanaged_only and lane is not None:
+        return None
+    if _outside_roots(thread.cwd, roots):
+        return None
+    if _outside_date(thread, date_field, since=since, until=until):
+        return None
+
+    source = lane.source if lane is not None else "unmanaged"
+    return SearchMatch(
+        id=thread.id,
+        handle=lane.handle if lane is not None else None,
+        managed=lane is not None,
+        source=source,
+        status=lane.status if lane is not None else (thread.status.type if thread.status else None),
+        name=thread.name,
+        cwd=thread.cwd,
+        preview=_short(thread.preview),
+        snippet=snippet,
+        created_at=thread.created_at,
+        updated_at=thread.updated_at,
+    )
+
+
+def _outside_roots(cwd: str | None, roots: tuple[Path, ...]) -> bool:
+    if not roots:
+        return False
+    if cwd is None:
+        return True
+    path = _normalize_path(cwd)
+    return not all(path == root or path.is_relative_to(root) for root in roots)
+
+
+def _outside_date(
+    thread: ThreadInfo, date_field: str, *, since: float | None, until: float | None
+) -> bool:
+    if since is None and until is None:
+        return False
+    timestamp = thread.created_at if date_field == "created_at" else thread.updated_at
+    if timestamp is None:
+        return True
+    return (since is not None and timestamp < since) or (until is not None and timestamp > until)
 
 
 def _item_text(item: dict[str, object]) -> str | None:
@@ -747,27 +1000,46 @@ def _session(thread: ThreadInfo) -> DiscoveredSession:
 async def discover(inp: DiscoverInput, ctx: Ctx) -> Discovery:
     """List persisted Codex sessions (``thread/list``, state-db only) — read-only and
     distinct from ``roster``: these are candidates to ``attach``, not managed lanes.
-    Discovery does not resume or register anything (ADR-0005 observe-only is untouched)."""
+    Discovery does not resume or register anything."""
     threads = await ctx.client.thread_list(limit=inp.limit, use_state_db_only=True)
     return Discovery(sessions=[_session(thread) for thread in threads])
 
 
-async def archive(inp: LaneInput, ctx: Ctx) -> LaneRef:
-    lane = await _resolve(ctx, inp.lane)
-    _require_writable(lane)  # archiving mutates the shared thread store (ADR-0005)
+async def archive(inp: ThreadTargetInput, ctx: Ctx) -> ThreadActionRef:
+    thread_id, lane = await _resolve_thread_target(ctx, inp.target)
     try:
-        await ctx.client.thread_archive(lane.id)
+        await ctx.client.thread_archive(thread_id)
     except ClientAppServerError as exc:
-        if not _is_no_rollout_archive_error(exc):
+        if lane is None or not _is_no_rollout_archive_error(exc):
             raise
-        ctx.log.info("lane.archive_local_no_rollout", lane=lane.id)
-    await ctx.registry.update_lane_status(lane.id, "archived")
-    await ctx.registry.log_action("archive", lane=lane.id)
-    return _ref(await ctx.registry.get_lane(lane.id))
+        ctx.log.info("lane.archive_local_no_rollout", lane=thread_id)
+    if lane is not None:
+        await ctx.registry.update_lane_status(lane.id, "archived")
+        lane = await ctx.registry.get_lane(lane.id)
+    await ctx.registry.log_action("archive", lane=thread_id)
+    return _action_ref(thread_id=thread_id, lane=lane, status="archived")
 
 
 def _is_no_rollout_archive_error(exc: ClientAppServerError) -> bool:
     return exc.code == -32600 and "no rollout found" in exc.message.lower()
+
+
+async def restore(inp: ThreadTargetInput, ctx: Ctx) -> ThreadActionRef:
+    thread_id, lane = await _resolve_thread_target(ctx, inp.target)
+    thread = await ctx.client.thread_unarchive(thread_id)
+    status = _lane_status(thread)
+    if lane is not None:
+        await ctx.registry.update_lane_status(lane.id, status)
+        lane = await ctx.registry.get_lane(lane.id)
+    await ctx.registry.log_action("restore", lane=thread_id)
+    return _action_ref(thread_id=thread_id, lane=lane, status=status)
+
+
+def _lane_status(thread: ThreadInfo) -> LaneStatus:
+    status = thread.status.type if thread.status is not None else None
+    if status in {"idle", "busy", "waiting_approval", "archived", "error", "unknown"}:
+        return cast(LaneStatus, status)
+    return "unknown"
 
 
 async def status(inp: StatusInput, ctx: Ctx) -> StatusOutput:

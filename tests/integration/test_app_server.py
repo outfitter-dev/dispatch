@@ -82,7 +82,7 @@ async def test_persisted_resume_yields_live_events(client: AppServerClient, work
     # dispatch's real topology: ONE app-server, many lanes on one connection. Resuming
     # a persisted thread on that connection yields live events for the next turn.
     # (Cross-PROCESS live fan-out does NOT happen — recorded in RETRO/ADR-0005 from the
-    # Phase-1 spike; that is why attached lanes stay observe-only.)
+    # Phase-1 spike; that is why attached lanes stay turn-write locked.)
     thread = await client.thread_start(cwd=str(work_dir), sandbox="read-only", ephemeral=False)
     await run_turn(client, thread.id, "Reply one word: alpha", str(work_dir))  # persist a rollout
     resumed = await client.thread_resume(thread.id)
@@ -137,8 +137,37 @@ async def test_thread_read_goal_and_history_controls(
         await client.thread_archive(thread.id)
 
 
+async def test_thread_search_and_unarchive_primitives(
+    client: AppServerClient, work_dir: Path
+) -> None:
+    thread = await client.thread_start(cwd=str(work_dir), sandbox="read-only", ephemeral=False)
+    try:
+        await run_turn(
+            client,
+            thread.id,
+            "Reply with exactly one word: dispatchsearchneedle",
+            str(work_dir),
+        )
+        assert await _await_search_match(client, "dispatchsearchneedle", thread.id)
+
+        await client.thread_archive(thread.id)
+        restored = await client.thread_unarchive(thread.id)
+        assert restored.id == thread.id
+    finally:
+        await client.thread_archive(thread.id)
+
+
 async def _await_completion(events: AsyncIterator[LaneEvent], lane: str) -> bool:
     async for event in events:
         if isinstance(event, TurnCompleted) and event.lane_id == lane:
             return True
+    return False
+
+
+async def _await_search_match(client: AppServerClient, query: str, thread_id: str) -> bool:
+    for _ in range(10):
+        result = await client.thread_search(query, limit=20)
+        if any(match.thread.id == thread_id for match in result.data):
+            return True
+        await asyncio.sleep(0.25)
     return False

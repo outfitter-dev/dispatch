@@ -52,6 +52,7 @@ _GROUPS: tuple[_ToolGroup, ...] = (
             ("transcript", "transcript"),
             ("watch", "watch"),
             ("goal_get", "goal-get"),
+            ("search", "search"),
         ),
     ),
     _ToolGroup(
@@ -66,6 +67,7 @@ _GROUPS: tuple[_ToolGroup, ...] = (
             ("rename", "lane-rename"),
             ("send", "send"),
             ("stop", "stop"),
+            ("restore", "restore"),
             ("goal_set", "goal-set"),
             ("fork", "fork"),
             ("compact", "compact"),

@@ -21,6 +21,9 @@ from outfitter.dispatch.registry.models import LaneSource, LaneStatus, SyncState
 # --- inputs -------------------------------------------------------------------
 
 SendMode = Literal["send", "steer", "queue", "interject", "context"]
+ThreadActionSource = Literal["own", "attached", "unmanaged"]
+SearchSortKey = Literal["created_at", "updated_at"]
+SearchDateField = Literal["created_at", "updated_at"]
 
 
 class OpenInput(BaseModel):
@@ -83,14 +86,49 @@ class LaneInput(BaseModel):
     lane: str = Field(description="Lane id or @handle.")
 
 
+class ThreadTargetInput(BaseModel):
+    target: str = Field(description="Lane id, @handle, or raw Codex thread id.")
+
+
 class LaneSyncInput(BaseModel):
     lane: str = Field(description="Lane id or @handle.")
     full: bool = Field(default=False, description="Scan the full source file instead of top+tail.")
 
 
 class LaneRenameInput(BaseModel):
-    old: str = Field(description="Existing lane id or @handle.")
-    new: str = Field(description="New lane handle; @ is optional.")
+    old: str = Field(description="Existing lane id, @handle, or raw Codex thread id.")
+    new: str = Field(description="New lane handle/thread name; @ is optional for managed lanes.")
+
+
+class SearchInput(BaseModel):
+    query: str = Field(description="Substring/full-text query for Codex thread search.")
+    lane: str | None = Field(
+        default=None, description="Limit search to one lane id, @handle, or raw Codex thread id."
+    )
+    directory: str | None = Field(
+        default=None, description="Only include threads whose cwd is inside this directory."
+    )
+    repo: str | None = Field(
+        default=None, description="Only include threads whose cwd is inside this repo root."
+    )
+    managed: bool = Field(default=False, description="Only include dispatch-managed lanes.")
+    unmanaged: bool = Field(default=False, description="Only include unmanaged Codex threads.")
+    archived: bool = Field(
+        default=False, description="Search archived threads instead of active ones."
+    )
+    since: str | None = Field(default=None, description="Inclusive ISO date/time lower bound.")
+    until: str | None = Field(default=None, description="Inclusive ISO date/time upper bound.")
+    date_field: SearchDateField = Field(
+        default="updated_at", description="Timestamp field used for since/until filtering."
+    )
+    sort: SearchSortKey = Field(default="updated_at", description="App Server search sort key.")
+    ascending: bool = Field(default=False, description="Sort oldest first.")
+    limit: int = Field(default=20, ge=1, description="Max matches to return.")
+    max_scan: int = Field(
+        default=200,
+        ge=1,
+        description="Max App Server matches to scan while applying dispatch-side filters.",
+    )
 
 
 class ShowInput(BaseModel):
@@ -180,6 +218,14 @@ class LaneRef(BaseModel):
     handle: str
     source: LaneSource
     status: LaneStatus
+
+
+class ThreadActionRef(BaseModel):
+    id: str
+    handle: str | None = None
+    managed: bool
+    source: ThreadActionSource
+    status: str | None = None
 
 
 class LaneSyncView(BaseModel):
@@ -279,6 +325,28 @@ class DiscoveredSession(BaseModel):
 
 class Discovery(BaseModel):
     sessions: list[DiscoveredSession]
+
+
+class SearchMatch(BaseModel):
+    id: str
+    handle: str | None = None
+    managed: bool
+    source: ThreadActionSource
+    status: str | None = None
+    name: str | None = None
+    cwd: str | None = None
+    preview: str | None = None
+    snippet: str
+    created_at: int | None = None
+    updated_at: int | None = None
+
+
+class SearchOutput(BaseModel):
+    query: str
+    matches: list[SearchMatch]
+    scanned: int
+    next_cursor: str | None = None
+    experimental: bool = True
 
 
 # --- trigger ops --------------------------------------------------------------

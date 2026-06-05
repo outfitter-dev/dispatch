@@ -78,6 +78,61 @@ def test_new_command_maps_repeated_presets_and_no_send() -> None:
     assert params["send"] is False
 
 
+def test_top_level_thread_actions_route_to_lane_contracts() -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        calls.append((op_id, params))
+        if op_id == "search":
+            return {
+                "query": "needle",
+                "matches": [],
+                "scanned": 0,
+                "next_cursor": None,
+                "experimental": True,
+            }
+        return {
+            "id": "L1",
+            "handle": "@x",
+            "managed": True,
+            "source": "own",
+            "status": "idle",
+        }
+
+    app = derive_cli(REGISTRY, invoke)
+
+    renamed = runner.invoke(app, ["rename", "@old", "new"])
+    restored = runner.invoke(app, ["restore", "@old"])
+    searched = runner.invoke(app, ["search", "needle", "--lane", "@old", "--limit", "5"])
+
+    assert renamed.exit_code == 0
+    assert restored.exit_code == 0
+    assert searched.exit_code == 0
+    assert calls == [
+        ("lane-rename", {"old": "@old", "new": "new"}),
+        ("restore", {"target": "@old"}),
+        (
+            "search",
+            {
+                "query": "needle",
+                "lane": "@old",
+                "directory": None,
+                "repo": None,
+                "managed": False,
+                "unmanaged": False,
+                "archived": False,
+                "since": None,
+                "until": None,
+                "date_field": "updated_at",
+                "sort": "updated_at",
+                "ascending": False,
+                "limit": 5,
+                "max_scan": 200,
+            },
+        ),
+    ]
+
+
 def test_lane_group_routes_core_lane_commands() -> None:
     calls: list[tuple[str, dict[str, object]]] = []
 
@@ -86,7 +141,29 @@ def test_lane_group_routes_core_lane_commands() -> None:
         if op_id == "discover":
             return {"sessions": []}
         if op_id == "lane-rename":
-            return {"id": "L1", "handle": "@new", "source": "own", "status": "idle"}
+            return {
+                "id": "L1",
+                "handle": "@new",
+                "managed": True,
+                "source": "own",
+                "status": "idle",
+            }
+        if op_id == "search":
+            return {
+                "query": "needle",
+                "matches": [],
+                "scanned": 0,
+                "next_cursor": None,
+                "experimental": True,
+            }
+        if op_id == "restore":
+            return {
+                "id": "L1",
+                "handle": "@old",
+                "managed": True,
+                "source": "own",
+                "status": "idle",
+            }
         return {"lanes": []}
 
     app = derive_cli(REGISTRY, invoke)
@@ -94,14 +171,38 @@ def test_lane_group_routes_core_lane_commands() -> None:
     managed = runner.invoke(app, ["lane", "list"])
     unmanaged = runner.invoke(app, ["lane", "list", "--unmanaged", "--limit", "5"])
     renamed = runner.invoke(app, ["lane", "rename", "@old", "new"])
+    lane_search = runner.invoke(app, ["lane", "search", "@old", "needle"])
+    restored = runner.invoke(app, ["lane", "restore", "@old"])
 
     assert managed.exit_code == 0
     assert unmanaged.exit_code == 0
     assert renamed.exit_code == 0
+    assert lane_search.exit_code == 0
+    assert restored.exit_code == 0
     assert calls == [
         ("roster", {"include_archived": False}),
         ("discover", {"limit": 5}),
         ("lane-rename", {"old": "@old", "new": "new"}),
+        (
+            "search",
+            {
+                "query": "needle",
+                "lane": "@old",
+                "directory": None,
+                "repo": None,
+                "managed": False,
+                "unmanaged": False,
+                "archived": False,
+                "since": None,
+                "until": None,
+                "date_field": "updated_at",
+                "sort": "updated_at",
+                "ascending": False,
+                "limit": 20,
+                "max_scan": 200,
+            },
+        ),
+        ("restore", {"target": "@old"}),
     ]
 
 
@@ -142,7 +243,13 @@ def test_goal_trigger_and_daemon_groups_replace_hyphen_commands() -> None:
 
 def test_lane_archive_prompts_for_confirmation() -> None:
     def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
-        return {"id": "L1", "handle": "@x", "source": "own", "status": "archived"}
+        return {
+            "id": "L1",
+            "handle": "@x",
+            "managed": True,
+            "source": "own",
+            "status": "archived",
+        }
 
     app = derive_cli(REGISTRY, invoke)
     declined = runner.invoke(app, ["lane", "archive", "L1"], input="n\n")
@@ -153,7 +260,13 @@ def test_lane_archive_prompts_for_confirmation() -> None:
 
 def test_json_destroy_prompt_does_not_pollute_stdout() -> None:
     def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
-        return {"id": "L1", "handle": "@x", "source": "own", "status": "archived"}
+        return {
+            "id": "L1",
+            "handle": "@x",
+            "managed": True,
+            "source": "own",
+            "status": "archived",
+        }
 
     app = derive_cli(REGISTRY, invoke)
     result = runner.invoke(app, ["lane", "archive", "L1", "--json"], input="y\n")
@@ -164,6 +277,7 @@ def test_json_destroy_prompt_does_not_pollute_stdout() -> None:
     assert json.loads(payload) == {
         "id": "L1",
         "handle": "@x",
+        "managed": True,
         "source": "own",
         "status": "archived",
     }
@@ -194,14 +308,21 @@ def test_schema_command_resolves_composed_cli_routes() -> None:
     app = derive_cli(REGISTRY, lambda _op, _params: {})
 
     unmanaged = runner.invoke(app, ["schema", "lane list --unmanaged"])
+    search = runner.invoke(app, ["schema", "search"])
+    lane_search = runner.invoke(app, ["schema", "lane search"])
     follow = runner.invoke(app, ["schema", "lane tail --follow"])
     fork = runner.invoke(app, ["schema", "lane fork"])
     rollback = runner.invoke(app, ["schema", "lane rollback"])
     compact = runner.invoke(app, ["schema", "lane compact"])
     archive = runner.invoke(app, ["schema", "lane archive"])
+    restore = runner.invoke(app, ["schema", "restore"])
 
     assert unmanaged.exit_code == 0
     assert '"op": "discover"' in unmanaged.output
+    assert search.exit_code == 0
+    assert '"op": "search"' in search.output
+    assert lane_search.exit_code == 0
+    assert '"op": "search"' in lane_search.output
     assert follow.exit_code == 0
     assert '"op": "watch"' in follow.output
     assert '"timeout"' in follow.output
@@ -213,6 +334,8 @@ def test_schema_command_resolves_composed_cli_routes() -> None:
     assert '"op": "compact"' in compact.output
     assert archive.exit_code == 0
     assert '"op": "archive"' in archive.output
+    assert restore.exit_code == 0
+    assert '"op": "restore"' in restore.output
 
 
 def test_schema_command_unknown_target_is_usage_error() -> None:

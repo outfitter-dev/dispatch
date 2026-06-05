@@ -10,7 +10,7 @@ owners: ['[galligan](https://github.com/galligan)']
 
 # ADR-0005: Lane Authority Capability Ladder
 
-> Accepted (2026-06-03) after the Phase-1 cross-process spike. The spike did **not** clear attached-lane writes — it confirmed the observe-only default and revealed that cross-process observation is not even live. See "Phase-1 spike outcome" below. The gated write rungs remain locked for v0.
+> Accepted (2026-06-03) after the Phase-1 cross-process spike. The spike did **not** clear attached-lane turn writes — it confirmed the write-locked default and revealed that cross-process observation is not live. See "Phase-1 spike outcome" below. The gated turn-write rungs remain locked for v0.
 
 ## Context
 
@@ -21,7 +21,7 @@ dispatch drives both lanes it **owns** (created via `open`) and lanes it **attac
 Authority over a lane is a ladder, not a flag:
 
 - **Owned lanes** (dispatch created them): full read/write, always.
-- **Attached lanes** (existing desktop threads): **observe-only by default** — read metadata, sync a local index, read history; no `send`/`steer`/`brief`/`interrupt`.
+- **Attached lanes** (existing desktop threads): turn-writing and history-mutating ops are blocked by default — read metadata, sync a local index, read history, and allow explicit metadata/lifecycle actions (`rename`, `archive`, `restore`); no `send`/`steer`/`brief`/`interrupt`, `goal set/clear`, `fork`, `rollback`, or `compact`.
 - **idle-only-write** and **full-write** on attached lanes are unlocked only when **(a)** the slice-0 cross-process spike shows it is safe, **and (b)** the user explicitly opts in (per-lane or global).
 
 ## Assumptions (must hold; verify before relying)
@@ -44,7 +44,7 @@ Two `codex app-server` processes shared one isolated `CODEX_HOME` (modelling our
 - **Live fan-out does NOT cross processes:** while A ran a turn, B (resumed) received **zero** live events. Live event fan-out is intra-process only (one app-server process). The spike-04 "resume = live co-presence" finding holds only for multiple connections to the *same* server process — which is exactly dispatch's own topology (ADR-0002), not the desktop-vs-daemon case.
 - **Concurrent turns are uncoordinated:** A and B each ran a turn on the shared thread with no error returned, but there is no cross-process interlock (dispatch's advisory lock is dispatch-local and cannot gate the desktop app), so "no error" is not "safe."
 
-**Decision:** keep attached lanes **observe-only** for v0. Observation is limited to metadata reads, explicit sync, history read, and periodic re-read (no live cross-process stream). ADR-0017 makes default attach metadata-only instead of `thread/resume`-based. The idle-only-write and full-write rungs stay locked; unlocking them needs a real cross-process interlock, which Codex does not expose today. This is the safe default the ladder already proposed — the spike confirms rather than relaxes it.
+**Decision:** keep attached lanes locked for turn-writing and history-mutating ops in v0. Observation is limited to metadata reads, explicit sync, history read, and periodic re-read (no live cross-process stream). ADR-0018 permits explicit metadata/lifecycle actions (`rename`, `archive`, `restore`) because they do not start turns, steer turns, or mutate turn history. ADR-0017 makes default attach metadata-only instead of `thread/resume`-based. The idle-only-write and full-write rungs stay locked; unlocking them needs a real cross-process interlock, which Codex does not expose today. This is the safe default the ladder already proposed — the spike confirms rather than relaxes it.
 
 ## Alternatives considered
 
@@ -53,4 +53,4 @@ Two `codex app-server` processes shared one isolated `CODEX_HOME` (modelling our
 
 ## References
 
-- ADR-0002 (Single Daemon over One App Server); ADR-0017 (Progressive Thread Sync Index); `docs/research/app-server-verification.md` (resume fan-out, cross-process untested); `PLAN.md` Phase-1 slice-0 spike.
+- ADR-0002 (Single Daemon over One App Server); ADR-0017 (Progressive Thread Sync Index); ADR-0018 (Top-Level Thread Actions and Search); `docs/research/app-server-verification.md` (resume fan-out, cross-process untested); `PLAN.md` Phase-1 slice-0 spike.

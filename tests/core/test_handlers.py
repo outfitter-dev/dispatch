@@ -11,8 +11,19 @@ import pytest_asyncio
 
 from outfitter.dispatch.client.errors import AppServerError as ClientAppServerError
 from outfitter.dispatch.client.errors import TransportError
-from outfitter.dispatch.client.models import ThreadGoal, ThreadInfo, ThreadStatus
-from outfitter.dispatch.contracts.errors import AppServerError, AuthorityError, ValidationError
+from outfitter.dispatch.client.models import (
+    ThreadGoal,
+    ThreadInfo,
+    ThreadSearchMatch,
+    ThreadSearchResult,
+    ThreadStatus,
+)
+from outfitter.dispatch.contracts.errors import (
+    AppServerError,
+    AuthorityError,
+    NotFoundError,
+    ValidationError,
+)
 from outfitter.dispatch.core import handlers
 from outfitter.dispatch.core.models import (
     AttachInput,
@@ -31,9 +42,11 @@ from outfitter.dispatch.core.models import (
     OpenInput,
     RollbackInput,
     RosterInput,
+    SearchInput,
     SendInput,
     ShowInput,
     StatusInput,
+    ThreadTargetInput,
     TranscriptInput,
     WatchInput,
 )
@@ -217,6 +230,51 @@ async def test_lane_rename_updates_registry_and_owned_thread_name(store: Registr
         name == "thread_set_name" and kw["thread_id"] == "lane-1" and kw["display_name"] == "new"
         for name, kw in client.calls
     )
+
+
+async def test_lane_rename_updates_attached_thread_name(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await store.add_lane(id="D1", handle="@desktop", source="attached", status="idle")
+
+    out = await handlers.rename_lane(LaneRenameInput(old="@desktop", new="renamed"), ctx)
+
+    assert out.handle == "@renamed"
+    assert out.source == "attached"
+    assert any(
+        name == "thread_set_name" and kw["thread_id"] == "D1" and kw["display_name"] == "renamed"
+        for name, kw in client.calls
+    )
+
+
+async def test_lane_rename_can_target_unmanaged_thread(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.rename_lane(LaneRenameInput(old="raw-thread", new="Raw Name"), ctx)
+
+    assert out.id == "raw-thread"
+    assert out.managed is False
+    assert out.source == "unmanaged"
+    assert (await handlers.roster(RosterInput(include_archived=True), ctx)).lanes == []
+    assert any(
+        name == "thread_set_name"
+        and kw["thread_id"] == "raw-thread"
+        and kw["display_name"] == "Raw Name"
+        for name, kw in client.calls
+    )
+
+
+async def test_unresolved_handle_does_not_fall_through_as_raw_thread_id(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    with pytest.raises(NotFoundError):
+        await handlers.rename_lane(LaneRenameInput(old="@missing", new="new"), ctx)
+
+    assert not client.calls
 
 
 async def test_show_can_include_compact_transcript(store: Registry) -> None:
@@ -456,15 +514,21 @@ async def test_send_to_attached_lane_raises_authority(store: Registry) -> None:
         await handlers.send(LaneTextInput(lane="D1", text="nope"), ctx)
 
 
-async def test_archive_attached_lane_raises_authority(store: Registry) -> None:
-    ctx = make_ctx(store)
+async def test_archive_attached_lane_updates_thread_and_registry(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
     await store.add_lane(id="D2", handle="@desktop", source="attached", status="idle")
-    with pytest.raises(AuthorityError):
-        await handlers.archive(LaneInput(lane="D2"), ctx)
+
+    out = await handlers.archive(ThreadTargetInput(target="D2"), ctx)
+
+    assert out.status == "archived"
+    assert (await store.get_lane("D2")).status == "archived"
+    assert any(name == "thread_archive" and kw["thread_id"] == "D2" for name, kw in client.calls)
 
 
 async def test_steer_attached_lane_raises_authority(store: Registry) -> None:
-    # The authority guard precedes the active-turn check: attached lanes never write.
+    # The authority guard precedes the active-turn check: attached lanes do not accept
+    # turn-writing operations.
     ctx = make_ctx(store)
     await store.add_lane(id="D3", handle="@desktop", source="attached", status="idle")
     await store.set_active_turn("D3", "turn-1")
@@ -538,7 +602,7 @@ async def test_roster_then_archive_flips_status(store: Registry) -> None:
     await handlers.open_lane(OpenInput(name="one"), ctx)
     roster = await handlers.roster(RosterInput(), ctx)
     assert [lane.handle for lane in roster.lanes] == ["@one"]
-    archived = await handlers.archive(LaneInput(lane="lane-1"), ctx)
+    archived = await handlers.archive(ThreadTargetInput(target="lane-1"), ctx)
     assert archived.status == "archived"
     assert (await handlers.roster(RosterInput(), ctx)).lanes == []
     everything = await handlers.roster(RosterInput(include_archived=True), ctx)
@@ -556,13 +620,62 @@ async def test_archive_no_rollout_lane_marks_local_lane_archived(store: Registry
     ctx = make_ctx(store, client)
     await handlers.new_lane(NewInput(name="smoke", ephemeral=True, send=False), ctx)
 
-    archived = await handlers.archive(LaneInput(lane="lane-1"), ctx)
+    archived = await handlers.archive(ThreadTargetInput(target="lane-1"), ctx)
 
     assert archived.status == "archived"
     assert (await handlers.roster(RosterInput(), ctx)).lanes == []
     everything = await handlers.roster(RosterInput(include_archived=True), ctx)
     assert [lane.id for lane in everything.lanes] == ["lane-1"]
     assert any(name == "thread_archive" for name, _ in client.calls)
+
+
+async def test_archive_unmanaged_thread_does_not_register_lane(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.archive(ThreadTargetInput(target="raw-thread"), ctx)
+
+    assert out.id == "raw-thread"
+    assert out.managed is False
+    assert out.status == "archived"
+    assert (await handlers.roster(RosterInput(include_archived=True), ctx)).lanes == []
+    assert any(
+        name == "thread_archive" and kw["thread_id"] == "raw-thread" for name, kw in client.calls
+    )
+
+
+async def test_restore_managed_lane_unarchives_without_starting_turn(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="one"), ctx)
+    client.threads["lane-1"] = ThreadInfo(id="lane-1", status=ThreadStatus(type="idle"))
+    await store.update_lane_status("lane-1", "archived")
+
+    restored = await handlers.restore(ThreadTargetInput(target="@one"), ctx)
+
+    assert restored.status == "idle"
+    assert (await store.get_lane("lane-1")).status == "idle"
+    assert any(
+        name == "thread_unarchive" and kw["thread_id"] == "lane-1" for name, kw in client.calls
+    )
+    assert not any(name == "turn_start" for name, _ in client.calls)
+
+
+async def test_restore_unmanaged_thread_does_not_register_or_start_turn(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.threads["raw-thread"] = ThreadInfo(id="raw-thread", status=ThreadStatus(type="idle"))
+    ctx = make_ctx(store, client)
+
+    restored = await handlers.restore(ThreadTargetInput(target="raw-thread"), ctx)
+
+    assert restored.id == "raw-thread"
+    assert restored.managed is False
+    assert restored.status == "idle"
+    assert (await handlers.roster(RosterInput(include_archived=True), ctx)).lanes == []
+    assert any(
+        name == "thread_unarchive" and kw["thread_id"] == "raw-thread" for name, kw in client.calls
+    )
+    assert not any(name == "turn_start" for name, _ in client.calls)
 
 
 async def test_status_and_log_reflect_activity(store: Registry) -> None:
@@ -724,7 +837,7 @@ async def test_discover_lists_persisted_sessions_from_client(store: Registry) ->
         name == "thread_list" and kw["limit"] == 10 and kw["use_state_db_only"] is True
         for name, kw in client.calls
     )
-    # ...and registers nothing (pure read; ADR-0005 observe-only untouched).
+    # ...and registers nothing (pure read; lane authority untouched).
     assert (await handlers.roster(RosterInput(), ctx)).lanes == []
 
 
@@ -747,3 +860,114 @@ async def test_discover_keeps_short_preview_verbatim(store: Registry) -> None:
     out = await handlers.discover(DiscoverInput(), ctx)
     # At the boundary the preview is returned unchanged — no ellipsis.
     assert out.sessions[0].preview == exactly_80
+
+
+async def test_search_uses_app_server_and_filters_managed_state_and_repo(
+    store: Registry, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    client = FakeLaneClient()
+    client.search_result = ThreadSearchResult(
+        data=[
+            ThreadSearchMatch(
+                snippet="needle in managed",
+                thread=ThreadInfo(
+                    id="M1",
+                    name="Managed",
+                    cwd=str(repo / "subdir"),
+                    created_at=100_000,
+                    updated_at=200_000,
+                    preview="managed preview",
+                    status=ThreadStatus(type="idle"),
+                ),
+            ),
+            ThreadSearchMatch(
+                snippet="needle in unmanaged",
+                thread=ThreadInfo(
+                    id="U1",
+                    name="Unmanaged",
+                    cwd=str(outside),
+                    created_at=100_000,
+                    updated_at=200_000,
+                    status=ThreadStatus(type="idle"),
+                ),
+            ),
+        ]
+    )
+    ctx = make_ctx(store, client)
+    await store.add_lane(id="M1", handle="@managed", source="attached", status="idle")
+
+    out = await handlers.search(
+        SearchInput(query="needle", managed=True, repo=str(repo), since="1970-01-01"),
+        ctx,
+    )
+
+    assert [match.id for match in out.matches] == ["M1"]
+    assert out.matches[0].handle == "@managed"
+    assert out.matches[0].managed is True
+    assert out.scanned == 2
+    assert any(
+        name == "thread_search" and kw["search_term"] == "needle" and kw["sort_key"] == "updated_at"
+        for name, kw in client.calls
+    )
+
+
+async def test_search_can_filter_unmanaged_threads(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.search_result = ThreadSearchResult(
+        data=[
+            ThreadSearchMatch(snippet="needle", thread=ThreadInfo(id="managed")),
+            ThreadSearchMatch(snippet="needle", thread=ThreadInfo(id="raw")),
+        ]
+    )
+    ctx = make_ctx(store, client)
+    await store.add_lane(id="managed", handle="@managed", source="attached", status="idle")
+
+    out = await handlers.search(SearchInput(query="needle", unmanaged=True), ctx)
+
+    assert [match.id for match in out.matches] == ["raw"]
+    assert out.matches[0].source == "unmanaged"
+
+
+async def test_lane_search_reads_one_thread_transcript(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.read_result = {
+        "thread": {
+            "id": "lane-1",
+            "name": "Docs",
+            "cwd": "/work",
+            "updatedAt": 200,
+            "turns": [
+                {
+                    "id": "t1",
+                    "items": [
+                        {"id": "a1", "type": "agentMessage", "text": "nothing here"},
+                        {"id": "a2", "type": "agentMessage", "text": "needle appears"},
+                    ],
+                }
+            ],
+        }
+    }
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="docs"), ctx)
+
+    out = await handlers.search(SearchInput(query="needle", lane="@docs"), ctx)
+
+    assert [match.snippet for match in out.matches] == ["needle appears"]
+    assert out.matches[0].handle == "@docs"
+    assert out.scanned == 2
+    assert any(
+        name == "thread_read" and kw["thread_id"] == "lane-1" and kw["include_turns"] is True
+        for name, kw in client.calls
+    )
+    assert not any(name == "thread_search" for name, _ in client.calls)
+
+
+async def test_search_rejects_conflicting_managed_filters(store: Registry) -> None:
+    ctx = make_ctx(store)
+    with pytest.raises(ValidationError):
+        await handlers.search(SearchInput(query="needle", managed=True, unmanaged=True), ctx)

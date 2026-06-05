@@ -61,7 +61,7 @@ class ApprovalRequiredError(DispatchError):
 
 
 class AuthorityError(DispatchError):
-    """A write was attempted on an observe-only attached lane (ADR-0005)."""
+    """A blocked write was attempted on an attached lane (ADR-0005/0018)."""
 
     code = "authority"
     exit_code = 7

@@ -39,7 +39,12 @@ def test_action_schema_and_annotations_from_op() -> None:
     one_of = lane_write.inputSchema["oneOf"]
     new_schema = next(s for s in one_of if s["properties"]["op"]["const"] == "new")
     assert set(new_schema["properties"]) >= {"op", "name", "preset", "text", "send"}
-    assert {s["properties"]["op"]["const"] for s in one_of} >= {"fork", "goal_set", "compact"}
+    assert {s["properties"]["op"]["const"] for s in one_of} >= {
+        "fork",
+        "goal_set",
+        "compact",
+        "restore",
+    }
 
     lane_read = tools["dispatch_lane_read"]
     assert lane_read.annotations is not None
@@ -49,6 +54,7 @@ def test_action_schema_and_annotations_from_op() -> None:
         "transcript",
         "watch",
         "goal_get",
+        "search",
     }
 
     lane_destroy = tools["dispatch_lane_destroy"]

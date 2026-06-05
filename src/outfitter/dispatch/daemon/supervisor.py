@@ -80,7 +80,7 @@ class Supervisor:
 
         Owned lanes are resumed so their app-server event stream is reattached.
         Attached lanes stay metadata-only per ADR-0017; restarting the daemon must
-        not turn an observe-only registration into an implicit resume.
+        not turn registration into an implicit resume.
         """
         for lane in await self._ctx.registry.list_lanes():
             try:

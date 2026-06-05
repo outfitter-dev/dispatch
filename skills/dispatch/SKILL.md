@@ -27,10 +27,11 @@ The current operator grammar is:
 - health: `doctor`
 - daemon process: `up`, `down`
 - daemon reads: `daemon status`, `daemon log`
-- create/send: `new`, `send`, `stop`
+- create/send/search: `new`, `send`, `stop`, `search`
+- top-level thread actions: `rename`, `archive`, `restore`
 - lanes: `lane get`, `lane status`, `lane list`, `lane list --unmanaged`,
-  `lane attach`, `lane sync`, `lane rename`, `lane tail`, `lane fork`, `lane rollback`,
-  `lane compact`, `lane archive`
+  `lane attach`, `lane sync`, `lane rename`, `lane search`, `lane tail`, `lane fork`,
+  `lane rollback`, `lane compact`, `lane archive`, `lane restore`
 - goals: `goal status`, `goal set`, `goal clear`
 - triggers: `trigger add`, `trigger list`, `trigger rm`, `trigger pause`,
   `trigger resume`
@@ -82,11 +83,14 @@ uv run dispatch lane attach <codex-thread-id>
 uv run dispatch lane attach <codex-thread-id> --sync
 ```
 
-Attached lanes are observe-only in v0. Do not try mutating commands such as
-`send`, `stop`, `lane archive`, `goal set`, `goal clear`, `lane fork`,
-`lane rollback`, or `lane compact` on attached lanes. ADR-0005 keeps those
-writes locked because desktop Codex and dispatch run separate app-server
-processes and there is no cross-process write interlock.
+Attached lanes are managed by dispatch but are not turn-writable in v0. Do not
+try turn-writing or history-mutating commands such as `send`, `stop`,
+`goal set`, `goal clear`, `lane fork`, `lane rollback`, or `lane compact` on
+attached lanes. Explicit metadata/lifecycle commands (`rename`, `archive`,
+`restore`) are allowed because they do not start turns or mutate turn history.
+ADR-0005 and ADR-0018 keep this boundary locked because desktop Codex and
+dispatch run separate app-server processes and there is no cross-process write
+interlock.
 
 Attach is compact by default: it verifies the thread with
 `thread/read(includeTurns:false)`, registers metadata, and does not resume turn
@@ -106,8 +110,9 @@ lanes.
 ## Discover Sessions
 
 `lane list` shows lanes dispatch already manages. `lane list --unmanaged` lists
-persisted Codex sessions you could attach through App Server `thread/list` in
-state-db-only mode. It is read-only and does not resume or register anything:
+persisted Codex sessions that are not registered in dispatch. It uses App Server
+`thread/list` in state-db-only mode. It is read-only and does not resume or
+register anything:
 
 ```bash
 uv run dispatch lane list
@@ -115,6 +120,37 @@ uv run dispatch lane list --unmanaged --limit 20
 ```
 
 Use a discovered session `id` with `lane attach <id>`.
+
+## Search And Thread Actions
+
+Use top-level actions when you want to work with either managed lanes or raw
+unmanaged Codex thread ids:
+
+```bash
+uv run dispatch rename @my-lane my-lane-final
+uv run dispatch archive <codex-thread-id>
+uv run dispatch restore @my-lane
+```
+
+`restore` only unarchives; it does not resume or start a turn.
+
+Use `search` before attaching when you need to find the right existing thread:
+
+```bash
+uv run dispatch search "schema drift"
+uv run dispatch search "schema drift" --managed
+uv run dispatch search "schema drift" --unmanaged
+uv run dispatch search "schema drift" --lane @my-lane
+uv run dispatch search "schema drift" --repo .
+uv run dispatch search "schema drift" --dir /path/to/project
+uv run dispatch search "schema drift" --since 2026-06-01 --until 2026-06-05
+uv run dispatch lane search @my-lane "schema drift"
+```
+
+Broad search uses experimental App Server `thread/search` plus dispatch-side
+filters. Lane-focused search reads one thread transcript and scans locally.
+Sync is separate: `lane sync` refreshes dispatch's local index for a managed
+lane, but it does not attach unmanaged sessions or grant write authority.
 
 ## Message Verbs
 
