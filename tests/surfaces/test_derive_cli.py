@@ -103,7 +103,7 @@ def test_top_level_thread_actions_route_to_lane_contracts() -> None:
 
     renamed = runner.invoke(app, ["rename", "@old", "new"])
     restored = runner.invoke(app, ["restore", "@old"])
-    searched = runner.invoke(app, ["search", "needle", "--lane", "@old", "--limit", "5"])
+    searched = runner.invoke(app, ["search", "needle", "--thread", "@old", "--limit", "5"])
 
     assert renamed.exit_code == 0
     assert restored.exit_code == 0
@@ -133,7 +133,7 @@ def test_top_level_thread_actions_route_to_lane_contracts() -> None:
     ]
 
 
-def test_lane_group_routes_core_lane_commands() -> None:
+def test_flat_thread_routes_core_commands() -> None:
     calls: list[tuple[str, dict[str, object]]] = []
 
     def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
@@ -168,41 +168,29 @@ def test_lane_group_routes_core_lane_commands() -> None:
 
     app = derive_cli(REGISTRY, invoke)
 
-    managed = runner.invoke(app, ["lane", "list"])
-    unmanaged = runner.invoke(app, ["lane", "list", "--unmanaged", "--limit", "5"])
-    renamed = runner.invoke(app, ["lane", "rename", "@old", "new"])
-    lane_search = runner.invoke(app, ["lane", "search", "@old", "needle"])
-    restored = runner.invoke(app, ["lane", "restore", "@old"])
+    managed = runner.invoke(app, ["list"])
+    unmanaged = runner.invoke(app, ["list", "--unmanaged", "--limit", "5"])
+    attached = runner.invoke(app, ["attach", "thread-1"])
+    got = runner.invoke(app, ["get", "@old"])
+    tailed = runner.invoke(app, ["tail", "@old"])
+    watched = runner.invoke(app, ["watch", "@old", "--limit", "2", "--timeout", "1"])
+    synced = runner.invoke(app, ["sync", "@old"])
 
     assert managed.exit_code == 0
     assert unmanaged.exit_code == 0
-    assert renamed.exit_code == 0
-    assert lane_search.exit_code == 0
-    assert restored.exit_code == 0
+    assert attached.exit_code == 0
+    assert got.exit_code == 0
+    assert tailed.exit_code == 0
+    assert watched.exit_code == 0
+    assert synced.exit_code == 0
     assert calls == [
         ("roster", {"include_archived": False}),
         ("discover", {"limit": 5}),
-        ("lane-rename", {"old": "@old", "new": "new"}),
-        (
-            "search",
-            {
-                "query": "needle",
-                "lane": "@old",
-                "directory": None,
-                "repo": None,
-                "managed": False,
-                "unmanaged": False,
-                "archived": False,
-                "since": None,
-                "until": None,
-                "date_field": "updated_at",
-                "sort": "updated_at",
-                "ascending": False,
-                "limit": 20,
-                "max_scan": 200,
-            },
-        ),
-        ("restore", {"target": "@old"}),
+        ("attach", {"thread": "thread-1", "sync": False}),
+        ("show", {"lane": "@old", "include_transcript": False, "max_items": 20}),
+        ("transcript", {"lane": "@old", "limit": 50}),
+        ("watch", {"lane": "@old", "limit": 2, "timeout": 1.0}),
+        ("sync", {"lane": "@old", "full": False}),
     ]
 
 
@@ -252,9 +240,9 @@ def test_lane_archive_prompts_for_confirmation() -> None:
         }
 
     app = derive_cli(REGISTRY, invoke)
-    declined = runner.invoke(app, ["lane", "archive", "L1"], input="n\n")
+    declined = runner.invoke(app, ["archive", "L1"], input="n\n")
     assert declined.exit_code != 0
-    confirmed = runner.invoke(app, ["lane", "archive", "L1"], input="y\n")
+    confirmed = runner.invoke(app, ["archive", "L1"], input="y\n")
     assert confirmed.exit_code == 0
 
 
@@ -269,7 +257,7 @@ def test_json_destroy_prompt_does_not_pollute_stdout() -> None:
         }
 
     app = derive_cli(REGISTRY, invoke)
-    result = runner.invoke(app, ["lane", "archive", "L1", "--json"], input="y\n")
+    result = runner.invoke(app, ["archive", "L1", "--json"], input="y\n")
 
     assert result.exit_code == 0
     assert "Run destroy op" not in result.stdout
@@ -307,31 +295,32 @@ def test_schema_command_stays_plain_json_when_color_is_forced() -> None:
 def test_schema_command_resolves_composed_cli_routes() -> None:
     app = derive_cli(REGISTRY, lambda _op, _params: {})
 
-    unmanaged = runner.invoke(app, ["schema", "lane list --unmanaged"])
+    unmanaged = runner.invoke(app, ["schema", "list --unmanaged"])
     search = runner.invoke(app, ["schema", "search"])
-    lane_search = runner.invoke(app, ["schema", "lane search"])
-    follow = runner.invoke(app, ["schema", "lane tail --follow"])
-    fork = runner.invoke(app, ["schema", "lane fork"])
-    rollback = runner.invoke(app, ["schema", "lane rollback"])
-    compact = runner.invoke(app, ["schema", "lane compact"])
-    archive = runner.invoke(app, ["schema", "lane archive"])
+    attach = runner.invoke(app, ["schema", "attach"])
+    get = runner.invoke(app, ["schema", "get"])
+    tail = runner.invoke(app, ["schema", "tail"])
+    watch = runner.invoke(app, ["schema", "watch"])
+    sync = runner.invoke(app, ["schema", "sync"])
+    follow = runner.invoke(app, ["schema", "tail --follow"])
+    archive = runner.invoke(app, ["schema", "archive"])
     restore = runner.invoke(app, ["schema", "restore"])
 
     assert unmanaged.exit_code == 0
     assert '"op": "discover"' in unmanaged.output
     assert search.exit_code == 0
     assert '"op": "search"' in search.output
-    assert lane_search.exit_code == 0
-    assert '"op": "search"' in lane_search.output
-    assert follow.exit_code == 0
-    assert '"op": "watch"' in follow.output
-    assert '"timeout"' in follow.output
-    assert fork.exit_code == 0
-    assert '"op": "fork"' in fork.output
-    assert rollback.exit_code == 0
-    assert '"op": "rollback"' in rollback.output
-    assert compact.exit_code == 0
-    assert '"op": "compact"' in compact.output
+    assert attach.exit_code == 0
+    assert '"op": "attach"' in attach.output
+    assert get.exit_code == 0
+    assert '"op": "show"' in get.output
+    assert tail.exit_code == 0
+    assert '"op": "transcript"' in tail.output
+    assert watch.exit_code == 0
+    assert '"op": "watch"' in watch.output
+    assert sync.exit_code == 0
+    assert '"op": "sync"' in sync.output
+    assert follow.exit_code == 2
     assert archive.exit_code == 0
     assert '"op": "archive"' in archive.output
     assert restore.exit_code == 0
@@ -353,5 +342,5 @@ def test_error_exit_code_propagates() -> None:
         raise typer.Exit(code=4)
 
     app = derive_cli(REGISTRY, invoke)
-    result = runner.invoke(app, ["lane", "get", "ghost"])
+    result = runner.invoke(app, ["get", "ghost"])
     assert result.exit_code == 4

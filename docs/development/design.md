@@ -2,7 +2,7 @@
 
 A local control plane for orchestrating Codex agent lanes (threads) over the Codex App Server: create/attach lanes, send work or context, queue delivery, stop active turns, and automate pings on time- and event-based triggers. One authored contract per operation is projected onto multiple surfaces — CLI now, MCP now, remote control later — with no drift.
 
-Status: approved design, implemented through v0. Companion research (verified against `codex-cli 0.136.0-alpha.2`): [`docs/research/app-server-verification.md`](../research/app-server-verification.md) and [`docs/research/orchestration-thesis.md`](../research/orchestration-thesis.md). Decisions: [`docs/adrs/`](../adrs/). Execution ledger: [`../../.agents/plans/v0/RETRO.md`](../../.agents/plans/v0/RETRO.md).
+Status: approved design, implemented through v0 and updated for dispatch-local refs / flat thread CLI. Companion research (verified against `codex-cli 0.136.0-alpha.2`): [`docs/research/app-server-verification.md`](../research/app-server-verification.md) and [`docs/research/orchestration-thesis.md`](../research/orchestration-thesis.md). Decisions: [`docs/adrs/`](../adrs/). Execution ledger: [`../../.agents/plans/v0/RETRO.md`](../../.agents/plans/v0/RETRO.md).
 
 ## Naming
 
@@ -73,26 +73,31 @@ Projections (pure functions over the registry, mirroring Trails' `derive* → cr
 ## Command surface (v1)
 
 - Daemon lifecycle: `up` / `down` (process) · `daemon status` · `daemon log`
-- Lane creation: `new <name> [--preset ...] [--text ...] [--no-send]`
-- Lane reads/discovery: `lane get <lane>` · `lane status <lane>` · `lane list` ·
-  `lane list --unmanaged` · `lane sync <lane>` · `lane tail <lane>` ·
-  `lane tail <lane> --follow`
-- Lane management/history: `rename <target> <new>` · `archive <target>` ·
-  `restore <target>` · `search <query>` with lane/repo/directory/date filters ·
-  `lane attach <thread> [--sync]` · `lane rename <old> <new>` ·
-  `lane fork <lane>` · `lane rollback <lane>` · `lane compact <lane>` ·
-  `lane archive <target>` · `lane restore <target>` · `lane search <lane> <query>`
-- Sending: `send <lane> "…"` with `--mode send|steer|queue|interject|context`
+- Thread creation: `new <name> [--preset ...] [--text ...] [--no-send]`
+- Thread reads/discovery: `get <selector>` · `list` · `list --unmanaged` ·
+  `sync <selector>` · `tail <selector>` · `watch <selector>`
+- Thread management/search: `attach <thread-id> [--sync]` ·
+  `rename <selector> <new>` · `archive <selector>` · `restore <selector>` ·
+  `search <query>` with `--thread`/repo/directory/date/managed filters
+- Sending: `send <selector> "…"` with `--mode send|steer|queue|interject|context`
   and equivalent mutually exclusive `--steer`, `--queue`, `--interject`,
-  `--context`; `stop <lane>` / `stop --lane <lane>` is cancel-only.
-- Goals: `goal status <lane>` · `goal set <lane> <objective>` · `goal clear <lane>`
+  `--context`; `stop <selector>` is cancel-only.
+- Goals: `goal status <selector>` · `goal set <selector> <objective>` ·
+  `goal clear <selector>`
 - Triggers: `trigger add` · `trigger list` · `trigger rm <id>` ·
   `trigger pause <id>` · `trigger resume <id>`
 - Schemas: `schema <command>` prints derived input/output schemas for shell automation.
 
 MCP tools are an ergonomic projection of the same ops, grouped by workflow and safety
-boundary rather than forced to be one tool per op. The noun for a managed thread is
-**lane**.
+boundary rather than forced to be one tool per op. Internally, a managed thread with
+registry state is still a **lane**. Public CLI/help/docs prefer **thread**, **ref**,
+**managed/unmanaged**, and **synced** unless the internal authority distinction matters.
+
+Every managed lane stores a dispatch-local `ref` alongside the full Codex thread id.
+The full Codex id remains accepted everywhere. Refs are assigned as
+`<source><payload4><mixer>`; Codex refs use source `0`, a four-character base58btc
+payload from `sha256("codex:" + thread_id)`, and a registry-allocated mixer character
+for collisions. Titles and `@handles` are mutable convenience labels.
 
 ## App Server integration (verified primitives → ops)
 
@@ -100,23 +105,23 @@ boundary rather than forced to be one tool per op. The noun for a managed thread
 | --- | --- | --- |
 | `open` | `thread/start` (then register) | `sandbox` is a STRING enum (`read-only`/`workspace-write`/`danger-full-access`); persists by default (`ephemeral:false`) → spawned lanes show in desktop app, matching the `→ @project:name` convention. |
 | `new` | `thread/start` + `thread/name/set` + optional `turn/start` | Applies `.dispatch/config.toml` defaults/presets, name prefixes, verified session/turn options, and optional initial payload. |
-| `attach` | `thread/read(includeTurns:false)` (+ register) | Metadata-only by default: verifies the thread id, registers a turn-write locked attached lane, and stores sync state without loading turn history. `--sync` runs a quick local index refresh after registration. |
-| `sync` (`lane sync`) | `thread/read(includeTurns:false)` + bounded local JSONL parsing | Refreshes dispatch's index/cache for a lane: source file identity, sync state, latest event timestamp, latest turn id, preview, and selected metadata. Does not copy transcripts wholesale or grant attached-lane write authority. |
+| `attach` | `thread/read(includeTurns:false)` (+ register) | Metadata-only by default: verifies the thread id, registers a turn-write locked attached lane, assigns a dispatch ref, and stores sync state without loading turn history. `--sync` runs a quick local index refresh after registration. |
+| `sync` | `thread/read(includeTurns:false)` + bounded local JSONL parsing | Refreshes dispatch's index/cache for a managed thread: source file identity, sync state, latest event timestamp, latest turn id, preview, and selected metadata. Does not copy transcripts wholesale or grant attached-lane write authority. |
 | `send` (`mode=send`) | `turn/start` | Delivers a message the lane processes + answers. The DM/`send_message_to_thread` equivalent. `sandboxPolicy` here is an OBJECT (`{type:"readOnly"}`) — different encoding than `thread/start.sandbox`. |
 | `send` (`mode=queue`) | registry queue + later `turn/start` | Persists local queued delivery and starts one queued turn when the lane becomes idle. |
 | `send` (`mode=steer`) | `turn/steer` | Requires `expectedTurnId` (the active turn id from `turn/started`). Adds input to an in-flight turn. |
 | `send` (`mode=context`) | `thread/inject_items` | Silent model-visible context injection (Responses-API items); no turn runs. Trigger actions still call this lower-level behavior `brief`. |
 | `send` (`mode=interject`) | `turn/interrupt` + `turn/start` | Requires an active turn id, cancels that turn, then starts replacement work. |
 | `stop` | `turn/interrupt` | Requires an active turn id and cancels the active turn without replacement text. |
-| `lane-rename` (`rename`, `lane rename`) | `thread/name/set` (+ registry update when managed) | Accepts a managed lane id/handle or a raw unmanaged Codex thread id. Unresolved `@handles` fail as missing lanes rather than falling through as raw ids. |
-| `archive` (`archive`, `lane archive`) | `thread/archive` | Accepts managed lanes or unmanaged raw thread ids. If App Server reports `no rollout found` for an owned no-rollout lane, dispatch archives the local registry entry so throwaway lanes can be cleaned up. |
-| `restore` (`restore`, `lane restore`) | `thread/unarchive` | Restores the archived Codex thread only; does not resume or start a new turn. |
-| `search` (`search`, `lane search`) | experimental `thread/search` for broad search; `thread/read(includeTurns:true)` for one-lane search | Broad search uses App Server search plus dispatch-side managed/unmanaged, repo/directory, and date filters. Lane-focused search reads one transcript and scans locally because App Server search has no thread-id filter. |
-| `roster` (`lane list`) | `thread/list` + registry + status | List results are under `result.data` (NOT `result.threads`); `useStateDbOnly:true` reads the persisted store. |
-| `discover` (`lane list --unmanaged`) | `thread/list` state DB only | Lists persisted Codex sessions that could be attached; it does not resume or register them. |
-| `show` (`lane get/status`) | registry + optional `thread/read(includeTurns:true)` | Compact lane summary; optional transcript convenience. |
-| `transcript` (`lane tail`) | `thread/read(includeTurns:true)` | Persisted turn/item snapshot, not a full execution log. |
-| `watch` (`lane tail --follow`) | raw app-server event stream, bounded by limit/timeout | Request/response bounded sample; a true infinite tail needs a subscription control-socket extension. |
+| `lane-rename` (`rename`) | `thread/name/set` (+ registry update when managed) | Accepts a managed ref, full Codex thread id, or unique convenience label. Mutating actions do not fuzzy-resolve ambiguous names. |
+| `archive` (`archive`) | `thread/archive` | Accepts managed refs or unmanaged raw thread ids. If App Server reports `no rollout found` for an owned no-rollout lane, dispatch archives the local registry entry so throwaway lanes can be cleaned up. |
+| `restore` (`restore`) | `thread/unarchive` | Restores the archived Codex thread only; does not resume or start a new turn. |
+| `search` (`search`) | experimental `thread/search` for broad search; `thread/read(includeTurns:true)` for one-thread search | Broad search uses App Server search plus dispatch-side managed/unmanaged, repo/directory, and date filters. Thread-focused search reads one transcript and scans locally because App Server search has no thread-id filter. |
+| `roster` (`list`) | `thread/list` + registry + status | List results are under `result.data` (NOT `result.threads`); `useStateDbOnly:true` reads the persisted store. |
+| `discover` (`list --unmanaged`) | `thread/list` state DB only | Lists persisted Codex sessions that could be attached; it does not resume or register them. |
+| `show` (`get`) | registry + optional `thread/read(includeTurns:true)` | Compact managed-thread summary; optional transcript convenience. |
+| `transcript` (`tail`) | `thread/read(includeTurns:true)` | Persisted turn/item snapshot, not a full execution log. |
+| `watch` (`watch`) | raw app-server event stream, bounded by limit/timeout | Request/response bounded sample; a true infinite tail needs a subscription control-socket extension. |
 | `goal-get/set/clear` (`goal status/set/clear`) | `thread/goal/{get,set,clear}` | Native App Server goal lifecycle for owned lanes. |
 | `fork` | `thread/fork` + register | Creates a new owned lane; attached source lanes remain locked until cross-process fork semantics are verified. |
 | `rollback` | `thread/rollback` | Drops persisted turns only; does not revert workspace files. |
@@ -155,7 +160,7 @@ The client supports the full responder loop. v1 surfaces `waiting_on_approval` a
 
 ## Data model (registry, SQLite)
 
-- `lanes`: id, handle (`@name` / `→ @project:name`), role, cwd, source (`own`|`attached`), status, pinned, created_at, updated_at, last_event_at.
+- `lanes`: id, ref, ref_source/ref_payload/ref_mixer, handle (`@name` / `→ @project:name`), role, cwd, source (`own`|`attached`), status, pinned, created_at, updated_at, last_event_at.
 - `lane_sync_sources`: lane, sync state, source path/file identity, source size/mtime, parsed offsets, line count, last synced timestamp, error.
 - `lane_snapshots`: lane, display name, preview, cwd, source/model/session facts, latest event timestamp, latest turn id, transcript-partial flag.
 - `triggers`: id, name, lane selector, when-spec (json), action-spec (json), guard-spec (json), enabled, last_fired_at.

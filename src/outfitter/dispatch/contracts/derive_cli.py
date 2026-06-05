@@ -35,19 +35,14 @@ class CliRoute:
 
 _ROUTES: tuple[CliRoute, ...] = (
     CliRoute(("new",), "new"),
+    CliRoute(("attach",), "attach", ("thread",)),
+    CliRoute(("get",), "show", ("lane",)),
+    CliRoute(("tail",), "transcript", ("lane",)),
+    CliRoute(("watch",), "watch", ("lane",)),
+    CliRoute(("sync",), "sync", ("lane",)),
     CliRoute(("rename",), "lane-rename", ("old", "new")),
     CliRoute(("archive",), "archive", ("target",)),
     CliRoute(("restore",), "restore", ("target",)),
-    CliRoute(("lane", "get"), "show", ("lane",)),
-    CliRoute(("lane", "status"), "show", ("lane",)),
-    CliRoute(("lane", "attach"), "attach", ("thread",)),
-    CliRoute(("lane", "sync"), "sync", ("lane",)),
-    CliRoute(("lane", "rename"), "lane-rename", ("old", "new")),
-    CliRoute(("lane", "fork"), "fork", ("lane",)),
-    CliRoute(("lane", "rollback"), "rollback", ("lane",)),
-    CliRoute(("lane", "compact"), "compact", ("lane",)),
-    CliRoute(("lane", "archive"), "archive", ("target",)),
-    CliRoute(("lane", "restore"), "restore", ("target",)),
     CliRoute(("goal", "status"), "goal-get", ("lane",)),
     CliRoute(("goal", "clear"), "goal-clear", ("lane",)),
     CliRoute(("trigger", "add"), "trigger-add"),
@@ -74,14 +69,7 @@ def derive_cli(
     _register_command(app, ("send",), _send_command(registry.get("send"), invoke, renderer))
     _register_command(app, ("stop",), _stop_command(registry.get("stop"), invoke, renderer))
     _register_command(app, ("search",), _search_command(registry.get("search"), invoke, renderer))
-    _register_command(app, ("lane", "list"), _lane_list_command(registry, invoke, renderer), groups)
-    _register_command(
-        app,
-        ("lane", "search"),
-        _lane_search_command(registry.get("search"), invoke, renderer),
-        groups,
-    )
-    _register_command(app, ("lane", "tail"), _lane_tail_command(registry, invoke, renderer), groups)
+    _register_command(app, ("list",), _list_command(registry, invoke, renderer))
     _register_command(
         app,
         ("trigger", "list"),
@@ -182,7 +170,7 @@ def _parameters(op: Op, *, positionals: tuple[str, ...] = ()) -> list[inspect.Pa
 
 def _send_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., None]:
     def command(
-        lane: Annotated[str, typer.Argument(help="Lane id or @handle.")],
+        lane: Annotated[str, typer.Argument(help="Thread selector.")],
         text: Annotated[str, typer.Argument(help="Message text.")],
         mode: Annotated[_SendMode, typer.Option("--mode", help="Delivery mode.")] = "send",
         steer: Annotated[bool, typer.Option("--steer", help="Steer an active turn.")] = False,
@@ -219,8 +207,8 @@ def _flag_modes(
 
 def _stop_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., None]:
     def command(
-        lane_arg: Annotated[str | None, typer.Argument(help="Lane id or @handle.")] = None,
-        lane: Annotated[str | None, typer.Option("--lane", help="Lane id or @handle.")] = None,
+        lane_arg: Annotated[str | None, typer.Argument(help="Thread selector.")] = None,
+        lane: Annotated[str | None, typer.Option("--lane", help="Thread selector.")] = None,
         json: Annotated[
             bool, typer.Option("--json", help="Render machine-readable JSON output.")
         ] = False,
@@ -228,7 +216,9 @@ def _stop_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., No
         selected = lane_arg or lane
         if selected is None or (lane_arg is not None and lane is not None):
             typer.secho(
-                "dispatch: provide one lane as an argument or with --lane", fg="red", err=True
+                "dispatch: provide one thread selector as an argument or with --lane",
+                fg="red",
+                err=True,
             )
             raise typer.Exit(code=2)
         result = invoke(op.id, {"lane": selected})
@@ -243,7 +233,8 @@ def _search_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., 
     def command(
         query: Annotated[str, typer.Argument(help="Substring/full-text query.")],
         lane: Annotated[
-            str | None, typer.Option("--lane", help="Limit to one lane/thread id.")
+            str | None,
+            typer.Option("--thread", "--lane", help="Limit to one thread selector."),
         ] = None,
         directory: Annotated[
             str | None,
@@ -252,7 +243,7 @@ def _search_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., 
         repo: Annotated[
             str | None, typer.Option("--repo", help="Only include threads under this repo root.")
         ] = None,
-        managed: Annotated[bool, typer.Option("--managed", help="Only managed lanes.")] = False,
+        managed: Annotated[bool, typer.Option("--managed", help="Only managed threads.")] = False,
         unmanaged: Annotated[
             bool, typer.Option("--unmanaged", help="Only unmanaged Codex threads.")
         ] = False,
@@ -296,62 +287,6 @@ def _search_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., 
             date_field=date_field,
             sort=sort,
             ascending=ascending,
-            limit=limit,
-            max_scan=max_scan,
-            json=json,
-        )
-
-    command.__doc__ = op.summary
-    return command
-
-
-def _lane_search_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., None]:
-    def command(
-        lane: Annotated[str, typer.Argument(help="Lane id, @handle, or raw Codex thread id.")],
-        query: Annotated[str, typer.Argument(help="Substring/full-text query.")],
-        directory: Annotated[
-            str | None,
-            typer.Option("--directory", "--dir", help="Only include threads under this directory."),
-        ] = None,
-        repo: Annotated[
-            str | None, typer.Option("--repo", help="Only include threads under this repo root.")
-        ] = None,
-        archived: Annotated[
-            bool, typer.Option("--archived", help="Search archived threads.")
-        ] = False,
-        since: Annotated[
-            str | None, typer.Option("--since", help="Inclusive ISO date/time lower bound.")
-        ] = None,
-        until: Annotated[
-            str | None, typer.Option("--until", help="Inclusive ISO date/time upper bound.")
-        ] = None,
-        date_field: Annotated[
-            _SearchSortKey, typer.Option("--date-field", help="Timestamp field for date filters.")
-        ] = "updated_at",
-        limit: Annotated[int, typer.Option(help="Max matches to return.")] = 20,
-        max_scan: Annotated[
-            int, typer.Option("--max-scan", help="Max transcript items to scan.")
-        ] = 200,
-        json: Annotated[
-            bool, typer.Option("--json", help="Render machine-readable JSON output.")
-        ] = False,
-    ) -> None:
-        _invoke_search(
-            op,
-            invoke,
-            render,
-            query=query,
-            lane=lane,
-            directory=directory,
-            repo=repo,
-            managed=False,
-            unmanaged=False,
-            archived=archived,
-            since=since,
-            until=until,
-            date_field=date_field,
-            sort="updated_at",
-            ascending=False,
             limit=limit,
             max_scan=max_scan,
             json=json,
@@ -405,9 +340,7 @@ def _invoke_search(
     _ignore_json(json)
 
 
-def _lane_list_command(
-    registry: OpRegistry, invoke: Invoker, render: Renderer
-) -> Callable[..., None]:
+def _list_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Callable[..., None]:
     roster = registry.get("roster")
     discover = registry.get("discover")
 
@@ -416,7 +349,7 @@ def _lane_list_command(
             bool, typer.Option("--unmanaged", help="List attachable unmanaged sessions.")
         ] = False,
         include_archived: Annotated[
-            bool, typer.Option(help="Include archived managed lanes.")
+            bool, typer.Option(help="Include archived managed threads.")
         ] = False,
         limit: Annotated[int, typer.Option(help="Max unmanaged sessions to list.")] = 50,
         json: Annotated[
@@ -430,43 +363,13 @@ def _lane_list_command(
         render(op, invoke(op.id, params))
         _ignore_json(json)
 
-    command.__doc__ = "List managed lanes, or unmanaged discoverable sessions."
-    return command
-
-
-def _lane_tail_command(
-    registry: OpRegistry, invoke: Invoker, render: Renderer
-) -> Callable[..., None]:
-    transcript = registry.get("transcript")
-    watch = registry.get("watch")
-
-    def command(
-        lane: Annotated[str, typer.Argument(help="Lane id or @handle.")],
-        follow: Annotated[
-            bool, typer.Option("--follow", help="Collect a bounded live event sample.")
-        ] = False,
-        limit: Annotated[int, typer.Option(help="Max transcript items or events to return.")] = 50,
-        timeout: Annotated[
-            float, typer.Option(help="Seconds to wait when --follow is used.")
-        ] = 10.0,
-        json: Annotated[
-            bool, typer.Option("--json", help="Render machine-readable JSON output.")
-        ] = False,
-    ) -> None:
-        op = watch if follow else transcript
-        params: dict[str, object] = {"lane": lane, "limit": limit}
-        if follow:
-            params["timeout"] = timeout
-        render(op, invoke(op.id, params))
-        _ignore_json(json)
-
-    command.__doc__ = "Read transcript history, or a bounded live event sample with --follow."
+    command.__doc__ = "List managed threads, or unmanaged discoverable sessions."
     return command
 
 
 def _goal_set_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., None]:
     def command(
-        lane: Annotated[str, typer.Argument(help="Lane id or @handle.")],
+        lane: Annotated[str, typer.Argument(help="Thread selector.")],
         objective: Annotated[str | None, typer.Argument(help="Goal objective text.")] = None,
         status: Annotated[str | None, typer.Option("--status", help="Goal status.")] = None,
         token_budget: Annotated[
@@ -524,24 +427,17 @@ def _schema_command(registry: OpRegistry) -> Callable[..., None]:
 def _schema_op_id(command: str) -> str:
     aliases = {
         "stop": "stop",
+        "list": "roster",
+        "list-unmanaged": "discover",
+        "attach": "attach",
+        "get": "show",
+        "tail": "transcript",
+        "watch": "watch",
+        "sync": "sync",
         "search": "search",
         "rename": "lane-rename",
         "archive": "archive",
         "restore": "restore",
-        "lane-get": "show",
-        "lane-status": "show",
-        "lane-list": "roster",
-        "lane-list-unmanaged": "discover",
-        "lane-attach": "attach",
-        "lane-sync": "sync",
-        "lane-rename": "lane-rename",
-        "lane-search": "search",
-        "lane-fork": "fork",
-        "lane-rollback": "rollback",
-        "lane-compact": "compact",
-        "lane-archive": "archive",
-        "lane-restore": "restore",
-        "lane-tail": "transcript",
         "goal-status": "goal-get",
         "goal-set": "goal-set",
         "goal-clear": "goal-clear",
@@ -555,10 +451,10 @@ def _schema_op_id(command: str) -> str:
     flags = {part for part in parts if part.startswith("--")}
     words = [part for part in parts if not part.startswith("--")]
     normalized = "-".join(words) if words else command.strip().replace(" ", "-")
-    if normalized == "lane-list" and "--unmanaged" in flags:
+    if normalized == "tail" and "--follow" in flags:
+        return "__unknown_tail_follow__"
+    if normalized == "list" and "--unmanaged" in flags:
         return "discover"
-    if normalized == "lane-tail" and "--follow" in flags:
-        return "watch"
     return aliases.get(normalized, normalized)
 
 

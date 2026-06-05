@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
 
 from outfitter.dispatch.contracts.errors import NotFoundError
 from outfitter.dispatch.registry.models import LaneSync
-from outfitter.dispatch.registry.store import Registry
+from outfitter.dispatch.registry.refs import BASE58BTC_ALPHABET, codex_ref_payload
+from outfitter.dispatch.registry.store import SCHEMA_VERSION, Registry
 
 
 def _clock() -> datetime:
@@ -29,10 +31,89 @@ async def store() -> AsyncIterator[Registry]:
 async def test_add_and_get_lane(store: Registry) -> None:
     lane = await store.add_lane(id="L1", handle="@alpha", source="own", cwd="/work")
     assert lane.id == "L1"
+    assert lane.ref.startswith("0")
+    assert lane.ref_payload == codex_ref_payload("L1")
+    assert lane.ref_mixer == BASE58BTC_ALPHABET[0]
     assert lane.source == "own"
     assert lane.created_at == _clock()
     got = await store.get_lane("L1")
     assert got.handle == "@alpha"
+    assert await store.find_lane_by_ref(lane.ref) == got
+
+
+async def test_refs_allocated_for_owned_attached_and_forked_lanes(store: Registry) -> None:
+    owned = await store.add_lane(id="owned", handle="@owned", source="own")
+    attached = await store.add_lane(id="attached", handle="@attached", source="attached")
+    forked = await store.add_lane(id="owned-fork", handle="@forked", source="own")
+
+    assert len({owned.ref, attached.ref, forked.ref}) == 3
+    assert owned.ref_source == "0"
+    assert attached.ref_source == "0"
+    assert forked.ref_source == "0"
+
+
+async def test_ref_collision_allocates_next_mixer(
+    store: Registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("outfitter.dispatch.registry.store.codex_ref_payload", lambda _id: "zzzz")
+
+    first = await store.add_lane(id="first", handle="@first", source="own")
+    second = await store.add_lane(id="second", handle="@second", source="own")
+
+    assert first.ref == "0zzzz1"
+    assert second.ref == "0zzzz2"
+    assert second.ref_mixer == BASE58BTC_ALPHABET[1]
+
+
+async def test_v2_registry_migration_backfills_unique_refs(tmp_path: Path) -> None:
+    db = tmp_path / "registry.sqlite3"
+    import aiosqlite
+
+    conn = await aiosqlite.connect(db)
+    await conn.executescript(
+        """
+        CREATE TABLE lanes (
+            id TEXT PRIMARY KEY,
+            handle TEXT NOT NULL,
+            role TEXT,
+            cwd TEXT,
+            source TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'unknown',
+            pinned INTEGER NOT NULL DEFAULT 0,
+            active_turn_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_event_at TEXT
+        );
+        INSERT INTO lanes (
+            id, handle, source, status, pinned, created_at, updated_at
+        ) VALUES
+            (
+                'B', '@b', 'own', 'idle', 0,
+                '2026-06-03T12:00:02+00:00', '2026-06-03T12:00:02+00:00'
+            ),
+            (
+                'A', '@a', 'attached', 'idle', 0,
+                '2026-06-03T12:00:01+00:00', '2026-06-03T12:00:01+00:00'
+            );
+        PRAGMA user_version = 2;
+        """
+    )
+    await conn.commit()
+    await conn.close()
+
+    migrated = await Registry.open(db, now=_clock)
+    try:
+        lanes = await migrated.list_lanes()
+        assert [lane.id for lane in lanes] == ["A", "B"]
+        assert len({lane.ref for lane in lanes}) == 2
+        assert all(lane.ref for lane in lanes)
+        async with migrated._conn.execute("PRAGMA user_version") as cur:
+            row = await cur.fetchone()
+        assert row is not None
+        assert int(row[0]) == SCHEMA_VERSION
+    finally:
+        await migrated.close()
 
 
 async def test_get_missing_lane_raises_not_found(store: Registry) -> None:

@@ -13,6 +13,8 @@ from outfitter.dispatch.registry.store import Registry
 from outfitter.dispatch.surfaces.mcp import handle_tool_call
 from tests.fakes import make_ctx
 
+_IDENTITY_FIELDS = {"lane", "ref", "id", "title", "handle", "managed", "source", "status", "cwd"}
+
 
 @pytest_asyncio.fixture
 async def socket_path(socket_dir: Path) -> AsyncIterator[Path]:
@@ -29,73 +31,80 @@ async def socket_path(socket_dir: Path) -> AsyncIterator[Path]:
 
 async def test_tool_calls_open_send_roster(socket_path: Path) -> None:
     opened = await handle_tool_call(
-        socket_path, "dispatch_lane_write", {"op": "open", "name": "alpha", "cwd": "/w"}
+        socket_path, "dispatch_thread_write", {"op": "open", "name": "alpha", "cwd": "/w"}
     )
     assert not opened.isError
     assert opened.structuredContent is not None
     assert opened.structuredContent["handle"] == "@alpha"
 
     sent = await handle_tool_call(
-        socket_path, "dispatch_lane_write", {"op": "send", "lane": "lane-1", "text": "hi"}
+        socket_path, "dispatch_thread_write", {"op": "send", "lane": "lane-1", "text": "hi"}
     )
     assert sent.structuredContent is not None
     assert sent.structuredContent["accepted"] is True
+    assert set(sent.structuredContent) >= _IDENTITY_FIELDS
+    assert sent.structuredContent["ref"] == opened.structuredContent["ref"]
 
-    roster = await handle_tool_call(socket_path, "dispatch_lane_read", {"op": "roster"})
+    roster = await handle_tool_call(socket_path, "dispatch_thread_read", {"op": "roster"})
     assert roster.structuredContent is not None
     assert len(roster.structuredContent["lanes"]) == 1
 
 
 async def test_tool_calls_transcript_goal_and_compact(socket_path: Path) -> None:
     opened = await handle_tool_call(
-        socket_path, "dispatch_lane_write", {"op": "open", "name": "alpha", "cwd": "/w"}
+        socket_path, "dispatch_thread_write", {"op": "open", "name": "alpha", "cwd": "/w"}
     )
     assert not opened.isError
 
     goal = await handle_tool_call(
         socket_path,
-        "dispatch_lane_write",
+        "dispatch_thread_write",
         {"op": "goal_set", "lane": "lane-1", "objective": "ship"},
     )
     assert goal.structuredContent is not None
     assert goal.structuredContent["goal"]["objective"] == "ship"
+    assert set(goal.structuredContent) >= _IDENTITY_FIELDS
 
     got = await handle_tool_call(
         socket_path,
-        "dispatch_lane_read",
+        "dispatch_thread_read",
         {"op": "goal_get", "lane": "lane-1"},
     )
     assert got.structuredContent is not None
     assert got.structuredContent["goal"]["status"] == "active"
+    assert set(got.structuredContent) >= _IDENTITY_FIELDS
 
     transcript = await handle_tool_call(
         socket_path,
-        "dispatch_lane_read",
+        "dispatch_thread_read",
         {"op": "transcript", "lane": "lane-1", "limit": 5},
     )
     assert transcript.structuredContent is not None
     assert transcript.structuredContent["items"] == []
+    assert set(transcript.structuredContent) >= _IDENTITY_FIELDS
 
     compact = await handle_tool_call(
         socket_path,
-        "dispatch_lane_write",
+        "dispatch_thread_write",
         {"op": "compact", "lane": "lane-1"},
     )
     assert compact.structuredContent is not None
     assert compact.structuredContent["accepted"] is True
+    assert set(compact.structuredContent) >= _IDENTITY_FIELDS
 
     synced = await handle_tool_call(
         socket_path,
-        "dispatch_lane_write",
+        "dispatch_thread_write",
         {"op": "sync", "lane": "lane-1"},
     )
     assert synced.structuredContent is not None
     assert synced.structuredContent["sync"]["state"] == "metadata"
+    assert set(synced.structuredContent) >= _IDENTITY_FIELDS
 
 
 async def test_tool_call_error_projects_full_taxonomy_into_meta(socket_path: Path) -> None:
     result = await handle_tool_call(
-        socket_path, "dispatch_lane_read", {"op": "show", "lane": "ghost"}
+        socket_path, "dispatch_thread_read", {"op": "show", "lane": "ghost"}
     )
     assert result.isError is True
     assert result.meta is not None
@@ -106,7 +115,7 @@ async def test_tool_call_error_projects_full_taxonomy_into_meta(socket_path: Pat
 
 
 async def test_tool_call_rejects_unknown_grouped_action(socket_path: Path) -> None:
-    result = await handle_tool_call(socket_path, "dispatch_lane_read", {"op": "send"})
+    result = await handle_tool_call(socket_path, "dispatch_thread_read", {"op": "send"})
     assert result.isError is True
     assert result.meta is not None
     assert result.meta["dispatchCode"] == "mcp_route_error"

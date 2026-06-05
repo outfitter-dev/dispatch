@@ -27,3 +27,4 @@ Files are `NNNN-slug.md`. Copy [`template.md`](template.md) to start one. Keep t
 | [0016](0016-history-goals-and-bounded-watch.md) | History, Goals, and Bounded Watch | Accepted |
 | [0017](0017-progressive-thread-sync-index.md) | Progressive Thread Sync Index | Accepted |
 | [0018](0018-top-level-thread-actions-and-search.md) | Top-Level Thread Actions and Search | Accepted |
+| [0019](0019-dispatch-local-refs-and-flat-thread-cli.md) | Dispatch-Local Refs and Flat Thread CLI | Accepted |

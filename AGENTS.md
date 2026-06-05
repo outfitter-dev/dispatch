@@ -43,12 +43,14 @@ Read `docs/development/design.md` and `.agents/plans/v0/PLAN.md` before implemen
 
 Use the project language consistently:
 
-- **lane** — a managed Codex thread (own or attached). Not "thread", "agent", or "unit" in user-facing text.
+- **lane** — internal term for a managed Codex thread (own or attached) with registry state.
+- **thread** — user-facing Codex conversation/session. Public CLI/help/docs should prefer "thread" unless the managed-lane authority distinction matters.
+- **ref** — dispatch-local short stable selector for a managed lane. Full Codex thread ids are always accepted; titles and `@handles` are mutable labels.
 - **op** — one authored operation (input/output/intent/examples/handler). The contract unit. Not "command" or "tool" (those are surface projections of an op).
 - **surface** — a derived rendering of the op registry: CLI, MCP, remote. Surfaces are projected, never hand-written per-op.
 - **trigger** — an automated when→action→lane binding (time or event). Not "rule" (collides with agent rules), "automation", or "job".
 - **daemon** (`dispatchd`) — the long-lived host owning the app-server and core; the CLI is a thin client to it.
-- **register/registry** — the durable store of lanes and triggers.
+- **register/registry** — the durable store of lanes, refs, sync state, and triggers.
 
 ## Core rules (summary; full detail in `.claude/rules/`)
 

@@ -8,8 +8,8 @@ This workspace-local plugin exposes:
   `dispatch mcp`.
 
 The MCP server and skills expose the same derived operation registry as the CLI,
-including lane creation/messaging, bounded tails, native goals, history controls,
-triggers, schemas, and daemon status/log reads.
+including managed-thread creation/messaging, dispatch refs, persisted `tail`,
+bounded live `watch`, native goals, triggers, schemas, and daemon status/log reads.
 
 Run `dispatch doctor` after installing or upgrading dispatch. It verifies the CLI
 entrypoints, Codex CLI/auth footprint, daemon socket/pidfile state, registry

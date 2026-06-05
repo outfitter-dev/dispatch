@@ -42,8 +42,8 @@ class _ToolGroup:
 
 _GROUPS: tuple[_ToolGroup, ...] = (
     _ToolGroup(
-        name="dispatch_lane_read",
-        summary="Read lane and session state.",
+        name="dispatch_thread_read",
+        summary="Read managed and unmanaged thread state.",
         intent="read",
         actions=(
             ("roster", "roster"),
@@ -56,8 +56,8 @@ _GROUPS: tuple[_ToolGroup, ...] = (
         ),
     ),
     _ToolGroup(
-        name="dispatch_lane_write",
-        summary="Create lanes and send messages to owned lanes.",
+        name="dispatch_thread_write",
+        summary="Create, attach, sync, rename, and send to managed threads.",
         intent="write",
         actions=(
             ("open", "open"),
@@ -74,8 +74,8 @@ _GROUPS: tuple[_ToolGroup, ...] = (
         ),
     ),
     _ToolGroup(
-        name="dispatch_lane_destroy",
-        summary="Destroy or archive lane state.",
+        name="dispatch_thread_destroy",
+        summary="Archive or destroy managed thread state.",
         intent="destroy",
         actions=(("archive", "archive"), ("goal_clear", "goal-clear"), ("rollback", "rollback")),
     ),

@@ -157,9 +157,11 @@ async def test_new_lane_initial_send_failure_leaves_lane_registered(
 async def test_send_resolves_by_handle(store: Registry) -> None:
     client = FakeLaneClient()
     ctx = make_ctx(store, client)
-    await handlers.open_lane(OpenInput(name="beta"), ctx)
+    ref = await handlers.open_lane(OpenInput(name="beta"), ctx)
     ack = await handlers.send(LaneTextInput(lane="@beta", text="hi"), ctx)
     assert ack.lane == "lane-1"
+    by_ref = await handlers.send(LaneTextInput(lane=ref.ref, text="again"), ctx)
+    assert by_ref.lane == "lane-1"
 
 
 async def test_send_modes_context_and_interject(store: Registry) -> None:

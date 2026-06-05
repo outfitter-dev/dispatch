@@ -24,26 +24,29 @@ uv run dispatch up
 uv run dispatch daemon status
 ```
 
-Open an owned lane, send it work, and inspect the daemon:
+Create an owned managed thread, send it work, and inspect the daemon:
 
 ```bash
 uv run dispatch new \
   --name docs \
   --cwd /path/to/dispatch \
   --text "Please summarize the current stack state."
-uv run dispatch lane tail "@[dispatch] docs" --limit 20
-uv run dispatch goal set "@[dispatch] docs" "Finish the docs review."
+uv run dispatch list
+uv run dispatch tail <dispatch-ref> --limit 20
+uv run dispatch goal set <dispatch-ref> "Finish the docs review."
 uv run dispatch daemon log --limit 10
 uv run dispatch down
 ```
 
-Use owned lanes for turn-writing work. Existing desktop Codex threads can be attached as
-managed lanes, but ADR-0005 still blocks turn-writing and history-mutating commands such
-as `send`, `stop`, `goal set`, `goal clear`, `lane fork`, `lane rollback`, and
-`lane compact` on attached lanes. Metadata/lifecycle actions (`rename`, `archive`,
-`restore`) can target managed lanes or raw unmanaged Codex thread ids, and `search` can
-span both. Attach is metadata-only by default; use `dispatch lane sync <lane>` when you
-want dispatch to refresh its local indexed view of an attached thread.
+Use owned managed threads for turn-writing work. Existing desktop Codex threads can be attached as
+managed threads, but ADR-0005 still blocks turn-writing and history-mutating commands such
+as `send`, `stop`, `goal set`, and `goal clear` on attached lanes. Every managed
+thread has a dispatch-local `ref`; full Codex thread UUIDs remain accepted everywhere.
+Titles and `@handles` are mutable convenience labels, not stable identity. Metadata
+lifecycle actions (`rename`, `archive`, `restore`) can target managed refs or raw
+unmanaged Codex thread ids, and `search` can span both. Attach is metadata-only by
+default; use `dispatch sync <selector>` when you want dispatch to refresh its local
+indexed view of an attached thread.
 
 For the operator guide, CLI/MCP examples, triggers, and plugin setup, start at
 [`docs/usage/README.md`](docs/usage/README.md).

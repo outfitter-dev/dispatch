@@ -15,7 +15,7 @@ An **op** is the single source for one operation. Author only what's irreducible
 
 Register the op in `ops.py`. Then make sure each projection has an intentional
 route for it: simple ops may map directly, while ergonomic surfaces may group or
-compose ops (for example `lane list --unmanaged` → `discover`, `goal status` →
+compose ops (for example `list --unmanaged` → `discover`, `goal status` →
 `goal-get`, and grouped MCP tools with an `op` selector). The projection must be
 derived from the registry; never hand-implement the same behavior separately in a
 surface.
