@@ -9,6 +9,7 @@ history-mutating ops still raise ``AuthorityError``.
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime, time
 from pathlib import Path
 from typing import TypedDict, cast
@@ -88,6 +89,7 @@ from .selectors import resolve_managed_selector, resolve_thread_selector
 from .sync import scan_codex_jsonl
 
 _READ_ONLY = SandboxPolicy(type="readOnly")
+_INTRO_TEMPLATE = '[dispatch] From {handle} ({ref}). Use `dispatch send {ref} "..."` to reply.'
 
 # Bound attach metadata reads: if the app-server is wedged, fail clearly and never
 # half-register (the registry write only follows a successful metadata read).
@@ -150,6 +152,22 @@ def _managed_identity(lane: Lane) -> _ManagedIdentityPayload:
         "status": lane.status,
         "cwd": lane.cwd,
     }
+
+
+async def _apply_send_intro(inp: SendInput, ctx: Ctx) -> str:
+    if not inp.intro:
+        return inp.text
+
+    sender_id = inp.caller_thread_id or os.environ.get("CODEX_THREAD_ID")
+    if not sender_id:
+        raise ValidationError("--intro requires CODEX_THREAD_ID from the current Codex thread")
+
+    sender = await ctx.registry.find_lane(sender_id)
+    if sender is None:
+        raise ValidationError("--intro requires the current Codex thread to be managed by dispatch")
+
+    intro = _INTRO_TEMPLATE.format(handle=sender.handle, ref=sender.ref)
+    return f"{intro}\n\n{inp.text}"
 
 
 def _sync_view(sync: LaneSync | None) -> LaneSyncView:
@@ -453,13 +471,14 @@ async def send(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
 
 
 async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
+    text = await _apply_send_intro(inp, ctx)
     match inp.mode:
         case "send":
-            return await send(LaneTextInput(lane=inp.lane, text=inp.text), ctx)
+            return await send(LaneTextInput(lane=inp.lane, text=text), ctx)
         case "steer":
-            return await steer(LaneTextInput(lane=inp.lane, text=inp.text), ctx)
+            return await steer(LaneTextInput(lane=inp.lane, text=text), ctx)
         case "context":
-            return await brief(LaneTextInput(lane=inp.lane, text=inp.text), ctx)
+            return await brief(LaneTextInput(lane=inp.lane, text=text), ctx)
         case "interject":
             lane = await _resolve(ctx, inp.lane)
             _require_writable(lane)
@@ -467,16 +486,16 @@ async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
             await ctx.client.turn_interrupt(lane.id, turn_id)
             await ctx.registry.log_action("interrupt", lane=lane.id, detail="interject")
             await ctx.client.turn_start(
-                lane.id, inp.text, cwd=lane.cwd or ".", sandbox_policy=_READ_ONLY
+                lane.id, text, cwd=lane.cwd or ".", sandbox_policy=_READ_ONLY
             )
             await ctx.registry.update_lane_status(lane.id, "busy")
-            await ctx.registry.log_action("send", lane=lane.id, detail=inp.text[:120])
+            await ctx.registry.log_action("send", lane=lane.id, detail=text[:120])
             return ActionAck(**_managed_identity(lane), op="interject")
         case "queue":
             lane = await _resolve(ctx, inp.lane)
             _require_writable(lane)
-            message = await ctx.registry.enqueue_message(lane=lane.id, text=inp.text)
-            await ctx.registry.log_action("queue", lane=lane.id, detail=inp.text[:120])
+            message = await ctx.registry.enqueue_message(lane=lane.id, text=text)
+            await ctx.registry.log_action("queue", lane=lane.id, detail=text[:120])
             if lane.status == "idle":
                 await queue.drain_next_queued_message(ctx, lane.id)
             pending = await ctx.registry.pending_message_count(lane.id)

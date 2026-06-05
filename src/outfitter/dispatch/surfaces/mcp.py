@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 from pathlib import Path
 
 from mcp.server.lowlevel import Server
@@ -126,6 +127,8 @@ def _route_tool_call(
         return _tool_error(f"unknown dispatch MCP action {tool_name}/{action}", code=-32601)
     params = dict(arguments)
     del params["op"]
+    if route.op.id == "send" and params.get("intro") is True:
+        params["caller_thread_id"] = os.environ.get("CODEX_THREAD_ID")
     return route.op.id, params
 
 

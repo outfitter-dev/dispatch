@@ -165,11 +165,16 @@ uv run dispatch send @my-lane "Focus on docs first." --steer
 uv run dispatch send @my-lane "Stop and do this instead." --interject
 uv run dispatch send @my-lane "Context: use lane publicly, thread internally." --context
 uv run dispatch send @my-lane "After this finishes, summarize risks." --mode queue
+uv run dispatch send @my-lane "Can you check this?" --intro
 ```
 
 The mode flags and `--mode send|steer|queue|interject|context` are mutually
 exclusive. `--queue` stores the message durably and starts one queued turn when
 the lane is idle.
+
+Use `--intro` when you are sending from one managed Codex thread to another and
+want the recipient to know how to reply through dispatch. It derives the sender
+from `CODEX_THREAD_ID`, so the current thread must already be managed.
 
 Use `stop` to cancel the active turn without replacement text:
 

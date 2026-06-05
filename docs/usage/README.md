@@ -230,6 +230,15 @@ stored in dispatch's durable registry and starts one queued turn per idle transi
 uv run dispatch send @docs-review "Run this after the active turn." --queue
 ```
 
+Use `send --intro` for managed Codex-to-Codex coordination. It prepends a terse
+reply hint like `[dispatch] From @Dispatch (<ref>). Use dispatch send ... to
+reply.` The sender is derived from `CODEX_THREAD_ID`, so the current Codex
+thread must already be managed by dispatch:
+
+```bash
+uv run dispatch send @docs-review "Can you sanity-check this?" --intro
+```
+
 ## Thread History, Watch, And Goals
 
 `get` is the compact managed-thread summary:

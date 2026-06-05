@@ -22,6 +22,7 @@ from outfitter.dispatch.contracts.errors import (
     ValidationError,
     project_error,
 )
+from outfitter.dispatch.contracts.schema import is_internal_field
 from outfitter.dispatch.core.ops import REGISTRY
 
 
@@ -67,7 +68,9 @@ def test_mcp_model_parity_per_op() -> None:
     assert set(routes_by_op) == set(REGISTRY.ids())
 
     for op in REGISTRY:
-        fields = set(op.input.model_fields)
+        fields = {
+            name for name, field in op.input.model_fields.items() if not is_internal_field(field)
+        }
         route = routes_by_op[op.id]
         tool = mcp_tools[route.tool_name]
         variants = tool.inputSchema["oneOf"]
@@ -141,7 +144,7 @@ def test_cli_composed_routes_invoke_canonical_ops() -> None:
     assert runner.invoke(app, ["goal", "status", "@docs"]).exit_code == 0
 
     assert calls == [
-        ("send", {"lane": "@docs", "text": "hi", "mode": "context"}),
+        ("send", {"lane": "@docs", "text": "hi", "mode": "context", "intro": False}),
         ("stop", {"lane": "@docs"}),
         ("discover", {"limit": 50}),
         ("sync", {"lane": "@docs", "full": False}),

@@ -65,12 +65,14 @@ Contract: read-only, brief answer, reply in this lane unless asked otherwise.
 Then deliver it:
 
 ```bash
-uv run dispatch send <target-ref> '<message>'
+uv run dispatch send <target-ref> '<message>' --intro
 ```
 
 Keep DMs conversational and bounded. Prefer one ask. Include only the context
 needed for the target lane to answer without reading the sender's full
-transcript. Do not use `$dm` to smuggle in broad implementation work.
+transcript. If the current Codex thread is not managed by dispatch, omit
+`--intro` and include the sender link manually. Do not use `$dm` to smuggle in
+broad implementation work.
 
 ## Harvesting
 

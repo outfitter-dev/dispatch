@@ -5,12 +5,14 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+import pytest
 import pytest_asyncio
 
+from outfitter.dispatch.contracts.derive_mcp import derive_mcp_projection
 from outfitter.dispatch.core.ops import REGISTRY
 from outfitter.dispatch.daemon.control import ControlServer
 from outfitter.dispatch.registry.store import Registry
-from outfitter.dispatch.surfaces.mcp import handle_tool_call
+from outfitter.dispatch.surfaces.mcp import _route_tool_call, handle_tool_call
 from tests.fakes import make_ctx
 
 _IDENTITY_FIELDS = {"lane", "ref", "id", "title", "handle", "managed", "source", "status", "cwd"}
@@ -119,3 +121,24 @@ async def test_tool_call_rejects_unknown_grouped_action(socket_path: Path) -> No
     assert result.isError is True
     assert result.meta is not None
     assert result.meta["dispatchCode"] == "mcp_route_error"
+
+
+def test_tool_call_routes_intro_with_caller_thread_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    projection = derive_mcp_projection(REGISTRY)
+    monkeypatch.setenv("CODEX_THREAD_ID", "sender-thread")
+
+    route = _route_tool_call(
+        projection,
+        "dispatch_thread_write",
+        {"op": "send", "lane": "@docs", "text": "hi", "intro": True},
+    )
+
+    assert route == (
+        "send",
+        {
+            "lane": "@docs",
+            "text": "hi",
+            "intro": True,
+            "caller_thread_id": "sender-thread",
+        },
+    )

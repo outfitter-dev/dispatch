@@ -38,7 +38,9 @@ def test_action_schema_and_annotations_from_op() -> None:
     assert lane_write.annotations.idempotentHint is False
     one_of = lane_write.inputSchema["oneOf"]
     new_schema = next(s for s in one_of if s["properties"]["op"]["const"] == "new")
+    send_schema = next(s for s in one_of if s["properties"]["op"]["const"] == "send")
     assert set(new_schema["properties"]) >= {"op", "name", "preset", "text", "send"}
+    assert "caller_thread_id" not in send_schema["properties"]
     assert {s["properties"]["op"]["const"] for s in one_of} >= {
         "fork",
         "goal_set",
