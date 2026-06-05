@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
+from outfitter.dispatch.client.errors import AppServerError as ClientAppServerError
 from outfitter.dispatch.client.errors import TransportError
 from outfitter.dispatch.client.models import ThreadGoal, ThreadInfo, ThreadStatus
 from outfitter.dispatch.contracts.errors import AppServerError, AuthorityError, ValidationError
@@ -541,6 +542,26 @@ async def test_roster_then_archive_flips_status(store: Registry) -> None:
     assert (await handlers.roster(RosterInput(), ctx)).lanes == []
     everything = await handlers.roster(RosterInput(include_archived=True), ctx)
     assert len(everything.lanes) == 1
+
+
+class _NoRolloutArchiveClient(FakeLaneClient):
+    async def thread_archive(self, thread_id: str) -> None:
+        self._record("thread_archive", thread_id=thread_id)
+        raise ClientAppServerError(-32600, f"no rollout found for thread id {thread_id}")
+
+
+async def test_archive_no_rollout_lane_marks_local_lane_archived(store: Registry) -> None:
+    client = _NoRolloutArchiveClient()
+    ctx = make_ctx(store, client)
+    await handlers.new_lane(NewInput(name="smoke", ephemeral=True, send=False), ctx)
+
+    archived = await handlers.archive(LaneInput(lane="lane-1"), ctx)
+
+    assert archived.status == "archived"
+    assert (await handlers.roster(RosterInput(), ctx)).lanes == []
+    everything = await handlers.roster(RosterInput(include_archived=True), ctx)
+    assert [lane.id for lane in everything.lanes] == ["lane-1"]
+    assert any(name == "thread_archive" for name, _ in client.calls)
 
 
 async def test_status_and_log_reflect_activity(store: Registry) -> None:

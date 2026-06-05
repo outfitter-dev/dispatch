@@ -7,7 +7,7 @@ import asyncio
 import pytest
 
 from outfitter.dispatch.client.client import AppServerClient
-from outfitter.dispatch.client.errors import AppServerError, TransportError
+from outfitter.dispatch.client.errors import AppServerError, ProtocolError, TransportError
 from outfitter.dispatch.client.events import TurnCompleted
 
 from .conftest import FakeTransport, Responder
@@ -187,6 +187,17 @@ async def test_eof_fails_pending_request_with_transport_error(
     fake.eof()
     with pytest.raises(TransportError):
         await task
+
+
+async def test_reader_error_fails_pending_request() -> None:
+    class BrokenTransport(FakeTransport):
+        async def receive(self) -> dict[str, object] | None:
+            raise ProtocolError("line too large")
+
+    c = AppServerClient(BrokenTransport())
+    await c.start()
+    with pytest.raises(ProtocolError, match="line too large"):
+        await c.thread_read("L1")
 
 
 async def test_events_stream_yields_projected_lane_event(

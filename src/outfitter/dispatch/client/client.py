@@ -15,7 +15,7 @@ from typing import Self
 
 from pydantic import BaseModel
 
-from .errors import ProtocolError, TransportError
+from .errors import ClientError, TransportError
 from .events import LaneEvent
 from .models import (
     ApprovalPolicy,
@@ -101,8 +101,11 @@ class AppServerClient:
                     if message is None:
                         break
                     self._router.handle(message)
-            except (TransportError, ProtocolError) as exc:
+            except ClientError as exc:
                 self._router.fail_all(exc)
+                return
+            except Exception as exc:
+                self._router.fail_all(TransportError(f"app-server read loop failed: {exc}"))
                 return
             self._router.fail_all(TransportError("app-server stream closed (stdout EOF)"))
         finally:

@@ -89,7 +89,9 @@ processes and there is no cross-process write interlock.
 
 Attach is bounded: if the app-server stalls, the underlying `thread/resume`
 times out (~15s) and `attach` fails with a clear `app_server` error, registering
-no lane. There is no half-attached state to clean up.
+no lane. There is no half-attached state to clean up. Large persisted histories
+are supported; attach should not fail only because a resumed thread has more than
+64 KiB of turns.
 
 ## Discover Sessions
 

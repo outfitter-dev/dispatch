@@ -104,7 +104,7 @@ boundary rather than forced to be one tool per op. The noun for a managed thread
 | `send` (`mode=context`) | `thread/inject_items` | Silent model-visible context injection (Responses-API items); no turn runs. Trigger actions still call this lower-level behavior `brief`. |
 | `send` (`mode=interject`) | `turn/interrupt` + `turn/start` | Requires an active turn id, cancels that turn, then starts replacement work. |
 | `stop` | `turn/interrupt` | Requires an active turn id and cancels the active turn without replacement text. |
-| `archive` | `thread/archive` | Reversible via `thread/unarchive`. |
+| `archive` | `thread/archive` | Reversible via `thread/unarchive` for persisted lanes. If App Server reports `no rollout found` for an owned no-rollout lane, dispatch archives the local registry entry so throwaway lanes can be cleaned up. |
 | `roster` (`lane list`) | `thread/list` + registry + status | List results are under `result.data` (NOT `result.threads`); `useStateDbOnly:true` reads the persisted store. |
 | `discover` (`lane list --unmanaged`) | `thread/list` state DB only | Lists persisted Codex sessions that could be attached; it does not resume or register them. |
 | `show` (`lane get/status`) | registry + optional `thread/read(includeTurns:true)` | Compact lane summary; optional transcript convenience. |
