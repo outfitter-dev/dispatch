@@ -4,7 +4,7 @@ slug: single-daemon-over-one-app-server
 title: Single Daemon over One App Server
 status: accepted
 created: 2026-06-02
-updated: 2026-06-02
+updated: 2026-06-05
 owners: ['[galligan](https://github.com/galligan)']
 ---
 
@@ -29,7 +29,7 @@ We drive the App Server binary directly (not the `openai-codex` SDK, which pins 
 
 ### Tradeoffs
 
-- A process to keep alive (launchd) and supervise (restart + re-resume on app-server crash).
+- A process to keep alive (launchd) and supervise (restart + restore lane observation on app-server crash).
 - A second App Server alongside the desktop app shares `~/.codex` — cross-process safety on a shared thread is unverified (see ADR-0005 / Phase-1 spike).
 
 ## Alternatives considered

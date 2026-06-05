@@ -24,6 +24,7 @@ from outfitter.dispatch.core.models import (
     GoalSetInput,
     LaneInput,
     LaneRenameInput,
+    LaneSyncInput,
     LaneTextInput,
     LogInput,
     NewInput,
@@ -584,26 +585,112 @@ async def test_attach_is_idempotent(store: Registry) -> None:
     second = await handlers.attach_lane(AttachInput(thread="T9"), ctx)
     assert first.id == second.id == "T9"
     assert len((await handlers.roster(RosterInput(), ctx)).lanes) == 1
+    assert any(name == "thread_read" for name, _ in client.calls)
+    assert not any(name == "thread_resume" for name, _ in client.calls)
+    sync = await store.get_lane_sync("T9")
+    assert sync is not None
+    assert sync.state == "metadata"
+    actions = await store.recent_actions(limit=10)
+    assert [action.op for action in actions] == ["attach"]
 
 
-class _HangingResumeClient(FakeLaneClient):
-    """A client whose ``thread/resume`` never returns — models a wedged app-server."""
+class _HangingReadClient(FakeLaneClient):
+    """A client whose metadata read never returns — models a wedged app-server."""
 
-    async def thread_resume(self, thread_id: str) -> ThreadInfo:
+    async def thread_read(self, thread_id: str, include_turns: bool = False) -> dict[str, object]:
         await asyncio.sleep(3600)  # cancelled by the handler's wait_for bound
         raise AssertionError("unreachable")  # pragma: no cover
 
 
-async def test_attach_resume_timeout_projects_cleanly_and_leaves_registry_empty(
+async def test_attach_metadata_timeout_projects_cleanly_and_leaves_registry_empty(
     store: Registry, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(handlers, "_RESUME_TIMEOUT_S", 0.05)
-    ctx = make_ctx(store, _HangingResumeClient())
+    monkeypatch.setattr(handlers, "_ATTACH_METADATA_TIMEOUT_S", 0.05)
+    ctx = make_ctx(store, _HangingReadClient())
     with pytest.raises(AppServerError) as excinfo:
         await handlers.attach_lane(AttachInput(thread="STUCK"), ctx)
     assert "timed out" in str(excinfo.value)
     # The bounded failure must not half-register a lane.
     assert (await handlers.roster(RosterInput(), ctx)).lanes == []
+
+
+async def test_attach_invalid_metadata_projects_cleanly_and_leaves_registry_empty(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    client.read_result = {"data": []}
+    ctx = make_ctx(store, client)
+
+    with pytest.raises(AppServerError) as excinfo:
+        await handlers.attach_lane(AttachInput(thread="BAD"), ctx)
+
+    assert "invalid payload" in str(excinfo.value)
+    assert (await handlers.roster(RosterInput(), ctx)).lanes == []
+
+
+async def test_attach_with_sync_indexes_jsonl_and_roster_reports_state(
+    store: Registry, tmp_path: Path
+) -> None:
+    path = tmp_path / "rollout.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                '{"type":"session_meta","timestamp":"2026-06-05T10:00:00.000Z",'
+                '"payload":{"id":"T9","cwd":"/work","source":"vscode",'
+                '"thread_source":"user","model_provider":"openai"}}',
+                '{"type":"turn_context","timestamp":"2026-06-05T10:00:01.000Z",'
+                '"payload":{"model":"gpt-5-codex","effort":"low"}}',
+                '{"type":"event_msg","timestamp":"2026-06-05T10:00:02.000Z",'
+                '"payload":{"type":"task_complete","turn_id":"turn-1"}}',
+            ]
+        )
+        + "\n"
+    )
+    client = FakeLaneClient()
+    client.read_result = {
+        "thread": {
+            "id": "T9",
+            "name": "Desktop",
+            "preview": "hello from desktop",
+            "cwd": "/work",
+            "source": "vscode",
+            "path": str(path),
+            "sessionId": "T9",
+            "modelProvider": "openai",
+        }
+    }
+    ctx = make_ctx(store, client)
+
+    attached = await handlers.attach_lane(AttachInput(thread="T9", sync=True), ctx)
+    detail = await handlers.show(ShowInput(lane="T9"), ctx)
+    roster = await handlers.roster(RosterInput(), ctx)
+
+    assert attached.handle == "Desktop"
+    assert detail.sync.state == "partial"
+    assert detail.sync.latest_turn_id == "turn-1"
+    assert detail.sync.source_size == path.stat().st_size
+    assert roster.lanes[0].sync.state == "partial"
+    assert roster.lanes[0].sync.latest_event_at == "2026-06-05T10:00:02.000Z"
+    assert sum(1 for name, _ in client.calls if name == "thread_read") == 1
+    assert not any(name == "thread_resume" for name, _ in client.calls)
+
+
+async def test_lane_sync_can_full_scan_existing_lane(store: Registry, tmp_path: Path) -> None:
+    path = tmp_path / "rollout.jsonl"
+    path.write_text(
+        '{"type":"session_meta","timestamp":"2026-06-05T10:00:00.000Z","payload":{"id":"T9"}}\n'
+    )
+    client = FakeLaneClient()
+    client.read_result = {"thread": {"id": "T9", "path": str(path)}}
+    ctx = make_ctx(store, client)
+    await store.add_lane(id="T9", handle="@desktop", source="attached")
+
+    out = await handlers.sync_lane(LaneSyncInput(lane="@desktop", full=True), ctx)
+
+    assert out.lane == "T9"
+    assert out.sync.state == "complete"
+    assert out.sync.transcript_partial is False
+    assert any(name == "thread_read" for name, _ in client.calls)
 
 
 async def test_discover_lists_persisted_sessions_from_client(store: Registry) -> None:

@@ -84,6 +84,14 @@ async def test_tool_calls_transcript_goal_and_compact(socket_path: Path) -> None
     assert compact.structuredContent is not None
     assert compact.structuredContent["accepted"] is True
 
+    synced = await handle_tool_call(
+        socket_path,
+        "dispatch_lane_write",
+        {"op": "sync", "lane": "lane-1"},
+    )
+    assert synced.structuredContent is not None
+    assert synced.structuredContent["sync"]["state"] == "metadata"
+
 
 async def test_tool_call_error_projects_full_taxonomy_into_meta(socket_path: Path) -> None:
     result = await handle_tool_call(

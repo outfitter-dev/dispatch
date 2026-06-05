@@ -4,7 +4,7 @@ slug: lane-authority-capability-ladder
 title: Lane Authority Capability Ladder
 status: accepted
 created: 2026-06-02
-updated: 2026-06-03
+updated: 2026-06-05
 owners: ['[galligan](https://github.com/galligan)']
 ---
 
@@ -14,20 +14,20 @@ owners: ['[galligan](https://github.com/galligan)']
 
 ## Context
 
-dispatch drives both lanes it **owns** (created via `open`) and lanes it **attaches** to (existing desktop threads via `resume`). Owned lanes have no other writer. Attached lanes are also live in the desktop Codex app — a separate app-server process over the same `~/.codex` store. We verified that a second connection resuming a *persisted* thread receives live event fan-out, but we did **not** verify that two app-servers running turns on the same thread concurrently is safe. Critically, dispatch's planned advisory lock is **dispatch-local**: it cannot stop the desktop app, which knows nothing about it.
+dispatch drives both lanes it **owns** (created via `open`) and lanes it **attaches** to (existing desktop threads registered from App Server metadata). Owned lanes have no other writer. Attached lanes are also live in the desktop Codex app — a separate app-server process over the same `~/.codex` store. We verified that a second connection resuming a *persisted* thread receives live event fan-out, but we did **not** verify that two app-servers running turns on the same thread concurrently is safe. Critically, dispatch's planned advisory lock is **dispatch-local**: it cannot stop the desktop app, which knows nothing about it.
 
 ## Decision
 
 Authority over a lane is a ladder, not a flag:
 
 - **Owned lanes** (dispatch created them): full read/write, always.
-- **Attached lanes** (existing desktop threads): **observe-only by default** — resume, read history, subscribe to events; no `send`/`steer`/`brief`/`interrupt`.
+- **Attached lanes** (existing desktop threads): **observe-only by default** — read metadata, sync a local index, read history; no `send`/`steer`/`brief`/`interrupt`.
 - **idle-only-write** and **full-write** on attached lanes are unlocked only when **(a)** the slice-0 cross-process spike shows it is safe, **and (b)** the user explicitly opts in (per-lane or global).
 
 ## Assumptions (must hold; verify before relying)
 
 1. Owned lanes truly have no concurrent external writer.
-2. Merely *observing* an attached lane (resume + read events) is safe alongside the desktop app — to be confirmed by the spike, not assumed.
+2. Merely *observing* an attached lane (metadata reads, history reads, and explicit sync) is safe alongside the desktop app — to be confirmed by the spike, not assumed.
 3. The spike can actually distinguish "safe" from "racy" for concurrent turns on a shared thread.
 
 ## Consequences
@@ -44,7 +44,7 @@ Two `codex app-server` processes shared one isolated `CODEX_HOME` (modelling our
 - **Live fan-out does NOT cross processes:** while A ran a turn, B (resumed) received **zero** live events. Live event fan-out is intra-process only (one app-server process). The spike-04 "resume = live co-presence" finding holds only for multiple connections to the *same* server process — which is exactly dispatch's own topology (ADR-0002), not the desktop-vs-daemon case.
 - **Concurrent turns are uncoordinated:** A and B each ran a turn on the shared thread with no error returned, but there is no cross-process interlock (dispatch's advisory lock is dispatch-local and cannot gate the desktop app), so "no error" is not "safe."
 
-**Decision:** keep attached lanes **observe-only** for v0. Observation is limited to resume + history read + periodic re-read (no live cross-process stream). The idle-only-write and full-write rungs stay locked; unlocking them needs a real cross-process interlock, which Codex does not expose today. This is the safe default the ladder already proposed — the spike confirms rather than relaxes it.
+**Decision:** keep attached lanes **observe-only** for v0. Observation is limited to metadata reads, explicit sync, history read, and periodic re-read (no live cross-process stream). ADR-0017 makes default attach metadata-only instead of `thread/resume`-based. The idle-only-write and full-write rungs stay locked; unlocking them needs a real cross-process interlock, which Codex does not expose today. This is the safe default the ladder already proposed — the spike confirms rather than relaxes it.
 
 ## Alternatives considered
 
@@ -53,4 +53,4 @@ Two `codex app-server` processes shared one isolated `CODEX_HOME` (modelling our
 
 ## References
 
-- ADR-0002 (Single Daemon over One App Server); `docs/research/app-server-verification.md` (resume fan-out, cross-process untested); `PLAN.md` Phase-1 slice-0 spike.
+- ADR-0002 (Single Daemon over One App Server); ADR-0017 (Progressive Thread Sync Index); `docs/research/app-server-verification.md` (resume fan-out, cross-process untested); `PLAN.md` Phase-1 slice-0 spike.

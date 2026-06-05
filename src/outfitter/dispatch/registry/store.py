@@ -22,13 +22,14 @@ from .models import (
     Lane,
     LaneSource,
     LaneStatus,
+    LaneSync,
     QueuedMessage,
     Trigger,
     WhenAdapter,
 )
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _utcnow() -> datetime:
@@ -78,6 +79,37 @@ CREATE TABLE IF NOT EXISTS queued_messages (
     updated_at TEXT NOT NULL,
     error TEXT
 );
+CREATE TABLE IF NOT EXISTS lane_sync_sources (
+    lane TEXT PRIMARY KEY,
+    state TEXT NOT NULL,
+    source_path TEXT,
+    source_device INTEGER,
+    source_inode INTEGER,
+    source_size INTEGER,
+    source_mtime_ns INTEGER,
+    line_count INTEGER,
+    first_offset INTEGER,
+    tail_offset INTEGER,
+    last_synced_at TEXT,
+    error TEXT,
+    FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS lane_snapshots (
+    lane TEXT PRIMARY KEY,
+    display_name TEXT,
+    preview TEXT,
+    cwd TEXT,
+    source TEXT,
+    thread_source TEXT,
+    model_provider TEXT,
+    model TEXT,
+    reasoning_effort TEXT,
+    session_id TEXT,
+    latest_event_at TEXT,
+    latest_turn_id TEXT,
+    transcript_partial INTEGER NOT NULL DEFAULT 1,
+    FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
+);
 """
 
 
@@ -103,7 +135,7 @@ class Registry:
                 f"version {SCHEMA_VERSION}"
             )
         await store._conn.executescript(_SCHEMA)
-        if user_version == 0:
+        if user_version < SCHEMA_VERSION:
             await store._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         await store._conn.commit()
         return store
@@ -137,6 +169,56 @@ class Registry:
             updated_at=now,
             last_event_at=None,
         )
+        await self._insert_lane(lane)
+        await self._conn.commit()
+        return lane
+
+    async def add_lane_with_sync(
+        self,
+        *,
+        id: str,
+        handle: str,
+        source: LaneSource,
+        sync: LaneSync,
+        role: str | None = None,
+        cwd: str | None = None,
+        status: LaneStatus = "unknown",
+        pinned: bool = False,
+        audit_op: str | None = None,
+        audit_detail: str | None = None,
+    ) -> tuple[Lane, LaneSync]:
+        if sync.lane != id:
+            raise ValueError(f"sync lane {sync.lane!r} does not match lane id {id!r}")
+        now = self._now()
+        lane = Lane(
+            id=id,
+            handle=handle,
+            role=role,
+            cwd=cwd,
+            source=source,
+            status=status,
+            pinned=pinned,
+            created_at=now,
+            updated_at=now,
+            last_event_at=None,
+        )
+        synced_at = sync.last_synced_at or now.isoformat()
+        await self._conn.execute("BEGIN")
+        try:
+            await self._insert_lane(lane)
+            await self._upsert_lane_sync_rows(sync, synced_at)
+            if audit_op is not None:
+                await self._insert_action_log(audit_op, lane=lane.id, detail=audit_detail)
+        except Exception:
+            await self._conn.rollback()
+            raise
+        await self._conn.commit()
+        saved_sync = await self.get_lane_sync(lane.id)
+        if saved_sync is None:
+            raise RuntimeError("lane sync insert did not return a row")
+        return lane, saved_sync
+
+    async def _insert_lane(self, lane: Lane) -> None:
         await self._conn.execute(
             "INSERT INTO lanes (id, handle, role, cwd, source, status, pinned, active_turn_id, "
             "created_at, updated_at, last_event_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -148,14 +230,12 @@ class Registry:
                 lane.source,
                 lane.status,
                 int(lane.pinned),
-                None,
+                lane.active_turn_id,
                 lane.created_at.isoformat(),
                 lane.updated_at.isoformat(),
-                None,
+                lane.last_event_at.isoformat() if lane.last_event_at else None,
             ),
         )
-        await self._conn.commit()
-        return lane
 
     async def find_lane(self, lane_id: str) -> Lane | None:
         async with self._conn.execute("SELECT * FROM lanes WHERE id = ?", (lane_id,)) as cur:
@@ -284,6 +364,87 @@ class Registry:
         await self._conn.commit()
         return cur.rowcount
 
+    # --- lane sync -----------------------------------------------------------
+
+    async def upsert_lane_sync(self, sync: LaneSync) -> LaneSync:
+        now = sync.last_synced_at or self._now().isoformat()
+        await self._upsert_lane_sync_rows(sync, now)
+        await self._conn.commit()
+        got = await self.get_lane_sync(sync.lane)
+        if got is None:
+            raise RuntimeError("lane sync upsert did not return a row")
+        return got
+
+    async def _upsert_lane_sync_rows(self, sync: LaneSync, last_synced_at: str) -> None:
+        await self._conn.execute(
+            "INSERT INTO lane_sync_sources (lane, state, source_path, source_device, "
+            "source_inode, source_size, source_mtime_ns, line_count, first_offset, "
+            "tail_offset, last_synced_at, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(lane) DO UPDATE SET state = excluded.state, "
+            "source_path = excluded.source_path, source_device = excluded.source_device, "
+            "source_inode = excluded.source_inode, source_size = excluded.source_size, "
+            "source_mtime_ns = excluded.source_mtime_ns, line_count = excluded.line_count, "
+            "first_offset = excluded.first_offset, tail_offset = excluded.tail_offset, "
+            "last_synced_at = excluded.last_synced_at, error = excluded.error",
+            (
+                sync.lane,
+                sync.state,
+                sync.source_path,
+                sync.source_device,
+                sync.source_inode,
+                sync.source_size,
+                sync.source_mtime_ns,
+                sync.line_count,
+                sync.first_offset,
+                sync.tail_offset,
+                last_synced_at,
+                sync.error,
+            ),
+        )
+        await self._conn.execute(
+            "INSERT INTO lane_snapshots (lane, display_name, preview, cwd, source, "
+            "thread_source, model_provider, model, reasoning_effort, session_id, "
+            "latest_event_at, latest_turn_id, transcript_partial) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(lane) DO UPDATE SET display_name = excluded.display_name, "
+            "preview = excluded.preview, cwd = excluded.cwd, source = excluded.source, "
+            "thread_source = excluded.thread_source, model_provider = excluded.model_provider, "
+            "model = excluded.model, reasoning_effort = excluded.reasoning_effort, "
+            "session_id = excluded.session_id, latest_event_at = excluded.latest_event_at, "
+            "latest_turn_id = excluded.latest_turn_id, "
+            "transcript_partial = excluded.transcript_partial",
+            (
+                sync.lane,
+                sync.display_name,
+                sync.preview,
+                sync.cwd,
+                sync.source,
+                sync.thread_source,
+                sync.model_provider,
+                sync.model,
+                sync.reasoning_effort,
+                sync.session_id,
+                sync.latest_event_at,
+                sync.latest_turn_id,
+                int(sync.transcript_partial),
+            ),
+        )
+
+    async def get_lane_sync(self, lane_id: str) -> LaneSync | None:
+        async with self._conn.execute(_LANE_SYNC_SELECT + " WHERE src.lane = ?", (lane_id,)) as cur:
+            row = await cur.fetchone()
+        return _row_to_lane_sync(row) if row is not None else None
+
+    async def get_lane_sync_many(self, lane_ids: list[str]) -> dict[str, LaneSync]:
+        if not lane_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in lane_ids)
+        async with self._conn.execute(
+            _LANE_SYNC_SELECT + f" WHERE src.lane IN ({placeholders})", tuple(lane_ids)
+        ) as cur:
+            rows = await cur.fetchall()
+        return {sync.lane: sync for sync in (_row_to_lane_sync(row) for row in rows)}
+
     # --- triggers -------------------------------------------------------------
 
     async def add_trigger(self, trigger: Trigger) -> Trigger:
@@ -350,12 +511,25 @@ class Registry:
         detail: str | None = None,
         outcome: str = "ok",
     ) -> None:
+        await self._insert_action_log(
+            op, lane=lane, trigger_id=trigger_id, detail=detail, outcome=outcome
+        )
+        await self._conn.commit()
+
+    async def _insert_action_log(
+        self,
+        op: str,
+        *,
+        lane: str | None = None,
+        trigger_id: str | None = None,
+        detail: str | None = None,
+        outcome: str = "ok",
+    ) -> None:
         await self._conn.execute(
             "INSERT INTO actions_log (ts, op, lane, trigger_id, detail, outcome) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (self._now().isoformat(), op, lane, trigger_id, detail, outcome),
         )
-        await self._conn.commit()
 
     async def recent_actions(self, limit: int = 50) -> list[ActionRecord]:
         async with self._conn.execute(
@@ -370,8 +544,45 @@ def _row_dict(row: aiosqlite.Row) -> dict[str, object]:
     return dict(zip(row.keys(), tuple(row), strict=True))
 
 
+_LANE_SYNC_SELECT = """
+SELECT
+    src.lane AS lane,
+    src.state AS state,
+    src.source_path AS source_path,
+    src.source_device AS source_device,
+    src.source_inode AS source_inode,
+    src.source_size AS source_size,
+    src.source_mtime_ns AS source_mtime_ns,
+    src.line_count AS line_count,
+    src.first_offset AS first_offset,
+    src.tail_offset AS tail_offset,
+    src.last_synced_at AS last_synced_at,
+    src.error AS error,
+    snap.display_name AS display_name,
+    snap.preview AS preview,
+    snap.cwd AS cwd,
+    snap.source AS source,
+    snap.thread_source AS thread_source,
+    snap.model_provider AS model_provider,
+    snap.model AS model,
+    snap.reasoning_effort AS reasoning_effort,
+    snap.session_id AS session_id,
+    snap.latest_event_at AS latest_event_at,
+    snap.latest_turn_id AS latest_turn_id,
+    snap.transcript_partial AS transcript_partial
+FROM lane_sync_sources src
+LEFT JOIN lane_snapshots snap ON snap.lane = src.lane
+"""
+
+
 def _row_to_lane(row: aiosqlite.Row) -> Lane:
     return Lane.model_validate(_row_dict(row))
+
+
+def _row_to_lane_sync(row: aiosqlite.Row) -> LaneSync:
+    data = _row_dict(row)
+    data["transcript_partial"] = bool(data["transcript_partial"])
+    return LaneSync.model_validate(data)
 
 
 def _row_to_trigger(row: aiosqlite.Row) -> Trigger:

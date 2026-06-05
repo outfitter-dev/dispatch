@@ -41,6 +41,7 @@ _EXPECTED_CLI_SCHEMA_ROUTES = {
     "lane list": "roster",
     "lane list --unmanaged": "discover",
     "lane attach": "attach",
+    "lane sync": "sync",
     "lane rename": "lane-rename",
     "lane fork": "fork",
     "lane rollback": "rollback",
@@ -118,12 +119,14 @@ def test_cli_composed_routes_invoke_canonical_ops() -> None:
     assert runner.invoke(app, ["send", "@docs", "hi", "--context"]).exit_code == 0
     assert runner.invoke(app, ["stop", "@docs"]).exit_code == 0
     assert runner.invoke(app, ["lane", "list", "--unmanaged"]).exit_code == 0
+    assert runner.invoke(app, ["lane", "sync", "@docs"]).exit_code == 0
     assert runner.invoke(app, ["goal", "status", "@docs"]).exit_code == 0
 
     assert calls == [
         ("send", {"lane": "@docs", "text": "hi", "mode": "context"}),
         ("stop", {"lane": "@docs"}),
         ("discover", {"limit": 50}),
+        ("sync", {"lane": "@docs", "full": False}),
         ("goal-get", {"lane": "@docs"}),
     ]
 

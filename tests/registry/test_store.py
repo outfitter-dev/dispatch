@@ -9,6 +9,7 @@ import pytest
 import pytest_asyncio
 
 from outfitter.dispatch.contracts.errors import NotFoundError
+from outfitter.dispatch.registry.models import LaneSync
 from outfitter.dispatch.registry.store import Registry
 
 
@@ -65,6 +66,53 @@ async def test_log_action_and_recent(store: Registry) -> None:
     assert recent[1].detail == "hi"
 
 
+async def test_add_lane_with_sync_commits_lane_sync_and_audit(store: Registry) -> None:
+    lane, sync = await store.add_lane_with_sync(
+        id="L1",
+        handle="@a",
+        source="attached",
+        cwd="/work",
+        status="idle",
+        sync=LaneSync(lane="L1", state="metadata", display_name="Desktop"),
+        audit_op="attach",
+        audit_detail="@a",
+    )
+
+    assert lane.id == "L1"
+    assert lane.status == "idle"
+    assert sync.lane == "L1"
+    assert sync.state == "metadata"
+    assert sync.display_name == "Desktop"
+    assert sync.last_synced_at == _clock().isoformat()
+    actions = await store.recent_actions(limit=10)
+    assert [(action.op, action.lane, action.detail) for action in actions] == [
+        ("attach", "L1", "@a")
+    ]
+
+
+async def test_add_lane_with_sync_rolls_back_if_sync_write_fails(
+    store: Registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fail_sync_write(sync: LaneSync, last_synced_at: str) -> None:
+        raise RuntimeError(f"boom: {sync.lane} {last_synced_at}")
+
+    monkeypatch.setattr(store, "_upsert_lane_sync_rows", fail_sync_write)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await store.add_lane_with_sync(
+            id="L1",
+            handle="@a",
+            source="attached",
+            sync=LaneSync(lane="L1", state="metadata"),
+            audit_op="attach",
+            audit_detail="@a",
+        )
+
+    assert await store.find_lane("L1") is None
+    assert await store.get_lane_sync("L1") is None
+    assert await store.recent_actions(limit=10) == []
+
+
 async def test_queued_messages_are_claimed_and_recovered(store: Registry) -> None:
     first = await store.enqueue_message(lane="L1", text="one")
     second = await store.enqueue_message(lane="L1", text="two")
@@ -87,3 +135,51 @@ async def test_queued_messages_are_claimed_and_recovered(store: Registry) -> Non
     failed = await store.get_queued_message(second.id)
     assert failed.status == "error"
     assert failed.error == "app_server"
+
+
+async def test_lane_sync_roundtrip_and_many_lookup(store: Registry) -> None:
+    await store.add_lane(id="L1", handle="@a", source="attached", cwd="/work")
+    await store.add_lane(id="L2", handle="@b", source="own")
+
+    saved = await store.upsert_lane_sync(
+        LaneSync(
+            lane="L1",
+            state="partial",
+            source_path="/tmp/rollout.jsonl",
+            source_device=1,
+            source_inode=2,
+            source_size=3,
+            source_mtime_ns=4,
+            line_count=5,
+            first_offset=0,
+            tail_offset=128,
+            display_name="Desktop",
+            preview="hello",
+            cwd="/work",
+            source="vscode",
+            thread_source="user",
+            model_provider="openai",
+            model="gpt-5-codex",
+            reasoning_effort="low",
+            session_id="L1",
+            latest_event_at="2026-06-05T10:00:00.000Z",
+            latest_turn_id="turn-1",
+        )
+    )
+
+    assert saved.last_synced_at == _clock().isoformat()
+    assert saved.display_name == "Desktop"
+    assert saved.source_size == 3
+
+    updated = await store.upsert_lane_sync(
+        saved.model_copy(
+            update={"state": "complete", "source_size": 10, "latest_turn_id": "turn-2"}
+        )
+    )
+    assert updated.state == "complete"
+    assert updated.source_size == 10
+    assert updated.latest_turn_id == "turn-2"
+
+    many = await store.get_lane_sync_many(["L1", "L2"])
+    assert set(many) == {"L1"}
+    assert many["L1"].preview == "hello"

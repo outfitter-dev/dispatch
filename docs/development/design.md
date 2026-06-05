@@ -75,8 +75,9 @@ Projections (pure functions over the registry, mirroring Trails' `derive* → cr
 - Daemon lifecycle: `up` / `down` (process) · `daemon status` · `daemon log`
 - Lane creation: `new <name> [--preset ...] [--text ...] [--no-send]`
 - Lane reads/discovery: `lane get <lane>` · `lane status <lane>` · `lane list` ·
-  `lane list --unmanaged` · `lane tail <lane>` · `lane tail <lane> --follow`
-- Lane management/history: `lane attach <thread>` · `lane rename <old> <new>` ·
+  `lane list --unmanaged` · `lane sync <lane>` · `lane tail <lane>` ·
+  `lane tail <lane> --follow`
+- Lane management/history: `lane attach <thread> [--sync]` · `lane rename <old> <new>` ·
   `lane fork <lane>` · `lane rollback <lane>` · `lane compact <lane>` ·
   `lane archive <lane>`
 - Sending: `send <lane> "…"` with `--mode send|steer|queue|interject|context`
@@ -97,7 +98,8 @@ boundary rather than forced to be one tool per op. The noun for a managed thread
 | --- | --- | --- |
 | `open` | `thread/start` (then register) | `sandbox` is a STRING enum (`read-only`/`workspace-write`/`danger-full-access`); persists by default (`ephemeral:false`) → spawned lanes show in desktop app, matching the `→ @project:name` convention. |
 | `new` | `thread/start` + `thread/name/set` + optional `turn/start` | Applies `.dispatch/config.toml` defaults/presets, name prefixes, verified session/turn options, and optional initial payload. |
-| `attach` | `thread/resume` (+ register) | Cross-process discovery and history resume work, but live fan-out does **not** cross app-server processes. Attached desktop lanes are observe-only in v0 (ADR-0005). Pre-persistence resume errors `no rollout found`. |
+| `attach` | `thread/read(includeTurns:false)` (+ register) | Metadata-only by default: verifies the thread id, registers an observe-only attached lane, and stores sync state without loading turn history. `--sync` runs a quick local index refresh after registration. |
+| `sync` (`lane sync`) | `thread/read(includeTurns:false)` + bounded local JSONL parsing | Refreshes dispatch's index/cache for a lane: source file identity, sync state, latest event timestamp, latest turn id, preview, and selected metadata. Does not copy transcripts wholesale or grant attached-lane write authority. |
 | `send` (`mode=send`) | `turn/start` | Delivers a message the lane processes + answers. The DM/`send_message_to_thread` equivalent. `sandboxPolicy` here is an OBJECT (`{type:"readOnly"}`) — different encoding than `thread/start.sandbox`. |
 | `send` (`mode=queue`) | registry queue + later `turn/start` | Persists local queued delivery and starts one queued turn when the lane becomes idle. |
 | `send` (`mode=steer`) | `turn/steer` | Requires `expectedTurnId` (the active turn id from `turn/started`). Adds input to an in-flight turn. |
@@ -130,7 +132,7 @@ The scheduler is **our own** (asyncio): a time wheel for time triggers + the rea
 
 ## Lanes: owned write, attached observe-only
 
-The daemon drives threads it spawns (`new`, backed by the lower-level `open` op) with full read/write. Existing desktop threads can be registered with `attach`, but they are **observe-only in v0**. The Phase-1 cross-process spike confirmed that a second app-server process can discover and resume persisted history, but live event fan-out does not cross processes and concurrent turns are uncoordinated. Dispatch's advisory lock is dispatch-local; it cannot gate the desktop app. ADR-0005 keeps attached-lane writes locked until there is a real cross-process interlock and an explicit user opt-in.
+The daemon drives threads it spawns (`new`, backed by the lower-level `open` op) with full read/write. Existing desktop threads can be registered with `attach`, but they are **observe-only in v0**. The Phase-1 cross-process spike confirmed that a second app-server process can discover and read persisted history, but live event fan-out does not cross processes and concurrent turns are uncoordinated. Dispatch's advisory lock is dispatch-local; it cannot gate the desktop app. ADR-0005 keeps attached-lane writes locked until there is a real cross-process interlock and an explicit user opt-in.
 
 ## Approvals (v1 minimal)
 
@@ -147,16 +149,18 @@ The client supports the full responder loop. v1 surfaces `waiting_on_approval` a
 ## Data model (registry, SQLite)
 
 - `lanes`: id, handle (`@name` / `→ @project:name`), role, cwd, source (`own`|`attached`), status, pinned, created_at, updated_at, last_event_at.
+- `lane_sync_sources`: lane, sync state, source path/file identity, source size/mtime, parsed offsets, line count, last synced timestamp, error.
+- `lane_snapshots`: lane, display name, preview, cwd, source/model/session facts, latest event timestamp, latest turn id, transcript-partial flag.
 - `triggers`: id, name, lane selector, when-spec (json), action-spec (json), guard-spec (json), enabled, last_fired_at.
 - `actions_log`: id, ts, lane, op, trigger_id?, request/decision, outcome — full audit of every send/action.
 
 ## Error handling / resilience
 
-- app-server subprocess crash → daemon detects stdout EOF → restart → re-`resume` persisted lanes → restart the reactor.
+- app-server subprocess crash → daemon detects stdout EOF → restart → restore owned-lane resumes and attached-lane metadata reads → restart the reactor.
 - Action on a busy lane → direct `send` starts a turn immediately; `send --queue`
   persists local queued delivery and starts one queued turn when the lane next
   becomes idle.
-- Reconnect → rebuild via `resume` + `thread/read`; rely on persisted history, not replay.
+- Reconnect → rebuild via `thread/read` + explicit sync; rely on persisted history, not replay.
 - Every action audited; per-lane advisory lock for cross-process safety.
 
 ## Testing

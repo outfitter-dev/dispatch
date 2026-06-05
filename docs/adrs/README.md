@@ -25,3 +25,4 @@ Files are `NNNN-slug.md`. Copy [`template.md`](template.md) to start one. Keep t
 | [0014](0014-mesh-auth-discovery-and-durable-queues.md) | Mesh Auth, Discovery, and Durable Queues | Proposed |
 | [0015](0015-new-command-config-presets-and-name-prefixes.md) | New Command, Config Presets, and Name Prefixes | Proposed |
 | [0016](0016-history-goals-and-bounded-watch.md) | History, Goals, and Bounded Watch | Accepted |
+| [0017](0017-progressive-thread-sync-index.md) | Progressive Thread Sync Index | Accepted |

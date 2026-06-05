@@ -290,7 +290,14 @@ def _registry_check() -> DoctorCheck:
             recovery="Move the damaged registry aside or set DISPATCH_DB to a fresh path.",
             data=data,
         )
-    expected = {"lanes", "triggers", "actions_log", "queued_messages"}
+    expected = {
+        "lanes",
+        "triggers",
+        "actions_log",
+        "queued_messages",
+        "lane_sync_sources",
+        "lane_snapshots",
+    }
     data.update({"schema_version": version, "integrity": integrity, "tables": sorted(tables)})
     if integrity != "ok":
         return DoctorCheck(

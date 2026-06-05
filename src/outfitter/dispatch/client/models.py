@@ -89,13 +89,18 @@ class ThreadInfo(WireModel):
     """Subset of the rich thread object the server returns (extra fields ignored)."""
 
     id: str
+    session_id: str | None = None
     forked_from_id: str | None = None
     ephemeral: bool | None = None
     status: ThreadStatus | None = None
     cwd: str | None = None
     name: str | None = None
+    path: str | None = None
     preview: str | None = None
     source: str | None = None
+    thread_source: str | None = None
+    model_provider: str | None = None
+    updated_at: int | None = None
     turns: list[dict[str, object]] = Field(default_factory=list)
 
 
@@ -194,7 +199,7 @@ class ThreadGoal(WireModel):
 
 
 class ThreadResult(WireModel):
-    """Result envelope for ``thread/start`` and ``thread/resume``."""
+    """Result envelope for thread methods that return one thread."""
 
     thread: ThreadInfo
 

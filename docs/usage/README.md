@@ -277,8 +277,8 @@ Treat it as a conversation-history operation, not a source-control undo.
 
 `lane list` lists the lanes dispatch already manages. `lane list --unmanaged` is the other
 half: it lists the persisted Codex sessions on this machine — desktop threads and prior
-runs — that you could attach. It reads the Codex state DB directly (`thread/list`, state-db
-only), so it is fast and read-only; it never resumes, writes, or registers anything.
+runs — that you could attach. It uses App Server `thread/list` in state-db-only mode, so
+it is fast and read-only; it never resumes, writes, or registers anything.
 
 ```bash
 uv run dispatch lane list --unmanaged --limit 20
@@ -289,6 +289,7 @@ Each row carries `id`, `name`, a shortened `preview`, `cwd`, `status`, `source`,
 
 ```bash
 uv run dispatch lane attach <id-from-lane-list-unmanaged>
+uv run dispatch lane attach <id-from-lane-list-unmanaged> --sync
 ```
 
 Keep the two straight: `lane list --unmanaged` shows attachable Codex sessions (not yet
@@ -300,6 +301,7 @@ Attach registers an existing Codex thread by raw thread id:
 
 ```bash
 uv run dispatch lane attach <codex-thread-id>
+uv run dispatch lane sync <lane>
 ```
 
 Attached lanes are observe-only in v0. Dispatch can register and inspect them, but it must
@@ -307,12 +309,28 @@ not write to them because the desktop app uses a separate app-server process and
 cross-process write interlock. ADR-0005 is the authoritative decision:
 [`docs/adrs/0005-lane-authority-capability-ladder.md`](../adrs/0005-lane-authority-capability-ladder.md).
 
-Attach is bounded: the underlying `thread/resume` must complete within a short timeout
-(15s). If the app-server is wedged and resume stalls, attach fails with a clear
-`app_server` error and registers no lane — it never leaves a half-attached entry behind.
-Re-run `attach` once the app-server is healthy. Large persisted histories are expected:
-dispatch sizes its App Server stdio reader for realistic `thread/resume` and
-`includeTurns` responses instead of treating them as hangs.
+Attach is compact by default: it verifies the thread with App Server
+`thread/read(includeTurns:false)`, registers the lane, and stores metadata sync state. It
+does not call `thread/resume` or load turn history. If the app-server is wedged and the
+metadata read stalls, attach fails with a clear `app_server` error and registers no lane —
+it never leaves a half-attached entry behind.
+
+Use `lane sync` to refresh dispatch's local indexed view of an attached lane. Sync reads the
+official metadata and, when Codex exposes a local rollout path, parses bounded top+tail JSONL
+records into a compact cache: source file identity, sync state, latest event timestamp,
+latest turn id, and a preview. It does not copy the full transcript by default.
+
+```bash
+uv run dispatch lane sync <lane>
+uv run dispatch lane sync <lane> --full
+uv run dispatch lane get <lane>
+uv run dispatch lane list
+```
+
+`lane sync --full` scans the whole current source file and marks the cache complete for that
+file identity. It is still an index refresh, not a write to the Codex thread. `lane tail`
+continues to use official `thread/read(includeTurns:true)` persisted history when you want
+App Server turn summaries.
 
 When referring to a Codex thread in docs or prompts, prefer a readable handle with a URI:
 
@@ -386,6 +404,7 @@ derived from the contract registry:
 ```bash
 uv run dispatch lane list --json
 uv run dispatch schema send
+uv run dispatch schema "lane sync"
 uv run dispatch schema "goal set"
 ```
 

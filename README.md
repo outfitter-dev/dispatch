@@ -40,7 +40,8 @@ uv run dispatch down
 Use owned lanes for writes. Existing desktop Codex threads can be attached, but v0 treats
 attached lanes as observe-only: mutating commands such as `send`, `stop`, `lane archive`,
 `goal set`, `goal clear`, `lane fork`, `lane rollback`, and `lane compact` are blocked by
-ADR-0005.
+ADR-0005. Attach is metadata-only by default; use `dispatch lane sync <lane>` when you want
+dispatch to refresh its local indexed view of an attached thread.
 
 For the operator guide, CLI/MCP examples, triggers, and plugin setup, start at
 [`docs/usage/README.md`](docs/usage/README.md).

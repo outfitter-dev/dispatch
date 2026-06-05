@@ -10,6 +10,7 @@ from outfitter.dispatch.client.models import (
     ThreadForkParams,
     ThreadGoal,
     ThreadGoalSetParams,
+    ThreadInfo,
     ThreadListResult,
     ThreadReadParams,
     ThreadRollbackParams,
@@ -103,6 +104,25 @@ def test_thread_list_result_reads_data_key() -> None:
     )
     assert [t.id for t in result.data] == ["a", "b"]
     assert result.next_cursor == "c1"
+
+
+def test_thread_info_keeps_sync_metadata_fields() -> None:
+    thread = ThreadInfo.model_validate(
+        {
+            "id": "t1",
+            "sessionId": "t1",
+            "path": "/tmp/rollout.jsonl",
+            "modelProvider": "openai",
+            "threadSource": "user",
+            "updatedAt": 123,
+        }
+    )
+
+    assert thread.session_id == "t1"
+    assert thread.path == "/tmp/rollout.jsonl"
+    assert thread.model_provider == "openai"
+    assert thread.thread_source == "user"
+    assert thread.updated_at == 123
 
 
 def test_thread_read_include_turns_alias() -> None:
