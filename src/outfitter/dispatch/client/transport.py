@@ -18,6 +18,8 @@ from typing import Protocol
 
 from .errors import ProtocolError, TransportError
 
+DEFAULT_STDIO_READ_LIMIT = 64 * 1024 * 1024
+
 
 class Transport(Protocol):
     """Bidirectional JSON message channel to one app-server connection."""
@@ -38,9 +40,11 @@ class StdioTransport:
         self,
         argv: Sequence[str] = ("codex", "app-server", "--listen", "stdio://"),
         env: Mapping[str, str] | None = None,
+        read_limit: int = DEFAULT_STDIO_READ_LIMIT,
     ) -> None:
         self._argv = tuple(argv)
         self._env = dict(env) if env is not None else None
+        self._read_limit = read_limit
         self._proc: asyncio.subprocess.Process | None = None
         self._stderr_tail: deque[str] = deque(maxlen=50)
         self._stderr_task: asyncio.Task[None] | None = None
@@ -53,6 +57,7 @@ class StdioTransport:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=self._env,
+                limit=self._read_limit,
             )
         except OSError as exc:  # binary missing / not executable
             raise TransportError(f"failed to spawn {self._argv[0]}: {exc}") from exc
@@ -82,7 +87,13 @@ class StdioTransport:
         proc = self._require_proc()
         assert proc.stdout is not None
         while True:
-            raw = await proc.stdout.readline()
+            try:
+                raw = await proc.stdout.readline()
+            except ValueError as exc:
+                raise ProtocolError(
+                    "app-server JSONL line exceeded dispatch's stdio reader limit "
+                    f"({self._read_limit} bytes)"
+                ) from exc
             if raw == b"":  # EOF: process closed stdout (crashed or exited)
                 return None
             text = raw.decode(errors="replace").strip()

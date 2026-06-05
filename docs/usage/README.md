@@ -310,7 +310,9 @@ cross-process write interlock. ADR-0005 is the authoritative decision:
 Attach is bounded: the underlying `thread/resume` must complete within a short timeout
 (15s). If the app-server is wedged and resume stalls, attach fails with a clear
 `app_server` error and registers no lane — it never leaves a half-attached entry behind.
-Re-run `attach` once the app-server is healthy.
+Re-run `attach` once the app-server is healthy. Large persisted histories are expected:
+dispatch sizes its App Server stdio reader for realistic `thread/resume` and
+`includeTurns` responses instead of treating them as hangs.
 
 When referring to a Codex thread in docs or prompts, prefer a readable handle with a URI:
 

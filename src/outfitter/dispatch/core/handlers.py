@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 
+from outfitter.dispatch.client.errors import AppServerError as ClientAppServerError
 from outfitter.dispatch.client.errors import ClientError
 from outfitter.dispatch.client.models import SandboxPolicy, ThreadGoal, ThreadInfo, ThreadSandbox
 from outfitter.dispatch.contracts.context import Ctx
@@ -596,10 +597,19 @@ async def discover(inp: DiscoverInput, ctx: Ctx) -> Discovery:
 async def archive(inp: LaneInput, ctx: Ctx) -> LaneRef:
     lane = await _resolve(ctx, inp.lane)
     _require_writable(lane)  # archiving mutates the shared thread store (ADR-0005)
-    await ctx.client.thread_archive(lane.id)
+    try:
+        await ctx.client.thread_archive(lane.id)
+    except ClientAppServerError as exc:
+        if not _is_no_rollout_archive_error(exc):
+            raise
+        ctx.log.info("lane.archive_local_no_rollout", lane=lane.id)
     await ctx.registry.update_lane_status(lane.id, "archived")
     await ctx.registry.log_action("archive", lane=lane.id)
     return _ref(await ctx.registry.get_lane(lane.id))
+
+
+def _is_no_rollout_archive_error(exc: ClientAppServerError) -> bool:
+    return exc.code == -32600 and "no rollout found" in exc.message.lower()
 
 
 async def status(inp: StatusInput, ctx: Ctx) -> StatusOutput:

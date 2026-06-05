@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import typer
 from typer.testing import CliRunner
 
@@ -147,6 +149,24 @@ def test_lane_archive_prompts_for_confirmation() -> None:
     assert declined.exit_code != 0
     confirmed = runner.invoke(app, ["lane", "archive", "L1"], input="y\n")
     assert confirmed.exit_code == 0
+
+
+def test_json_destroy_prompt_does_not_pollute_stdout() -> None:
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        return {"id": "L1", "handle": "@x", "source": "own", "status": "archived"}
+
+    app = derive_cli(REGISTRY, invoke)
+    result = runner.invoke(app, ["lane", "archive", "L1", "--json"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "Run destroy op" not in result.stdout
+    payload = result.stdout[result.stdout.index("{") :]
+    assert json.loads(payload) == {
+        "id": "L1",
+        "handle": "@x",
+        "source": "own",
+        "status": "archived",
+    }
 
 
 def test_schema_command_prints_derived_schema_without_daemon() -> None:

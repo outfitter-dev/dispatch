@@ -125,7 +125,7 @@ def _op_command(
     def command(**kwargs: object) -> None:
         json_requested = bool(kwargs.pop("json", False))
         if op.intent == "destroy":
-            typer.confirm(f"Run destroy op {op.id!r}?", abort=True)
+            typer.confirm(f"Run destroy op {op.id!r}?", abort=True, err=json_requested)
         result = invoke(op.id, dict(kwargs))
         render(op, result)
         _ignore_json(json_requested)
