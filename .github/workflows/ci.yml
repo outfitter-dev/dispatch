@@ -30,3 +30,5 @@ jobs:
         run: uv run pytest
       - name: Build package
         run: uv build
+      - name: Inspect package contents
+        run: uv run python scripts/check_package_contents.py

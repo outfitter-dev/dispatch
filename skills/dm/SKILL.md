@@ -20,9 +20,14 @@ long-running task.
 Use dispatch first:
 
 ```bash
+uv run dispatch doctor --no-app-server
 uv run dispatch lane list
 uv run dispatch daemon status
 ```
+
+If the environment is new, run `uv run dispatch doctor` once before messaging.
+Fix PATH, Codex auth, stale daemon files, registry, or plugin asset warnings
+before assuming a DM failure is about the target lane.
 
 The target should be an owned dispatch lane. Attached lanes are observe-only in
 v0, so dispatch will reject write verbs against them.

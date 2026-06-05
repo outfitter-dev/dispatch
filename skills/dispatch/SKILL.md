@@ -24,6 +24,7 @@ uv run dispatch --help
 
 The current operator grammar is:
 
+- health: `doctor`
 - daemon process: `up`, `down`
 - daemon reads: `daemon status`, `daemon log`
 - create/send: `new`, `send`, `stop`
@@ -41,10 +42,17 @@ machine-output contract to be explicit.
 ## Start Or Inspect The Daemon
 
 ```bash
+uv run dispatch doctor --no-app-server
 uv run dispatch up
 uv run dispatch daemon status
 uv run dispatch daemon log --limit 10
 ```
+
+Use `uv run dispatch doctor` before relying on live lane operations in a new or
+untrusted environment. It checks PATH visibility, Codex CLI/auth footprint,
+daemon socket/pidfile state, registry schema/integrity, packaged skills/plugin
+assets, and a low-risk Codex App Server initialize smoke. Use `--no-app-server`
+when you only need local install/runtime diagnostics.
 
 Stop only when it is clearly your daemon/session to stop:
 
@@ -225,12 +233,16 @@ subcommand. Tools are grouped by workflow and safety boundary, and each call
 selects an `op` inside the tool. In this repo, the workspace-local Codex plugin
 lives at `plugins/dispatch`. It exposes these skills and the same MCP registry.
 If the plugin does not appear immediately, restart Codex for the workspace.
+Installed PyPI packages also include read-only copies of these skills and the
+plugin bundle under `outfitter.dispatch.assets`; use the repo copies for editing.
 
 ## Guardrails
 
 - Do not mutate source files, Git, PRs, Graphite, or tracker state as part of
   ordinary dispatch operation.
 - Do not install launchd autostart unless the user explicitly asks.
+- Start troubleshooting with `dispatch doctor`; use its recovery hints rather
+  than guessing about stale sockets, PATH, auth, or registry shape.
 - Do not describe `lane tail --follow` as streaming forever; it is a bounded
   event sample until dispatch grows a subscription-capable control socket.
 - Do not treat `rollback` as file undo.

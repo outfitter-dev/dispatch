@@ -14,6 +14,7 @@ Install the CLI from PyPI:
 uv tool install outfitter-dispatch
 dispatch --help
 dispatchd --help
+dispatch doctor
 ```
 
 Upgrade or remove the installed tool with:
@@ -24,10 +25,25 @@ uv tool uninstall outfitter-dispatch
 ```
 
 The PyPI package installs the `dispatch` and `dispatchd` commands, including
-the `dispatch mcp` entrypoint. The first-party Codex skills and workspace-local
-plugin bundle still live in this repository under `skills/` and
-`plugins/dispatch/`; use the repo checkout when installing or editing those
-assets.
+the `dispatch mcp` entrypoint. It also ships read-only copies of the first-party
+`dispatch` and `dm` skills plus the local plugin bundle under the installed
+`outfitter.dispatch.assets` package. Edit source assets in this repository under
+`skills/` and `plugins/dispatch/`; installed copies are for setup and inspection.
+
+Use this clean-machine smoke after installing or upgrading:
+
+```bash
+dispatch doctor
+dispatch schema send
+dispatch up
+dispatch daemon status
+dispatch down
+```
+
+If `dispatch doctor` fails before the app-server smoke because the Codex CLI is
+not installed or authenticated, fix that first and rerun the doctor. Use
+`dispatch doctor --no-app-server` when you only need to inspect package, PATH,
+daemon, and registry state without starting a Codex App Server process.
 
 For development from this repo, use `uv`:
 
@@ -35,6 +51,7 @@ For development from this repo, use `uv`:
 uv sync
 uv run dispatch --help
 uv run dispatchd --help
+uv run dispatch doctor --no-app-server
 ```
 
 Start the singleton daemon:
@@ -64,6 +81,44 @@ DISPATCH_HOME=/tmp/dispatch-dev uv run dispatch up
 
 The lower-level overrides are `DISPATCH_SOCKET`, `DISPATCH_DB`, and `DISPATCH_PIDFILE`.
 
+## Doctor And Recovery
+
+`dispatch doctor` is the first diagnostic command for users and agents. It returns JSON
+by default and exits non-zero only when a check fails:
+
+```bash
+dispatch doctor
+dispatch doctor --text
+dispatch doctor --no-app-server
+```
+
+Checks include:
+
+- PATH visibility for `dispatch` and `dispatchd`.
+- `codex --version` and Codex auth-file presence without reading secret contents.
+- daemon reachability, socket path, pidfile, and stale runtime files.
+- registry database readability, SQLite `quick_check`, required tables, and schema version.
+- packaged `dispatch`/`dm` skills and plugin MCP config.
+- low-risk `codex app-server --listen stdio://` initialize smoke.
+
+Common recovery paths:
+
+- Missing `dispatch` or `dispatchd`: install with `uv tool install outfitter-dispatch`;
+  if uv reports the tool is installed but the shell cannot see it, run
+  `uv tool update-shell` and restart the shell/Codex context.
+- Missing `codex`: install or expose Codex CLI, then verify `codex --version` in the
+  same environment that will run dispatch.
+- Missing Codex auth: run `codex login` or start Codex once. The doctor only checks
+  for auth material; it does not print or parse credentials.
+- Stale socket or pidfile: run `dispatch down`, then `dispatch up`. If you are using
+  isolated state, confirm `DISPATCH_HOME`, `DISPATCH_SOCKET`, and `DISPATCH_PIDFILE`.
+- Registry schema newer than the installed binary: upgrade with
+  `uv tool upgrade outfitter-dispatch` before starting the daemon.
+- Registry integrity failure: stop the daemon, back up the database at the path shown
+  by doctor, and recreate it or inspect with `sqlite3`.
+- App Server initialize failure: run `codex app-server --listen stdio://` directly in
+  the same shell and fix the Codex CLI/auth problem before relying on lane operations.
+
 ## Release Publishing
 
 Maintainers publish `outfitter-dispatch` through PyPI Trusted Publishing from
@@ -78,7 +133,6 @@ Publishing is triggered by a published GitHub Release. Before creating a
 release, bump `project.version` in `pyproject.toml`, run:
 
 ```bash
-uv build
 just check
 ```
 

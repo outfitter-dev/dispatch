@@ -1,6 +1,6 @@
 [project]
 name = "outfitter-dispatch"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local control plane for orchestrating Codex agent lanes over the Codex App Server."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -42,6 +42,25 @@ build-backend = "hatchling.build"
 # the importable package is outfitter.dispatch.
 [tool.hatch.build.targets.wheel]
 packages = ["src/outfitter"]
+exclude = ["/src/**/AGENTS.md"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"plugins/dispatch/skills" = "outfitter/dispatch/assets/skills"
+"plugins/dispatch" = "outfitter/dispatch/assets/plugins/dispatch"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/skills",
+    "/plugins/dispatch",
+    "/README.md",
+    "/AGENTS.md",
+    "/pyproject.toml",
+    "/uv.lock",
+    "/justfile",
+]
+exclude = ["/src/**/AGENTS.md"]
 
 [tool.ruff]
 line-length = 100
