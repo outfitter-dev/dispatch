@@ -20,7 +20,19 @@ def test_cli_help_renders() -> None:
     assert "dispatch" in result.output
 
 
+def test_cli_version_renders() -> None:
+    result = runner.invoke(cli_app, ["--version"])
+    assert result.exit_code == 0
+    assert result.output.startswith("dispatch ")
+
+
 def test_daemon_help_renders() -> None:
     result = runner.invoke(daemon_app, ["--help"])
     assert result.exit_code == 0
     assert "dispatchd" in result.output
+
+
+def test_daemon_version_renders() -> None:
+    result = runner.invoke(daemon_app, ["--version"])
+    assert result.exit_code == 0
+    assert result.output.startswith("dispatchd ")

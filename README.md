@@ -5,7 +5,15 @@ One authored contract per operation, projected to CLI + MCP (+ remote later) wit
 
 ## Quick Start
 
-From this checkout:
+Install the CLI from PyPI:
+
+```bash
+uv tool install outfitter-dispatch
+dispatch --help
+dispatchd --help
+```
+
+From a source checkout:
 
 ```bash
 uv sync

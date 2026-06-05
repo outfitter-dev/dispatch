@@ -8,11 +8,13 @@ import json
 import socket
 from functools import partial
 from pathlib import Path
+from typing import Annotated
 
 import typer
 
 from outfitter.dispatch import config
 from outfitter.dispatch.contracts.derive_cli import derive_cli
+from outfitter.dispatch.version import package_version
 
 
 def _recv_line(sock: socket.socket) -> bytes:
@@ -62,12 +64,32 @@ def invoke_daemon(socket_path: Path, op_id: str, params: dict[str, object]) -> d
     return result if isinstance(result, dict) else {}
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(f"dispatch {package_version()}")
+        raise typer.Exit()
+
+
 def build_cli(socket_path: Path | None = None) -> typer.Typer:
     path = socket_path if socket_path is not None else config.socket_path()
     # Import the registry lazily so this module stays a thin surface.
     from outfitter.dispatch.core.ops import REGISTRY
 
     app = derive_cli(REGISTRY, partial(invoke_daemon, path))
+
+    @app.callback()
+    def _root(
+        version: Annotated[
+            bool,
+            typer.Option(
+                "--version",
+                callback=_version_callback,
+                help="Show the installed dispatch version and exit.",
+                is_eager=True,
+            ),
+        ] = False,
+    ) -> None:
+        pass
 
     # `dispatch mcp` is a surface launcher, not an op: it serves the same registry
     # over MCP stdio, routing tool calls to the same daemon.

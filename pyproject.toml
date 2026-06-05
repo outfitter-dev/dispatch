@@ -1,6 +1,6 @@
 [project]
 name = "outfitter-dispatch"
-version = "0.0.0"
+version = "0.1.0"
 description = "Local control plane for orchestrating Codex agent lanes over the Codex App Server."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -20,6 +20,11 @@ dependencies = [
 [project.scripts]
 dispatch = "outfitter.dispatch.cli:app"
 dispatchd = "outfitter.dispatch.daemon.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/outfitter-dev/dispatch"
+Repository = "https://github.com/outfitter-dev/dispatch"
+Issues = "https://github.com/outfitter-dev/dispatch/issues"
 
 [dependency-groups]
 dev = [

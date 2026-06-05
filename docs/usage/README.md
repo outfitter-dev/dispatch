@@ -8,7 +8,28 @@ For implementation guidance, use [`AGENTS.md`](../../AGENTS.md). For design cont
 
 ## Install And Run Locally
 
-In this repo, use `uv`:
+Install the CLI from PyPI:
+
+```bash
+uv tool install outfitter-dispatch
+dispatch --help
+dispatchd --help
+```
+
+Upgrade or remove the installed tool with:
+
+```bash
+uv tool upgrade outfitter-dispatch
+uv tool uninstall outfitter-dispatch
+```
+
+The PyPI package installs the `dispatch` and `dispatchd` commands, including
+the `dispatch mcp` entrypoint. The first-party Codex skills and workspace-local
+plugin bundle still live in this repository under `skills/` and
+`plugins/dispatch/`; use the repo checkout when installing or editing those
+assets.
+
+For development from this repo, use `uv`:
 
 ```bash
 uv sync
@@ -42,6 +63,29 @@ DISPATCH_HOME=/tmp/dispatch-dev uv run dispatch up
 ```
 
 The lower-level overrides are `DISPATCH_SOCKET`, `DISPATCH_DB`, and `DISPATCH_PIDFILE`.
+
+## Release Publishing
+
+Maintainers publish `outfitter-dispatch` through PyPI Trusted Publishing from
+GitHub Actions. The PyPI pending/trusted publisher must match:
+
+- project: `outfitter-dispatch`
+- repository: `outfitter-dev/dispatch`
+- workflow: `publish.yml`
+- environment: `pypi`
+
+Publishing is triggered by a published GitHub Release. Before creating a
+release, bump `project.version` in `pyproject.toml`, run:
+
+```bash
+uv build
+just check
+```
+
+Then create and publish a GitHub Release for the same tag, for example
+`v0.1.0`. Do not upload with a long-lived PyPI token unless the trusted
+publisher path is unavailable and the maintainer explicitly chooses that
+fallback.
 
 ## Lanes
 
