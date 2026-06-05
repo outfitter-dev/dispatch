@@ -64,6 +64,24 @@ async def test_interval_fires_then_waits_for_the_window(store: Registry) -> None
     assert await scheduler.tick() == 1  # 61s since last fire
 
 
+async def test_trigger_runner_resolves_dispatch_ref(store: Registry) -> None:
+    clock = FakeClock(_T0)
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    lane = await store.add_lane(id="L1", handle="@x", source="own", status="idle")
+    trig = Trigger(
+        id="t1",
+        name="p",
+        lane=lane.ref,
+        when=IntervalWhen(seconds=1),
+        action=SendAction(text="ping"),
+    )
+    await store.add_trigger(trig)
+
+    assert await TriggerRunner(ctx, clock).maybe_fire(trig, reason="time") is True
+    assert any(name == "turn_start" and kw["thread_id"] == "L1" for name, kw in client.calls)
+
+
 async def test_idle_for_fires_once_per_idle_period(store: Registry) -> None:
     clock = FakeClock(_T0)
     ctx = make_ctx(store)

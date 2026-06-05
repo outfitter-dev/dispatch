@@ -17,6 +17,10 @@ class Lane(BaseModel):
     """A managed Codex thread — one row of the ``lanes`` table."""
 
     id: str  # the App Server threadId
+    ref: str  # dispatch-local stable short ref
+    ref_source: str
+    ref_payload: str
+    ref_mixer: str
     handle: str  # "@name" (own) or "→ @project:name" / desktop title (attached)
     role: str | None = None
     cwd: str | None = None

@@ -36,25 +36,17 @@ _EXPECTED_CLI_SCHEMA_ROUTES = {
     "send": "send",
     "stop": "stop",
     "new": "new",
+    "attach": "attach",
+    "list": "roster",
+    "list --unmanaged": "discover",
+    "get": "show",
+    "tail": "transcript",
+    "watch": "watch",
+    "sync": "sync",
     "search": "search",
     "rename": "lane-rename",
     "archive": "archive",
     "restore": "restore",
-    "lane get": "show",
-    "lane status": "show",
-    "lane list": "roster",
-    "lane list --unmanaged": "discover",
-    "lane attach": "attach",
-    "lane sync": "sync",
-    "lane rename": "lane-rename",
-    "lane search": "search",
-    "lane fork": "fork",
-    "lane rollback": "rollback",
-    "lane compact": "compact",
-    "lane archive": "archive",
-    "lane restore": "restore",
-    "lane tail": "transcript",
-    "lane tail --follow": "watch",
     "goal status": "goal-get",
     "goal set": "goal-set",
     "goal clear": "goal-clear",
@@ -97,12 +89,23 @@ def test_cli_schema_routes_cover_public_ops() -> None:
     app = derive_cli(REGISTRY, _stub_invoke)
 
     routed_ops = set(_EXPECTED_CLI_SCHEMA_ROUTES.values())
-    assert set(REGISTRY.ids()) - routed_ops == {"open"}
+    assert set(REGISTRY.ids()) - routed_ops == {"open", "fork", "rollback", "compact"}
 
     for command, op_id in _EXPECTED_CLI_SCHEMA_ROUTES.items():
         result = runner.invoke(app, ["schema", command])
         assert result.exit_code == 0, command
         assert json.loads(result.output)["op"] == op_id
+
+
+def test_managed_thread_outputs_include_stable_identity_fields() -> None:
+    app = derive_cli(REGISTRY, _stub_invoke)
+    required = {"lane", "ref", "id", "title", "handle", "managed", "source", "status", "cwd"}
+
+    for command in ("send", "goal status", "sync", "tail", "watch"):
+        result = runner.invoke(app, ["schema", command])
+        assert result.exit_code == 0, command
+        output = json.loads(result.output)["output"]
+        assert required <= set(output["properties"]), command
 
 
 def test_cli_composed_routes_invoke_canonical_ops() -> None:
@@ -132,8 +135,8 @@ def test_cli_composed_routes_invoke_canonical_ops() -> None:
 
     assert runner.invoke(app, ["send", "@docs", "hi", "--context"]).exit_code == 0
     assert runner.invoke(app, ["stop", "@docs"]).exit_code == 0
-    assert runner.invoke(app, ["lane", "list", "--unmanaged"]).exit_code == 0
-    assert runner.invoke(app, ["lane", "sync", "@docs"]).exit_code == 0
+    assert runner.invoke(app, ["list", "--unmanaged"]).exit_code == 0
+    assert runner.invoke(app, ["sync", "@docs"]).exit_code == 0
     assert runner.invoke(app, ["search", "needle", "--managed"]).exit_code == 0
     assert runner.invoke(app, ["goal", "status", "@docs"]).exit_code == 0
 

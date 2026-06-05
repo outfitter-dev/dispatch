@@ -21,7 +21,7 @@ Use dispatch first:
 
 ```bash
 uv run dispatch doctor --no-app-server
-uv run dispatch lane list
+uv run dispatch list
 uv run dispatch daemon status
 ```
 
@@ -29,7 +29,7 @@ If the environment is new, run `uv run dispatch doctor` once before messaging.
 Fix PATH, Codex auth, stale daemon files, registry, or plugin asset warnings
 before assuming a DM failure is about the target lane.
 
-The target should be an owned dispatch lane. Attached lanes are not
+The target should be an owned dispatch lane selected by dispatch ref when possible. Attached lanes are not
 turn-writable in v0, so dispatch will reject DM/send verbs against them.
 
 If the user wants to message an existing desktop Codex thread, attach/sync it
@@ -47,7 +47,7 @@ label: @Target
 destination: codex://threads/<target-thread-id>
 ```
 
-Use the lane handle or lane id for `dispatch send`. Use the URI link in
+Use the dispatch ref or full thread id for `dispatch send`. Use the URI link in
 the message body so the recipient and the human can open the thread directly.
 
 ## Message Shape
@@ -65,7 +65,7 @@ Contract: read-only, brief answer, reply in this lane unless asked otherwise.
 Then deliver it:
 
 ```bash
-uv run dispatch send @Target '<message>'
+uv run dispatch send <target-ref> '<message>'
 ```
 
 Keep DMs conversational and bounded. Prefer one ask. Include only the context
@@ -74,16 +74,16 @@ transcript. Do not use `$dm` to smuggle in broad implementation work.
 
 ## Harvesting
 
-`dispatch send` starts the target turn. Use `dispatch lane get` and `dispatch daemon log`
-to confirm lane state and accepted actions:
+`dispatch send` starts the target turn. Use `dispatch get` and `dispatch daemon log`
+to confirm thread state and accepted actions:
 
 ```bash
-uv run dispatch lane get @Target
+uv run dispatch get <target-ref>
 uv run dispatch daemon log --limit 10
 ```
 
-Important v0 limitation: `dispatch lane get` is lane metadata, not a transcript
-reader. Use `dispatch lane tail @Target --limit 50` for persisted history when
+Important v0 limitation: `dispatch get` is thread metadata, not a transcript
+reader. Use `dispatch tail <target-ref> --limit 50` for persisted history when
 the lane is non-ephemeral, or open the Codex thread link. Do not pretend
 dispatch harvested text it cannot currently read.
 

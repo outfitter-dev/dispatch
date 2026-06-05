@@ -22,16 +22,15 @@ When you are in this repo, prefer the in-tree command:
 uv run dispatch --help
 ```
 
-The current operator grammar is:
+The current canonical operator grammar is:
 
 - health: `doctor`
 - daemon process: `up`, `down`
 - daemon reads: `daemon status`, `daemon log`
-- create/send/search: `new`, `send`, `stop`, `search`
-- top-level thread actions: `rename`, `archive`, `restore`
-- lanes: `lane get`, `lane status`, `lane list`, `lane list --unmanaged`,
-  `lane attach`, `lane sync`, `lane rename`, `lane search`, `lane tail`, `lane fork`,
-  `lane rollback`, `lane compact`, `lane archive`, `lane restore`
+- thread lifecycle/read/search: `new`, `attach`, `list`, `list --unmanaged`,
+  `get`, `sync`, `tail`, `watch`, `search`
+- thread actions: `rename`, `archive`, `restore`
+- message verbs: `send`, `stop`
 - goals: `goal status`, `goal set`, `goal clear`
 - triggers: `trigger add`, `trigger list`, `trigger rm`, `trigger pause`,
   `trigger resume`
@@ -49,7 +48,7 @@ uv run dispatch daemon status
 uv run dispatch daemon log --limit 10
 ```
 
-Use `uv run dispatch doctor` before relying on live lane operations in a new or
+Use `uv run dispatch doctor` before relying on live thread operations in a new or
 untrusted environment. It checks PATH visibility, Codex CLI/auth footprint,
 daemon socket/pidfile state, registry schema/integrity, packaged skills/plugin
 assets, and a low-risk Codex App Server initialize smoke. Use `--no-app-server`
@@ -65,11 +64,16 @@ Runtime state defaults to `~/.dispatch`. Use `DISPATCH_HOME` for isolation when
 testing. Do not point tests at the user's live `~/.codex`; the repo integration
 suite uses an isolated `CODEX_HOME`.
 
-## Lane Rules
+## Thread Selectors And Lane Rules
+
+Every managed thread has a stored dispatch-local `ref`. Prefer refs for command
+arguments. The full Codex thread id is always accepted. Titles and `@handles`
+are mutable convenience labels; use them only when a unique human label is more
+useful than a ref.
 
 Owned lanes are created by dispatch and are writable. Prefer `new` for a
-configured lane; it applies `.dispatch/config.toml`, presets, name prefixes, and
-can send an initial turn:
+configured managed thread; it applies `.dispatch/config.toml`, presets, name
+prefixes, and can send an initial turn:
 
 ```bash
 uv run dispatch new --name my-lane --cwd /path/to/project --text "Do the bounded thing."
@@ -79,8 +83,8 @@ uv run dispatch new --name my-lane --preset reviewer --no-send
 Attached lanes are existing desktop Codex threads registered by raw thread id:
 
 ```bash
-uv run dispatch lane attach <codex-thread-id>
-uv run dispatch lane attach <codex-thread-id> --sync
+uv run dispatch attach <codex-thread-id>
+uv run dispatch attach <codex-thread-id> --sync
 ```
 
 Attached lanes are managed by dispatch but are not turn-writable in v0. Do not
@@ -94,12 +98,12 @@ interlock.
 
 Attach is compact by default: it verifies the thread with
 `thread/read(includeTurns:false)`, registers metadata, and does not resume turn
-history. Use `--sync` or `lane sync` when you want dispatch to refresh its local
+history. Use `--sync` or `sync` when you want dispatch to refresh its local
 indexed view.
 
 ```bash
-uv run dispatch lane sync <lane>
-uv run dispatch lane sync <lane> --full
+uv run dispatch sync <dispatch-ref-or-thread-id>
+uv run dispatch sync <dispatch-ref-or-thread-id> --full
 ```
 
 Sync indexes source identity, sync state, latest event time, latest turn id, and
@@ -109,21 +113,21 @@ lanes.
 
 ## Discover Sessions
 
-`lane list` shows lanes dispatch already manages. `lane list --unmanaged` lists
+`list` shows threads dispatch already manages. `list --unmanaged` lists
 persisted Codex sessions that are not registered in dispatch. It uses App Server
 `thread/list` in state-db-only mode. It is read-only and does not resume or
 register anything:
 
 ```bash
-uv run dispatch lane list
-uv run dispatch lane list --unmanaged --limit 20
+uv run dispatch list
+uv run dispatch list --unmanaged --limit 20
 ```
 
-Use a discovered session `id` with `lane attach <id>`.
+Use a discovered session `id` with `attach <id>`.
 
 ## Search And Thread Actions
 
-Use top-level actions when you want to work with either managed lanes or raw
+Use top-level actions when you want to work with either managed threads or raw
 unmanaged Codex thread ids:
 
 ```bash
@@ -140,16 +144,15 @@ Use `search` before attaching when you need to find the right existing thread:
 uv run dispatch search "schema drift"
 uv run dispatch search "schema drift" --managed
 uv run dispatch search "schema drift" --unmanaged
-uv run dispatch search "schema drift" --lane @my-lane
+uv run dispatch search "schema drift" --thread <dispatch-ref>
 uv run dispatch search "schema drift" --repo .
 uv run dispatch search "schema drift" --dir /path/to/project
 uv run dispatch search "schema drift" --since 2026-06-01 --until 2026-06-05
-uv run dispatch lane search @my-lane "schema drift"
 ```
 
 Broad search uses experimental App Server `thread/search` plus dispatch-side
 filters. Lane-focused search reads one thread transcript and scans locally.
-Sync is separate: `lane sync` refreshes dispatch's local index for a managed
+Sync is separate: `sync` refreshes dispatch's local index for a managed
 lane, but it does not attach unmanaged sessions or grant write authority.
 
 ## Message Verbs
@@ -171,8 +174,7 @@ the lane is idle.
 Use `stop` to cancel the active turn without replacement text:
 
 ```bash
-uv run dispatch stop @my-lane
-uv run dispatch stop --lane @my-lane
+uv run dispatch stop <dispatch-ref>
 ```
 
 For short inter-lane chat, use the companion `$dm` skill, which is backed by
@@ -180,47 +182,39 @@ For short inter-lane chat, use the companion `$dm` skill, which is backed by
 
 ## History, Watch, And Goals
 
-Use `lane get` for compact lane metadata:
+Use `get` for compact managed-thread metadata:
 
 ```bash
-uv run dispatch lane get @my-lane
+uv run dispatch get <dispatch-ref>
 ```
 
-Use `lane tail` for persisted turn history:
+Use `tail` for persisted turn history:
 
 ```bash
-uv run dispatch lane tail @my-lane --limit 50
+uv run dispatch tail <dispatch-ref> --limit 50
 ```
 
-`lane tail` uses App Server `includeTurns`, which is not available for ephemeral
+`tail` uses App Server `includeTurns`, which is not available for ephemeral
 threads.
 
-Use `lane tail --follow` only for a bounded live event sample. It returns raw App
+Use `watch` for a bounded live event sample. It returns raw App
 Server method/params until a limit or timeout, and it is not an infinite tail:
 
 ```bash
-uv run dispatch lane tail @my-lane --follow --limit 20 --timeout 10
+uv run dispatch watch <dispatch-ref> --limit 20 --timeout 10
 ```
 
 Use native goals on owned lanes when a worker has a durable objective:
 
 ```bash
 uv run dispatch goal set @my-lane "Loop until checks are green."
-uv run dispatch goal status @my-lane
-uv run dispatch goal clear @my-lane
+uv run dispatch goal status <dispatch-ref>
+uv run dispatch goal clear <dispatch-ref>
 ```
 
 Goals require non-ephemeral App Server threads.
 
-Use history controls carefully:
-
-```bash
-uv run dispatch lane fork @my-lane --name my-lane-copy
-uv run dispatch lane rollback @my-lane --turns 1
-uv run dispatch lane compact @my-lane
-```
-
-`rollback` truncates persisted App Server history only; it does not revert files.
+`tail --follow` is not canonical; use `watch`.
 
 ## Markdown Thread Links
 
@@ -232,8 +226,8 @@ label: @Target
 destination: codex://threads/<codex-thread-id>
 ```
 
-Use raw thread ids for `lane attach`. Use lane ids or `@handles` for dispatch
-lane arguments.
+Use raw thread ids for `attach`. Use refs or full thread ids for dispatch
+thread arguments.
 
 ## Triggers
 
@@ -242,7 +236,7 @@ A trigger binds `when -> action -> lane`.
 ```bash
 uv run dispatch trigger add \
   --name pulse \
-  --lane @my-lane \
+  --lane <dispatch-ref> \
   --when interval \
   --seconds 1800 \
   --action send \
@@ -291,8 +285,8 @@ plugin bundle under `outfitter.dispatch.assets`; use the repo copies for editing
 - Do not install launchd autostart unless the user explicitly asks.
 - Start troubleshooting with `dispatch doctor`; use its recovery hints rather
   than guessing about stale sockets, PATH, auth, or registry shape.
-- Do not describe `lane tail --follow` as streaming forever; it is a bounded
-  event sample until dispatch grows a subscription-capable control socket.
+- Do not describe `tail --follow` as canonical or streaming forever. Use `watch`
+  for bounded live samples until dispatch grows a subscription-capable control socket.
 - Do not treat `rollback` as file undo.
 - If a request becomes long-running owned work, use a proper delegated lane or
   goal workflow rather than a casual message.

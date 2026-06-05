@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, time
 from pathlib import Path
-from typing import cast
+from typing import TypedDict, cast
 
 from pydantic import ValidationError as PydanticValidationError
 
@@ -33,7 +33,7 @@ from outfitter.dispatch.contracts.errors import (
     ValidationError,
     project_error,
 )
-from outfitter.dispatch.registry.models import Lane, LaneStatus, LaneSync, SyncState
+from outfitter.dispatch.registry.models import Lane, LaneSource, LaneStatus, LaneSync, SyncState
 
 from . import queue
 from .models import (
@@ -84,6 +84,7 @@ from .models import (
     WatchOutput,
 )
 from .new_config import NewSettings, resolve_new
+from .selectors import resolve_managed_selector, resolve_thread_selector
 from .sync import scan_codex_jsonl
 
 _READ_ONLY = SandboxPolicy(type="readOnly")
@@ -95,8 +96,27 @@ _ATTACH_METADATA_TIMEOUT_S = 10.0
 _PREVIEW_MAX = 80
 
 
+class _ManagedIdentityPayload(TypedDict):
+    lane: str
+    ref: str
+    id: str
+    title: str | None
+    handle: str | None
+    managed: bool
+    source: LaneSource
+    status: LaneStatus
+    cwd: str | None
+
+
 def _ref(lane: Lane) -> LaneRef:
-    return LaneRef(id=lane.id, handle=lane.handle, source=lane.source, status=lane.status)
+    return LaneRef(
+        ref=lane.ref,
+        id=lane.id,
+        handle=lane.handle,
+        source=lane.source,
+        status=lane.status,
+        cwd=lane.cwd,
+    )
 
 
 def _action_ref(
@@ -108,12 +128,28 @@ def _action_ref(
     if lane is None:
         return ThreadActionRef(id=thread_id, managed=False, source="unmanaged", status=status)
     return ThreadActionRef(
+        ref=lane.ref,
         id=lane.id,
         handle=lane.handle,
         managed=True,
         source=lane.source,
         status=status or lane.status,
+        cwd=lane.cwd,
     )
+
+
+def _managed_identity(lane: Lane) -> _ManagedIdentityPayload:
+    return {
+        "lane": lane.id,
+        "ref": lane.ref,
+        "id": lane.id,
+        "title": lane.handle.removeprefix("@"),
+        "handle": lane.handle,
+        "managed": True,
+        "source": lane.source,
+        "status": lane.status,
+        "cwd": lane.cwd,
+    }
 
 
 def _sync_view(sync: LaneSync | None) -> LaneSyncView:
@@ -140,26 +176,22 @@ def _handle(name: str) -> str:
 
 
 async def _resolve(ctx: Ctx, ref: str) -> Lane:
-    lane = await _find_lane(ctx, ref)
-    if lane is None:
-        raise NotFoundError(f"no lane {ref!r}")
-    return lane
+    resolved = await resolve_managed_selector(ctx, ref, allow_fuzzy=False)
+    if resolved.lane is None:
+        raise NotFoundError(f"no managed thread {ref!r}")
+    return resolved.lane
 
 
 async def _find_lane(ctx: Ctx, ref: str) -> Lane | None:
-    lane = await ctx.registry.find_lane(ref)
-    if lane is None:
-        lane = await ctx.registry.find_lane_by_handle(ref)
-    return lane
+    try:
+        return (await resolve_managed_selector(ctx, ref, allow_fuzzy=False)).lane
+    except NotFoundError:
+        return None
 
 
 async def _resolve_thread_target(ctx: Ctx, ref: str) -> tuple[str, Lane | None]:
-    lane = await _find_lane(ctx, ref)
-    if lane is not None:
-        return lane.id, lane
-    if ref.startswith("@"):
-        raise NotFoundError(f"no lane {ref!r}")
-    return ref, None
+    resolved = await resolve_thread_selector(ctx, ref, allow_unmanaged_raw=True, allow_fuzzy=False)
+    return resolved.thread_id, resolved.lane
 
 
 def _require_writable(lane: Lane) -> None:
@@ -417,7 +449,7 @@ async def send(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
     await ctx.client.turn_start(lane.id, inp.text, cwd=lane.cwd or ".", sandbox_policy=_READ_ONLY)
     await ctx.registry.update_lane_status(lane.id, "busy")
     await ctx.registry.log_action("send", lane=lane.id, detail=inp.text[:120])
-    return ActionAck(lane=lane.id, op="send")
+    return ActionAck(**_managed_identity(lane), op="send")
 
 
 async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
@@ -439,7 +471,7 @@ async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
             )
             await ctx.registry.update_lane_status(lane.id, "busy")
             await ctx.registry.log_action("send", lane=lane.id, detail=inp.text[:120])
-            return ActionAck(lane=lane.id, op="interject")
+            return ActionAck(**_managed_identity(lane), op="interject")
         case "queue":
             lane = await _resolve(ctx, inp.lane)
             _require_writable(lane)
@@ -449,7 +481,7 @@ async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
                 await queue.drain_next_queued_message(ctx, lane.id)
             pending = await ctx.registry.pending_message_count(lane.id)
             return ActionAck(
-                lane=lane.id,
+                **_managed_identity(lane),
                 op="queue",
                 detail=f"queued message {message.id}; pending={pending}",
             )
@@ -461,7 +493,7 @@ async def steer(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
     turn_id = _require_active_turn(lane, "steer")
     await ctx.client.turn_steer(lane.id, turn_id, inp.text)
     await ctx.registry.log_action("steer", lane=lane.id, detail=inp.text[:120])
-    return ActionAck(lane=lane.id, op="steer")
+    return ActionAck(**_managed_identity(lane), op="steer")
 
 
 async def brief(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
@@ -474,7 +506,7 @@ async def brief(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
     }
     await ctx.client.inject_items(lane.id, [item])
     await ctx.registry.log_action("brief", lane=lane.id, detail=inp.text[:120])
-    return ActionAck(lane=lane.id, op="brief")
+    return ActionAck(**_managed_identity(lane), op="brief")
 
 
 async def interrupt(inp: LaneInput, ctx: Ctx) -> ActionAck:
@@ -483,7 +515,7 @@ async def interrupt(inp: LaneInput, ctx: Ctx) -> ActionAck:
     turn_id = _require_active_turn(lane, "interrupt")
     await ctx.client.turn_interrupt(lane.id, turn_id)
     await ctx.registry.log_action("interrupt", lane=lane.id)
-    return ActionAck(lane=lane.id, op="interrupt")
+    return ActionAck(**_managed_identity(lane), op="interrupt")
 
 
 async def stop(inp: LaneInput, ctx: Ctx) -> ActionAck:
@@ -492,11 +524,14 @@ async def stop(inp: LaneInput, ctx: Ctx) -> ActionAck:
     turn_id = _require_active_turn(lane, "stop")
     await ctx.client.turn_interrupt(lane.id, turn_id)
     await ctx.registry.log_action("stop", lane=lane.id)
-    return ActionAck(lane=lane.id, op="stop")
+    return ActionAck(**_managed_identity(lane), op="stop")
 
 
 async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
-    lane = await _resolve(ctx, inp.lane)
+    resolved = await resolve_managed_selector(ctx, inp.lane, allow_fuzzy=True)
+    if resolved.lane is None:
+        raise NotFoundError(f"no managed thread {inp.lane!r}")
+    lane = resolved.lane
     sync = await ctx.registry.get_lane_sync(lane.id)
     transcript: list[TranscriptItem] = []
     if inp.include_transcript:
@@ -504,6 +539,7 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
         transcript = _transcript_from_thread(result, limit=inp.max_items)
     return LaneDetail(
         id=lane.id,
+        ref=lane.ref,
         handle=lane.handle,
         source=lane.source,
         status=lane.status,
@@ -520,7 +556,7 @@ async def sync_lane(inp: LaneSyncInput, ctx: Ctx) -> LaneSyncResult:
     await ctx.registry.log_action(
         "sync", lane=lane.id, detail=f"state={sync.state}; full={inp.full}"
     )
-    return LaneSyncResult(lane=lane.id, sync=_sync_view(sync))
+    return LaneSyncResult(**_managed_identity(lane), sync=_sync_view(sync))
 
 
 async def rename_lane(inp: LaneRenameInput, ctx: Ctx) -> ThreadActionRef:
@@ -541,9 +577,12 @@ async def rename_lane(inp: LaneRenameInput, ctx: Ctx) -> ThreadActionRef:
 
 
 async def watch(inp: WatchInput, ctx: Ctx) -> WatchOutput:
-    lane = await _resolve(ctx, inp.lane)
+    resolved = await resolve_managed_selector(ctx, inp.lane, allow_fuzzy=True)
+    if resolved.lane is None:
+        raise NotFoundError(f"no managed thread {inp.lane!r}")
+    lane = resolved.lane
     if inp.timeout == 0:
-        return WatchOutput(lane=lane.id, events=[], timed_out=True)
+        return WatchOutput(**_managed_identity(lane), events=[], timed_out=True)
     stream = ctx.client.raw_events(lane.id)
     events: list[WatchEvent] = []
     timed_out = False
@@ -569,14 +608,17 @@ async def watch(inp: WatchInput, ctx: Ctx) -> WatchOutput:
         aclose = getattr(stream, "aclose", None)
         if aclose is not None:
             await aclose()
-    return WatchOutput(lane=lane.id, events=events, timed_out=timed_out)
+    return WatchOutput(**_managed_identity(lane), events=events, timed_out=timed_out)
 
 
 async def transcript(inp: TranscriptInput, ctx: Ctx) -> TranscriptOutput:
-    lane = await _resolve(ctx, inp.lane)
+    resolved = await resolve_managed_selector(ctx, inp.lane, allow_fuzzy=True)
+    if resolved.lane is None:
+        raise NotFoundError(f"no managed thread {inp.lane!r}")
+    lane = resolved.lane
     result = await ctx.client.thread_read(lane.id, include_turns=True)
     return TranscriptOutput(
-        lane=lane.id,
+        **_managed_identity(lane),
         items=_transcript_from_thread(result, limit=inp.limit),
     )
 
@@ -695,7 +737,10 @@ async def _search_one_thread(
     until: float | None,
 ) -> SearchOutput:
     assert inp.lane is not None
-    thread_id, _lane = await _resolve_thread_target(ctx, inp.lane)
+    resolved = await resolve_thread_selector(
+        ctx, inp.lane, allow_unmanaged_raw=True, allow_fuzzy=True
+    )
+    thread_id = resolved.thread_id
     result = await ctx.client.thread_read(thread_id, include_turns=True)
     try:
         thread = ThreadResult.model_validate(result).thread
@@ -804,6 +849,7 @@ def _search_match(
     source = lane.source if lane is not None else "unmanaged"
     return SearchMatch(
         id=thread.id,
+        ref=lane.ref if lane is not None else None,
         handle=lane.handle if lane is not None else None,
         managed=lane is not None,
         source=source,
@@ -887,9 +933,12 @@ def _goal(goal: ThreadGoal) -> Goal:
 
 
 async def goal_get(inp: GoalGetInput, ctx: Ctx) -> GoalView:
-    lane = await _resolve(ctx, inp.lane)
+    resolved = await resolve_managed_selector(ctx, inp.lane, allow_fuzzy=True)
+    if resolved.lane is None:
+        raise NotFoundError(f"no managed thread {inp.lane!r}")
+    lane = resolved.lane
     goal = await ctx.client.thread_goal_get(lane.id)
-    return GoalView(lane=lane.id, goal=_goal(goal) if goal is not None else None)
+    return GoalView(**_managed_identity(lane), goal=_goal(goal) if goal is not None else None)
 
 
 async def goal_set(inp: GoalSetInput, ctx: Ctx) -> GoalView:
@@ -909,7 +958,7 @@ async def goal_set(inp: GoalSetInput, ctx: Ctx) -> GoalView:
         token_budget=inp.token_budget,
     )
     await ctx.registry.log_action("goal-set", lane=lane.id, detail=inp.objective)
-    return GoalView(lane=lane.id, goal=_goal(goal))
+    return GoalView(**_managed_identity(lane), goal=_goal(goal))
 
 
 async def goal_clear(inp: GoalClearInput, ctx: Ctx) -> GoalView:
@@ -917,7 +966,7 @@ async def goal_clear(inp: GoalClearInput, ctx: Ctx) -> GoalView:
     _require_writable(lane)
     await ctx.client.thread_goal_clear(lane.id)
     await ctx.registry.log_action("goal-clear", lane=lane.id)
-    return GoalView(lane=lane.id, goal=None)
+    return GoalView(**_managed_identity(lane), goal=None)
 
 
 async def fork(inp: ForkInput, ctx: Ctx) -> LaneRef:
@@ -967,7 +1016,7 @@ async def compact(inp: CompactInput, ctx: Ctx) -> ActionAck:
     _require_writable(lane)
     await ctx.client.thread_compact_start(lane.id)
     await ctx.registry.log_action("compact", lane=lane.id)
-    return ActionAck(lane=lane.id, op="compact")
+    return ActionAck(**_managed_identity(lane), op="compact")
 
 
 async def roster(inp: RosterInput, ctx: Ctx) -> Roster:

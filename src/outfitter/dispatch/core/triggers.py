@@ -13,7 +13,7 @@ from datetime import datetime
 
 from outfitter.dispatch.client.errors import ClientError
 from outfitter.dispatch.contracts.context import Ctx
-from outfitter.dispatch.contracts.errors import DispatchError, project_error
+from outfitter.dispatch.contracts.errors import DispatchError, NotFoundError, project_error
 from outfitter.dispatch.registry.models import (
     Action,
     BriefAction,
@@ -25,6 +25,7 @@ from outfitter.dispatch.registry.models import (
 
 from . import handlers
 from .models import LaneTextInput
+from .selectors import resolve_managed_selector
 
 Clock = Callable[[], datetime]
 
@@ -38,11 +39,11 @@ def action_op(action: Action) -> str:
 
 
 async def resolve_lane(ctx: Ctx, selector: str) -> Lane | None:
-    """Resolve a lane selector (id or @handle) to a lane, or None."""
-    lane = await ctx.registry.find_lane(selector)
-    if lane is None:
-        lane = await ctx.registry.find_lane_by_handle(selector)
-    return lane
+    """Resolve a managed thread selector to a lane, or None."""
+    try:
+        return (await resolve_managed_selector(ctx, selector, allow_fuzzy=False)).lane
+    except NotFoundError:
+        return None
 
 
 class TriggerRunner:

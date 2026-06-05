@@ -24,15 +24,27 @@ SendMode = Literal["send", "steer", "queue", "interject", "context"]
 ThreadActionSource = Literal["own", "attached", "unmanaged"]
 SearchSortKey = Literal["created_at", "updated_at"]
 SearchDateField = Literal["created_at", "updated_at"]
+THREAD_SELECTOR_DESCRIPTION = (
+    "Thread selector: dispatch ref, full Codex thread id, or unique handle/title."
+)
+EXISTING_THREAD_SELECTOR_DESCRIPTION = (
+    "Existing thread selector: dispatch ref, full Codex thread id, or unique handle/title."
+)
+SOURCE_THREAD_SELECTOR_DESCRIPTION = (
+    "Source thread selector: dispatch ref, full Codex thread id, or unique handle/title."
+)
+TARGET_THREAD_SELECTOR_DESCRIPTION = (
+    "Target thread selector: dispatch ref, full Codex thread id, or unique handle/title."
+)
 
 
 class OpenInput(BaseModel):
-    name: str = Field(description="Lane name; becomes the @handle.")
-    cwd: str = Field(default=".", description="Working directory for the lane.")
+    name: str = Field(description="Thread title; also seeds the mutable @handle.")
+    cwd: str = Field(default=".", description="Working directory for the managed thread.")
 
 
 class NewInput(BaseModel):
-    name: str = Field(description="Lane name; prefix/presets may decorate it.")
+    name: str = Field(description="Thread title; prefix/presets may decorate it.")
     preset: list[str] = Field(
         default_factory=list, description="Preset(s) to apply, left to right."
     )
@@ -61,12 +73,12 @@ class NewInput(BaseModel):
 
 
 class AttachInput(BaseModel):
-    thread: str = Field(description="App Server threadId of an existing (desktop) lane.")
+    thread: str = Field(description="Full Codex thread id of an existing thread.")
     sync: bool = Field(default=False, description="Run a quick sync after attaching.")
 
 
 class LaneTextInput(BaseModel):
-    lane: str = Field(description="Lane id or @handle.")
+    lane: str = Field(description=THREAD_SELECTOR_DESCRIPTION)
     text: str = Field(description="Message text.")
 
 
@@ -83,35 +95,33 @@ class SendInput(LaneTextInput):
 
 
 class LaneInput(BaseModel):
-    lane: str = Field(description="Lane id or @handle.")
+    lane: str = Field(description=THREAD_SELECTOR_DESCRIPTION)
 
 
 class ThreadTargetInput(BaseModel):
-    target: str = Field(description="Lane id, @handle, or raw Codex thread id.")
+    target: str = Field(description=THREAD_SELECTOR_DESCRIPTION)
 
 
 class LaneSyncInput(BaseModel):
-    lane: str = Field(description="Lane id or @handle.")
+    lane: str = Field(description=THREAD_SELECTOR_DESCRIPTION)
     full: bool = Field(default=False, description="Scan the full source file instead of top+tail.")
 
 
 class LaneRenameInput(BaseModel):
-    old: str = Field(description="Existing lane id, @handle, or raw Codex thread id.")
-    new: str = Field(description="New lane handle/thread name; @ is optional for managed lanes.")
+    old: str = Field(description=EXISTING_THREAD_SELECTOR_DESCRIPTION)
+    new: str = Field(description="New mutable thread title/handle; @ is optional.")
 
 
 class SearchInput(BaseModel):
     query: str = Field(description="Substring/full-text query for Codex thread search.")
-    lane: str | None = Field(
-        default=None, description="Limit search to one lane id, @handle, or raw Codex thread id."
-    )
+    lane: str | None = Field(default=None, description="Limit search to one thread selector.")
     directory: str | None = Field(
         default=None, description="Only include threads whose cwd is inside this directory."
     )
     repo: str | None = Field(
         default=None, description="Only include threads whose cwd is inside this repo root."
     )
-    managed: bool = Field(default=False, description="Only include dispatch-managed lanes.")
+    managed: bool = Field(default=False, description="Only include dispatch-managed threads.")
     unmanaged: bool = Field(default=False, description="Only include unmanaged Codex threads.")
     archived: bool = Field(
         default=False, description="Search archived threads instead of active ones."
@@ -132,7 +142,7 @@ class SearchInput(BaseModel):
 
 
 class ShowInput(BaseModel):
-    lane: str = Field(description="Lane id or @handle.")
+    lane: str = Field(description=THREAD_SELECTOR_DESCRIPTION)
     include_transcript: bool = Field(
         default=False, description="Include a compact transcript from thread/read."
     )
@@ -140,7 +150,7 @@ class ShowInput(BaseModel):
 
 
 class WatchInput(BaseModel):
-    lane: str = Field(description="Lane id or @handle.")
+    lane: str = Field(description=THREAD_SELECTOR_DESCRIPTION)
     limit: int = Field(default=20, ge=1, description="Max live App Server events to collect.")
     timeout: float = Field(
         default=10.0,
@@ -151,27 +161,27 @@ class WatchInput(BaseModel):
 
 
 class TranscriptInput(BaseModel):
-    lane: str = Field(description="Lane id or @handle.")
+    lane: str = Field(description=THREAD_SELECTOR_DESCRIPTION)
     limit: int = Field(default=50, ge=1, description="Max compact transcript items to return.")
 
 
 class GoalGetInput(BaseModel):
-    lane: str = Field(description="Lane id or @handle.")
+    lane: str = Field(description=THREAD_SELECTOR_DESCRIPTION)
 
 
 class GoalSetInput(BaseModel):
-    lane: str = Field(description="Lane id or @handle.")
+    lane: str = Field(description=THREAD_SELECTOR_DESCRIPTION)
     objective: str | None = Field(default=None, description="Goal objective text.")
     status: ThreadGoalStatus | None = Field(default=None, description="Goal status.")
     token_budget: int | None = Field(default=None, ge=1, description="Optional token budget.")
 
 
 class GoalClearInput(BaseModel):
-    lane: str = Field(description="Lane id or @handle.")
+    lane: str = Field(description=THREAD_SELECTOR_DESCRIPTION)
 
 
 class ForkInput(BaseModel):
-    lane: str = Field(description="Source lane id or @handle.")
+    lane: str = Field(description=SOURCE_THREAD_SELECTOR_DESCRIPTION)
     name: str = Field(description="Name for the new forked lane.")
     cwd: str | None = Field(default=None, description="Working directory override for the fork.")
     sandbox: ThreadSandbox | None = Field(
@@ -194,12 +204,12 @@ class ForkInput(BaseModel):
 
 
 class RollbackInput(BaseModel):
-    lane: str = Field(description="Lane id or @handle.")
+    lane: str = Field(description=THREAD_SELECTOR_DESCRIPTION)
     turns: int = Field(default=1, ge=1, description="Turns to drop from the end of history.")
 
 
 class CompactInput(BaseModel):
-    lane: str = Field(description="Lane id or @handle.")
+    lane: str = Field(description=THREAD_SELECTOR_DESCRIPTION)
 
 
 class RosterInput(BaseModel):
@@ -214,18 +224,40 @@ class DiscoverInput(BaseModel):
 
 
 class LaneRef(BaseModel):
+    ref: str
     id: str
     handle: str
     source: LaneSource
     status: LaneStatus
+    cwd: str | None = None
 
 
 class ThreadActionRef(BaseModel):
+    ref: str | None = None
     id: str
     handle: str | None = None
     managed: bool
     source: ThreadActionSource
     status: str | None = None
+    cwd: str | None = None
+
+
+class ManagedThreadIdentity(BaseModel):
+    """Stable identity fields for outputs that refer to one managed thread.
+
+    ``lane`` stays as the compatibility field for the full Codex thread id.
+    ``id`` names the same full id explicitly for thread-oriented consumers.
+    """
+
+    lane: str
+    ref: str
+    id: str
+    title: str | None = None
+    handle: str | None = None
+    managed: bool = True
+    source: LaneSource
+    status: LaneStatus
+    cwd: str | None = None
 
 
 class LaneSyncView(BaseModel):
@@ -248,7 +280,6 @@ class NewLane(LaneRef):
 
 
 class LaneDetail(LaneRef):
-    cwd: str | None = None
     active_turn_id: str | None = None
     sync: LaneSyncView = Field(default_factory=LaneSyncView)
     transcript: list[TranscriptItem] = Field(default_factory=list)
@@ -267,14 +298,12 @@ class WatchEvent(BaseModel):
     request_id: int | None = None
 
 
-class WatchOutput(BaseModel):
-    lane: str
+class WatchOutput(ManagedThreadIdentity):
     events: list[WatchEvent]
     timed_out: bool
 
 
-class TranscriptOutput(BaseModel):
-    lane: str
+class TranscriptOutput(ManagedThreadIdentity):
     items: list[TranscriptItem]
 
 
@@ -289,20 +318,17 @@ class Goal(BaseModel):
     token_budget: int | None = None
 
 
-class GoalView(BaseModel):
-    lane: str
+class GoalView(ManagedThreadIdentity):
     goal: Goal | None = None
 
 
-class ActionAck(BaseModel):
-    lane: str
+class ActionAck(ManagedThreadIdentity):
     op: str
     accepted: bool = True
     detail: str | None = None
 
 
-class LaneSyncResult(BaseModel):
-    lane: str
+class LaneSyncResult(ManagedThreadIdentity):
     sync: LaneSyncView
 
 
@@ -328,6 +354,7 @@ class Discovery(BaseModel):
 
 
 class SearchMatch(BaseModel):
+    ref: str | None = None
     id: str
     handle: str | None = None
     managed: bool
@@ -357,7 +384,7 @@ TriggerActionKind = Literal["send", "steer", "brief"]
 
 class TriggerAddInput(BaseModel):
     name: str = Field(description="Trigger name.")
-    lane: str = Field(description="Target lane id or @handle.")
+    lane: str = Field(description=TARGET_THREAD_SELECTOR_DESCRIPTION)
     when: TriggerWhenKind = Field(description="Trigger condition.")
     action: TriggerActionKind = Field(description="Action to run when it fires.")
     text: str = Field(description="Action text (prompt or injected context).")

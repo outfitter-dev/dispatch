@@ -57,7 +57,7 @@ from .models import (
 
 OPEN = define_op(
     id="open",
-    summary="Open a new owned lane.",
+    summary="Primitive: start and register a new owned managed thread.",
     input=OpenInput,
     output=LaneRef,
     intent="write",
@@ -67,7 +67,14 @@ OPEN = define_op(
         Example(
             "alpha",
             input={"name": "alpha", "cwd": "."},
-            output={"id": "lane-1", "handle": "@alpha", "source": "own", "status": "idle"},
+            output={
+                "ref": "0BGeK1",
+                "id": "lane-1",
+                "handle": "@alpha",
+                "source": "own",
+                "status": "idle",
+                "cwd": ".",
+            },
         )
     ],
 )
@@ -83,12 +90,14 @@ NEW = define_op(
     examples=[
         Example(
             "idle",
-            input={"name": "alpha", "send": False},
+            input={"name": "alpha", "cwd": "/work", "prefix": "[dispatch]", "send": False},
             output={
+                "ref": "0BGeK1",
                 "id": "lane-1",
                 "handle": "@[dispatch] alpha",
                 "source": "own",
                 "status": "idle",
+                "cwd": "/work",
                 "sent": False,
             },
         )
@@ -97,7 +106,7 @@ NEW = define_op(
 
 ATTACH = define_op(
     id="attach",
-    summary="Attach to an existing lane (turn-write locked; ADR-0005).",
+    summary="Attach to an existing Codex thread (turn-write locked; ADR-0005).",
     input=AttachInput,
     output=LaneRef,
     intent="write",
@@ -107,14 +116,21 @@ ATTACH = define_op(
         Example(
             "resume",
             input={"thread": "T1"},
-            output={"id": "T1", "handle": "@T1", "source": "attached", "status": "idle"},
+            output={
+                "ref": "0ABFs1",
+                "id": "T1",
+                "handle": "@T1",
+                "source": "attached",
+                "status": "idle",
+                "cwd": None,
+            },
         )
     ],
 )
 
 SEND = define_op(
     id="send",
-    summary="Send, steer, interject, queue, or inject context into a lane.",
+    summary="Send, steer, interject, queue, or inject context into a managed thread.",
     input=SendInput,
     output=ActionAck,
     intent="write",
@@ -127,7 +143,7 @@ SEND = define_op(
 
 STOP = define_op(
     id="stop",
-    summary="Cancel a lane's active turn.",
+    summary="Cancel a managed thread's active turn.",
     input=LaneInput,
     output=ActionAck,
     intent="write",
@@ -138,7 +154,7 @@ STOP = define_op(
 
 SHOW = define_op(
     id="show",
-    summary="Show a lane's current detail.",
+    summary="Show a managed thread's current detail.",
     input=ShowInput,
     output=LaneDetail,
     intent="read",
@@ -149,7 +165,7 @@ SHOW = define_op(
 
 LANE_RENAME = define_op(
     id="lane-rename",
-    summary="Rename a lane handle or Codex thread.",
+    summary="Rename a managed thread label or unmanaged Codex thread.",
     input=LaneRenameInput,
     output=ThreadActionRef,
     intent="write",
@@ -160,11 +176,13 @@ LANE_RENAME = define_op(
             "unmanaged",
             input={"old": "T1", "new": "docs"},
             output={
+                "ref": None,
                 "id": "T1",
                 "handle": None,
                 "managed": False,
                 "source": "unmanaged",
                 "status": None,
+                "cwd": None,
             },
         )
     ],
@@ -172,7 +190,7 @@ LANE_RENAME = define_op(
 
 TRANSCRIPT = define_op(
     id="transcript",
-    summary="Read a compact persisted transcript for a lane.",
+    summary="Read compact persisted history for a managed thread.",
     input=TranscriptInput,
     output=TranscriptOutput,
     intent="read",
@@ -183,7 +201,7 @@ TRANSCRIPT = define_op(
 
 WATCH = define_op(
     id="watch",
-    summary="Collect live raw App Server events for a lane.",
+    summary="Collect a bounded live App Server event sample for a managed thread.",
     input=WatchInput,
     output=WatchOutput,
     intent="read",
@@ -194,7 +212,7 @@ WATCH = define_op(
 
 SYNC = define_op(
     id="sync",
-    summary="Progressively sync an attached lane's local Codex thread index.",
+    summary="Refresh a managed thread's local dispatch index.",
     input=LaneSyncInput,
     output=LaneSyncResult,
     intent="write",
@@ -205,7 +223,7 @@ SYNC = define_op(
 
 ROSTER = define_op(
     id="roster",
-    summary="List managed lanes.",
+    summary="List managed threads.",
     input=RosterInput,
     output=Roster,
     intent="read",
@@ -250,7 +268,7 @@ SEARCH = define_op(
 
 ARCHIVE = define_op(
     id="archive",
-    summary="Archive a lane or unmanaged Codex thread.",
+    summary="Archive a managed or unmanaged Codex thread.",
     input=ThreadTargetInput,
     output=ThreadActionRef,
     intent="destroy",
@@ -261,11 +279,13 @@ ARCHIVE = define_op(
             "unmanaged",
             input={"target": "T1"},
             output={
+                "ref": None,
                 "id": "T1",
                 "handle": None,
                 "managed": False,
                 "source": "unmanaged",
                 "status": "archived",
+                "cwd": None,
             },
         )
     ],
@@ -273,7 +293,7 @@ ARCHIVE = define_op(
 
 RESTORE = define_op(
     id="restore",
-    summary="Restore an archived lane or unmanaged Codex thread.",
+    summary="Restore an archived managed or unmanaged Codex thread.",
     input=ThreadTargetInput,
     output=ThreadActionRef,
     intent="write",
@@ -284,11 +304,13 @@ RESTORE = define_op(
             "unmanaged",
             input={"target": "T1"},
             output={
+                "ref": None,
                 "id": "T1",
                 "handle": None,
                 "managed": False,
                 "source": "unmanaged",
                 "status": "unknown",
+                "cwd": None,
             },
         )
     ],
@@ -296,7 +318,7 @@ RESTORE = define_op(
 
 GOAL_GET = define_op(
     id="goal-get",
-    summary="Read a lane's native App Server goal.",
+    summary="Read a managed thread's native App Server goal.",
     input=GoalGetInput,
     output=GoalView,
     intent="read",
@@ -307,7 +329,7 @@ GOAL_GET = define_op(
 
 GOAL_SET = define_op(
     id="goal-set",
-    summary="Set or update a lane's native App Server goal.",
+    summary="Set or update a managed thread's native App Server goal.",
     input=GoalSetInput,
     output=GoalView,
     intent="write",
@@ -320,7 +342,7 @@ GOAL_SET = define_op(
 
 GOAL_CLEAR = define_op(
     id="goal-clear",
-    summary="Clear a lane's native App Server goal.",
+    summary="Clear a managed thread's native App Server goal.",
     input=GoalClearInput,
     output=GoalView,
     intent="destroy",
@@ -331,7 +353,7 @@ GOAL_CLEAR = define_op(
 
 FORK = define_op(
     id="fork",
-    summary="Fork a lane into a new owned lane.",
+    summary="Fork a managed thread into a new owned managed thread.",
     input=ForkInput,
     output=LaneRef,
     intent="write",
@@ -342,7 +364,7 @@ FORK = define_op(
 
 ROLLBACK = define_op(
     id="rollback",
-    summary="Rollback persisted lane history; does not revert workspace files.",
+    summary="Rollback persisted managed-thread history; does not revert workspace files.",
     input=RollbackInput,
     output=LaneRef,
     intent="destroy",
@@ -353,7 +375,7 @@ ROLLBACK = define_op(
 
 COMPACT = define_op(
     id="compact",
-    summary="Start App Server context compaction for a lane.",
+    summary="Start App Server context compaction for a managed thread.",
     input=CompactInput,
     output=ActionAck,
     intent="write",

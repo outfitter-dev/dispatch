@@ -117,7 +117,7 @@ Common recovery paths:
 - Registry integrity failure: stop the daemon, back up the database at the path shown
   by doctor, and recreate it or inspect with `sqlite3`.
 - App Server initialize failure: run `codex app-server --listen stdio://` directly in
-  the same shell and fix the Codex CLI/auth problem before relying on lane operations.
+  the same shell and fix the Codex CLI/auth problem before relying on thread operations.
 
 ## Release Publishing
 
@@ -166,9 +166,14 @@ Use `new --no-send` when you want to create the lane first and send later:
 
 ```bash
 uv run dispatch new --name docs-review --cwd /path/to/dispatch --no-send
-uv run dispatch lane list
-uv run dispatch send @docs-review "Review the README for missing usage steps."
+uv run dispatch list
+uv run dispatch send <dispatch-ref> "Review the README for missing usage steps."
 ```
+
+Every managed thread gets a dispatch-local `ref`, for example `0k7M4a`. Use refs
+for day-to-day commands. The full Codex thread id is still the canonical global
+identity and is accepted everywhere. Titles and `@handles` are mutable labels;
+they are convenient, but not stable identity.
 
 Example `.dispatch/config.toml`:
 
@@ -215,8 +220,7 @@ uv run dispatch send @docs-review "Stop that and focus on operator docs first." 
 Use `stop` to cancel the active turn without sending replacement text:
 
 ```bash
-uv run dispatch stop @docs-review
-uv run dispatch stop --lane @docs-review
+uv run dispatch stop <dispatch-ref>
 ```
 
 Use `send --queue` when delivery should wait for the lane to become idle. The message is
@@ -226,29 +230,29 @@ stored in dispatch's durable registry and starts one queued turn per idle transi
 uv run dispatch send @docs-review "Run this after the active turn." --queue
 ```
 
-## Lane History And Goals
+## Thread History, Watch, And Goals
 
-`lane get` remains the compact lane summary:
+`get` is the compact managed-thread summary:
 
 ```bash
-uv run dispatch lane get @docs-review
+uv run dispatch get <dispatch-ref>
 ```
 
-Use `lane tail` when you want persisted turn history. It reads `thread/read` with
+Use `tail` when you want persisted turn history. It reads `thread/read` with
 `includeTurns:true` and returns a compact item list; it is a history snapshot, not a
 full execution log. App Server does not support `includeTurns` on ephemeral threads.
 
 ```bash
-uv run dispatch lane tail @docs-review --limit 50
+uv run dispatch tail <dispatch-ref> --limit 50
 ```
 
-Use `lane tail --follow` for a bounded live event sample from dispatch's app-server stream.
+Use `watch` for a bounded live event sample from dispatch's app-server stream.
 It returns raw App Server method names and params for the selected lane until `--limit`
 events arrive or `--timeout` elapses. It is intentionally bounded because the current
 control socket is request/response JSONL, not a subscription protocol.
 
 ```bash
-uv run dispatch lane tail @docs-review --follow --limit 20 --timeout 10
+uv run dispatch watch <dispatch-ref> --limit 20 --timeout 10
 ```
 
 Native App Server goals can be read, set, and cleared on owned lanes:
@@ -262,36 +266,21 @@ uv run dispatch goal clear @docs-review
 Creating a goal requires an objective. After a goal exists, `goal set` can update
 `--status` or `--token-budget`. App Server goals require non-ephemeral threads.
 
-`fork`, `rollback`, and `compact` expose stable App Server history controls:
-
-```bash
-uv run dispatch lane fork @docs-review --name docs-review-copy
-uv run dispatch lane rollback @docs-review --turns 1
-uv run dispatch lane compact @docs-review
-```
-
-`rollback` only truncates persisted App Server history. It does not revert local files.
-Treat it as a conversation-history operation, not a source-control undo.
+`tail --follow` is not canonical; use `watch`. True long-lived streaming will use a
+future subscription-capable watch surface.
 
 ## Thread Actions And Search
 
 `rename`, `archive`, and `restore` are top-level thread actions. They accept a managed
-lane id, a managed `@handle`, or a raw unmanaged Codex thread id:
+dispatch ref, a full Codex thread id, or a unique convenience label:
 
 ```bash
-uv run dispatch rename @docs-review docs-review-final
-uv run dispatch archive @docs-review
+uv run dispatch rename <dispatch-ref> docs-review-final
+uv run dispatch archive <dispatch-ref>
 uv run dispatch restore <codex-thread-id>
 ```
 
 `restore` unarchives the thread only; it does not resume the thread or start a new turn.
-Use the `lane` group when you want the same actions to read as lane management:
-
-```bash
-uv run dispatch lane rename @docs-review docs-review-final
-uv run dispatch lane archive @docs-review
-uv run dispatch lane restore @docs-review
-```
 
 Use `search` to search Codex thread history without first attaching every thread:
 
@@ -299,11 +288,10 @@ Use `search` to search Codex thread history without first attaching every thread
 uv run dispatch search "schema drift"
 uv run dispatch search "schema drift" --managed
 uv run dispatch search "schema drift" --unmanaged
-uv run dispatch search "schema drift" --lane @docs-review
+uv run dispatch search "schema drift" --thread <dispatch-ref>
 uv run dispatch search "schema drift" --repo .
 uv run dispatch search "schema drift" --dir /path/to/project
 uv run dispatch search "schema drift" --since 2026-06-01 --until 2026-06-05
-uv run dispatch lane search @docs-review "schema drift"
 ```
 
 Broad search uses the App Server experimental `thread/search` primitive, then applies
@@ -314,26 +302,26 @@ local substring scan. Date bounds accept ISO dates or datetimes and default to f
 
 ## Discover Sessions
 
-`lane list` lists the lanes dispatch already manages. `lane list --unmanaged` is the other
+`list` shows the threads dispatch already manages. `list --unmanaged` is the other
 half: it lists the persisted Codex sessions on this machine — desktop threads and prior
 runs — that you could attach. It uses App Server `thread/list` in state-db-only mode, so
 it is fast and read-only; it never resumes, writes, or registers anything.
 
 ```bash
-uv run dispatch lane list --unmanaged --limit 20
+uv run dispatch list --unmanaged --limit 20
 ```
 
 Each row carries `id`, `name`, a shortened `preview`, `cwd`, `status`, `source`, and
 `ephemeral`. Use the `id` with `attach` to bring a session under management:
 
 ```bash
-uv run dispatch lane attach <id-from-lane-list-unmanaged>
-uv run dispatch lane attach <id-from-lane-list-unmanaged> --sync
+uv run dispatch attach <id-from-list-unmanaged>
+uv run dispatch attach <id-from-list-unmanaged> --sync
 ```
 
-Keep the two straight: `lane list --unmanaged` shows unmanaged Codex sessions that are not
-registered in dispatch; `lane list` shows managed lanes (owned or already attached). Sync is
-separate from both: `lane sync` refreshes dispatch's local index for a managed lane, but it
+Keep the two straight: `list --unmanaged` shows unmanaged Codex sessions that are not
+registered in dispatch; `list` shows managed threads (owned or already attached). Sync is
+separate from both: `sync` refreshes dispatch's local index for a managed thread, but it
 does not change ownership or write authority.
 
 ## Attached Lanes
@@ -341,8 +329,8 @@ does not change ownership or write authority.
 Attach registers an existing Codex thread by raw thread id:
 
 ```bash
-uv run dispatch lane attach <codex-thread-id>
-uv run dispatch lane sync <lane>
+uv run dispatch attach <codex-thread-id>
+uv run dispatch sync <dispatch-ref-or-thread-id>
 ```
 
 Attached lanes allow observation, sync, and explicit metadata/lifecycle actions such as
@@ -358,20 +346,20 @@ does not call `thread/resume` or load turn history. If the app-server is wedged 
 metadata read stalls, attach fails with a clear `app_server` error and registers no lane —
 it never leaves a half-attached entry behind.
 
-Use `lane sync` to refresh dispatch's local indexed view of an attached lane. Sync reads the
+Use `sync` to refresh dispatch's local indexed view of an attached lane. Sync reads the
 official metadata and, when Codex exposes a local rollout path, parses bounded top+tail JSONL
 records into a compact cache: source file identity, sync state, latest event timestamp,
 latest turn id, and a preview. It does not copy the full transcript by default.
 
 ```bash
-uv run dispatch lane sync <lane>
-uv run dispatch lane sync <lane> --full
-uv run dispatch lane get <lane>
-uv run dispatch lane list
+uv run dispatch sync <dispatch-ref-or-thread-id>
+uv run dispatch sync <dispatch-ref-or-thread-id> --full
+uv run dispatch get <dispatch-ref-or-thread-id>
+uv run dispatch list
 ```
 
-`lane sync --full` scans the whole current source file and marks the cache complete for that
-file identity. It is still an index refresh, not a write to the Codex thread. `lane tail`
+`sync --full` scans the whole current source file and marks the cache complete for that
+file identity. It is still an index refresh, not a write to the Codex thread. `tail`
 continues to use official `thread/read(includeTurns:true)` persisted history when you want
 App Server turn summaries.
 
@@ -381,7 +369,7 @@ When referring to a Codex thread in docs or prompts, prefer a readable handle wi
 [@Dispatch](codex://threads/<codex-thread-id>)
 ```
 
-Use the raw thread id for command arguments. Use the Markdown link in human-facing text.
+Use refs or raw thread ids for command arguments. Use the Markdown link in human-facing text.
 
 ## Triggers
 
@@ -392,7 +380,7 @@ Interval trigger:
 ```bash
 uv run dispatch trigger add \
   --name docs-pulse \
-  --lane @docs-review \
+  --lane <dispatch-ref> \
   --when interval \
   --seconds 1800 \
   --action send \
@@ -404,7 +392,7 @@ Cron trigger:
 ```bash
 uv run dispatch trigger add \
   --name weekday-standup \
-  --lane @docs-review \
+  --lane <dispatch-ref> \
   --when cron \
   --cron "0 9 * * 1-5" \
   --action send \
@@ -416,7 +404,7 @@ Idle trigger:
 ```bash
 uv run dispatch trigger add \
   --name after-idle \
-  --lane @docs-review \
+  --lane <dispatch-ref> \
   --when idle_for \
   --seconds 900 \
   --action brief \
@@ -445,9 +433,10 @@ make that contract explicit in scripts. `schema` prints the input and output sch
 derived from the contract registry:
 
 ```bash
-uv run dispatch lane list --json
+uv run dispatch list --json
 uv run dispatch schema send
-uv run dispatch schema "lane sync"
+uv run dispatch schema sync
+uv run dispatch schema watch
 uv run dispatch schema "goal set"
 ```
 
@@ -460,9 +449,11 @@ uv run dispatch mcp
 ```
 
 MCP is grouped for agent ergonomics rather than one tool per op. Tools are grouped by
-workflow and safety boundary, for example lane read/write/destroy, trigger
+workflow and safety boundary, for example thread read/write/destroy, trigger
 read/write/destroy, and daemon read tools. Each grouped call chooses an `op` inside the
 tool, and that op's arguments/schema still derive from the same contract registry.
+Structured MCP outputs that identify a managed thread include the dispatch `ref`, full
+Codex id, title/handle, managed/source/status, and cwd when available.
 
 The workspace Codex plugin at [`plugins/dispatch/`](../../plugins/dispatch/) exposes that
 MCP server through [`plugins/dispatch/.mcp.json`](../../plugins/dispatch/.mcp.json). The
@@ -478,8 +469,7 @@ If Codex does not pick up the plugin immediately, restart Codex for this workspa
   spike confirmed cross-process history discovery/resume, not live co-presence.
 - Do not install the generated launchd plist with `launchctl` unless the user explicitly
   wants persistent autostart.
-- `lane tail` is a persisted history snapshot. `lane tail --follow` is a bounded live
-  event sample. Neither is a durable infinite tail yet; that needs a subscription-capable
-  control socket.
+- `tail` is a persisted history snapshot. `watch` is a bounded live event sample.
+  Neither is a durable infinite tail yet; that needs a subscription-capable control socket.
 - `rollback` does not revert workspace files. Use Git or another workspace mechanism for
   file-level undo.

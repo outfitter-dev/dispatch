@@ -9,9 +9,9 @@ from outfitter.dispatch.core.ops import REGISTRY
 def test_grouped_tools_are_agent_oriented_not_one_per_op() -> None:
     projection = derive_mcp_projection(REGISTRY)
     assert [t.name for t in projection.tools] == [
-        "dispatch_lane_read",
-        "dispatch_lane_write",
-        "dispatch_lane_destroy",
+        "dispatch_thread_read",
+        "dispatch_thread_write",
+        "dispatch_thread_destroy",
         "dispatch_trigger_read",
         "dispatch_trigger_write",
         "dispatch_trigger_destroy",
@@ -31,7 +31,7 @@ def test_action_schema_and_annotations_from_op() -> None:
     projection = derive_mcp_projection(REGISTRY)
     tools = {t.name: t for t in projection.tools}
 
-    lane_write = tools["dispatch_lane_write"]
+    lane_write = tools["dispatch_thread_write"]
     assert lane_write.annotations is not None
     assert lane_write.annotations.readOnlyHint is False
     assert lane_write.annotations.destructiveHint is False
@@ -46,7 +46,7 @@ def test_action_schema_and_annotations_from_op() -> None:
         "restore",
     }
 
-    lane_read = tools["dispatch_lane_read"]
+    lane_read = tools["dispatch_thread_read"]
     assert lane_read.annotations is not None
     assert lane_read.annotations.readOnlyHint is True
     assert lane_read.annotations.idempotentHint is True
@@ -57,7 +57,7 @@ def test_action_schema_and_annotations_from_op() -> None:
         "search",
     }
 
-    lane_destroy = tools["dispatch_lane_destroy"]
+    lane_destroy = tools["dispatch_thread_destroy"]
     assert lane_destroy.annotations is not None
     assert lane_destroy.annotations.destructiveHint is True
     assert {s["properties"]["op"]["const"] for s in lane_destroy.inputSchema["oneOf"]} >= {

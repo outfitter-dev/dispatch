@@ -27,9 +27,10 @@ from .models import (
     Trigger,
     WhenAdapter,
 )
+from .refs import BASE58BTC_ALPHABET, CODEX_REF_SOURCE, codex_ref_payload, make_ref
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _utcnow() -> datetime:
@@ -39,6 +40,10 @@ def _utcnow() -> datetime:
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS lanes (
     id TEXT PRIMARY KEY,
+    ref TEXT NOT NULL UNIQUE,
+    ref_source TEXT NOT NULL,
+    ref_payload TEXT NOT NULL,
+    ref_mixer TEXT NOT NULL,
     handle TEXT NOT NULL,
     role TEXT,
     cwd TEXT,
@@ -136,12 +141,40 @@ class Registry:
             )
         await store._conn.executescript(_SCHEMA)
         if user_version < SCHEMA_VERSION:
+            await store._migrate(user_version)
             await store._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         await store._conn.commit()
         return store
 
     async def close(self) -> None:
         await self._conn.close()
+
+    async def _migrate(self, user_version: int) -> None:
+        if user_version < 3:
+            await self._ensure_ref_columns()
+            async with self._conn.execute(
+                "SELECT id FROM lanes WHERE ref IS NULL OR ref = '' ORDER BY created_at, id"
+            ) as cur:
+                rows = await cur.fetchall()
+            for row in rows:
+                thread_id = str(row["id"])
+                ref, source, payload, mixer = await self._allocate_ref_parts(thread_id)
+                await self._conn.execute(
+                    "UPDATE lanes SET ref = ?, ref_source = ?, ref_payload = ?, ref_mixer = ? "
+                    "WHERE id = ?",
+                    (ref, source, payload, mixer, thread_id),
+                )
+            await self._conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_lanes_ref ON lanes(ref)"
+            )
+
+    async def _ensure_ref_columns(self) -> None:
+        async with self._conn.execute("PRAGMA table_info(lanes)") as cur:
+            rows = await cur.fetchall()
+        columns = {str(row["name"]) for row in rows}
+        for name in ("ref", "ref_source", "ref_payload", "ref_mixer"):
+            if name not in columns:
+                await self._conn.execute(f"ALTER TABLE lanes ADD COLUMN {name} TEXT")
 
     # --- lanes ----------------------------------------------------------------
 
@@ -157,8 +190,13 @@ class Registry:
         pinned: bool = False,
     ) -> Lane:
         now = self._now()
+        ref, ref_source, ref_payload, ref_mixer = await self._allocate_ref_parts(id)
         lane = Lane(
             id=id,
+            ref=ref,
+            ref_source=ref_source,
+            ref_payload=ref_payload,
+            ref_mixer=ref_mixer,
             handle=handle,
             role=role,
             cwd=cwd,
@@ -190,8 +228,13 @@ class Registry:
         if sync.lane != id:
             raise ValueError(f"sync lane {sync.lane!r} does not match lane id {id!r}")
         now = self._now()
+        ref, ref_source, ref_payload, ref_mixer = await self._allocate_ref_parts(id)
         lane = Lane(
             id=id,
+            ref=ref,
+            ref_source=ref_source,
+            ref_payload=ref_payload,
+            ref_mixer=ref_mixer,
             handle=handle,
             role=role,
             cwd=cwd,
@@ -220,10 +263,15 @@ class Registry:
 
     async def _insert_lane(self, lane: Lane) -> None:
         await self._conn.execute(
-            "INSERT INTO lanes (id, handle, role, cwd, source, status, pinned, active_turn_id, "
-            "created_at, updated_at, last_event_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO lanes (id, ref, ref_source, ref_payload, ref_mixer, handle, role, cwd, "
+            "source, status, pinned, active_turn_id, created_at, updated_at, last_event_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 lane.id,
+                lane.ref,
+                lane.ref_source,
+                lane.ref_payload,
+                lane.ref_mixer,
                 lane.handle,
                 lane.role,
                 lane.cwd,
@@ -237,8 +285,26 @@ class Registry:
             ),
         )
 
+    async def _allocate_ref_parts(self, thread_id: str) -> tuple[str, str, str, str]:
+        source = CODEX_REF_SOURCE
+        payload = codex_ref_payload(thread_id)
+        for mixer in BASE58BTC_ALPHABET:
+            candidate = make_ref(source=source, payload=payload, mixer=mixer)
+            existing = await self.find_lane_by_ref(candidate)
+            if existing is None or existing.id == thread_id:
+                return candidate, source, payload, mixer
+        raise RuntimeError(
+            f"ref mixer alphabet exhausted for Codex thread hash payload {payload!r}; "
+            "use the full Codex thread id"
+        )
+
     async def find_lane(self, lane_id: str) -> Lane | None:
         async with self._conn.execute("SELECT * FROM lanes WHERE id = ?", (lane_id,)) as cur:
+            row = await cur.fetchone()
+        return _row_to_lane(row) if row is not None else None
+
+    async def find_lane_by_ref(self, ref: str) -> Lane | None:
+        async with self._conn.execute("SELECT * FROM lanes WHERE ref = ?", (ref,)) as cur:
             row = await cur.fetchone()
         return _row_to_lane(row) if row is not None else None
 
@@ -246,6 +312,38 @@ class Registry:
         async with self._conn.execute("SELECT * FROM lanes WHERE handle = ?", (handle,)) as cur:
             row = await cur.fetchone()
         return _row_to_lane(row) if row is not None else None
+
+    async def find_lanes_by_handle(self, handle: str) -> list[Lane]:
+        async with self._conn.execute("SELECT * FROM lanes WHERE handle = ?", (handle,)) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_lane(row) for row in rows]
+
+    async def find_lanes_by_title(self, title: str) -> list[Lane]:
+        async with self._conn.execute(
+            """
+            SELECT lanes.* FROM lanes
+            LEFT JOIN lane_snapshots snap ON snap.lane = lanes.id
+            WHERE snap.display_name = ? OR lanes.handle = ? OR ltrim(lanes.handle, '@') = ?
+            ORDER BY lanes.created_at, lanes.id
+            """,
+            (title, title, title),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_lane(row) for row in rows]
+
+    async def fuzzy_find_lanes_by_title(self, title: str) -> list[Lane]:
+        pattern = f"%{title}%"
+        async with self._conn.execute(
+            """
+            SELECT lanes.* FROM lanes
+            LEFT JOIN lane_snapshots snap ON snap.lane = lanes.id
+            WHERE snap.display_name LIKE ? OR lanes.handle LIKE ? OR ltrim(lanes.handle, '@') LIKE ?
+            ORDER BY lanes.created_at, lanes.id
+            """,
+            (pattern, pattern, pattern),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_lane(row) for row in rows]
 
     async def get_lane(self, lane_id: str) -> Lane:
         lane = await self.find_lane(lane_id)
