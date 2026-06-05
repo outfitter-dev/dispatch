@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 import typer
 from typer.testing import CliRunner
 
@@ -26,7 +27,35 @@ def test_send_positional_args_and_mode_flags_map_to_send_contract() -> None:
 
     assert result.exit_code == 0
     assert captured["op"] == "send"
-    assert captured["params"] == {"lane": "@docs", "text": "hi", "mode": "interject"}
+    assert captured["params"] == {
+        "lane": "@docs",
+        "text": "hi",
+        "mode": "interject",
+        "intro": False,
+    }
+
+
+def test_send_intro_flag_maps_to_send_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setenv("CODEX_THREAD_ID", "sender-thread")
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        captured["op"] = op_id
+        captured["params"] = params
+        return {"lane": "L1", "op": "send", "accepted": True}
+
+    app = derive_cli(REGISTRY, invoke)
+    result = runner.invoke(app, ["send", "@docs", "hi", "--intro"])
+
+    assert result.exit_code == 0
+    assert captured["op"] == "send"
+    assert captured["params"] == {
+        "lane": "@docs",
+        "text": "hi",
+        "mode": "send",
+        "intro": True,
+        "caller_thread_id": "sender-thread",
+    }
 
 
 def test_send_rejects_multiple_modes() -> None:
@@ -279,6 +308,7 @@ def test_schema_command_prints_derived_schema_without_daemon() -> None:
     assert result.exit_code == 0
     assert '"op": "send"' in result.output
     assert '"mode"' in result.output
+    assert "caller_thread_id" not in result.output
     assert "reserved for durable queued delivery" not in result.output
 
 

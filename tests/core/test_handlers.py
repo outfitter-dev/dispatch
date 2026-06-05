@@ -186,6 +186,70 @@ async def test_send_modes_context_and_interject(store: Registry) -> None:
     assert (await store.get_lane("lane-1")).status == "busy"
 
 
+async def test_send_intro_prepends_managed_sender_from_codex_thread_id(
+    store: Registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="target"), ctx)
+    client.next_thread_id = "lane-2"
+    sender = await handlers.open_lane(OpenInput(name="Dispatch"), ctx)
+    monkeypatch.setenv("CODEX_THREAD_ID", sender.id)
+
+    ack = await handlers.send_message(SendInput(lane="@target", text="hello", intro=True), ctx)
+
+    assert ack.lane == "lane-1"
+    sent = next(kw["text"] for name, kw in client.calls if name == "turn_start")
+    assert sent == (
+        f'[dispatch] From @Dispatch ({sender.ref}). Use `dispatch send {sender.ref} "..."` '
+        "to reply.\n\nhello"
+    )
+
+
+async def test_send_intro_requires_codex_thread_id(
+    store: Registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = make_ctx(store, FakeLaneClient())
+    await handlers.open_lane(OpenInput(name="target"), ctx)
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+
+    with pytest.raises(ValidationError, match="CODEX_THREAD_ID"):
+        await handlers.send_message(SendInput(lane="@target", text="hello", intro=True), ctx)
+
+
+async def test_send_intro_requires_managed_sender(
+    store: Registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = make_ctx(store, FakeLaneClient())
+    await handlers.open_lane(OpenInput(name="target"), ctx)
+    monkeypatch.setenv("CODEX_THREAD_ID", "unknown-thread")
+
+    with pytest.raises(ValidationError, match="managed by dispatch"):
+        await handlers.send_message(SendInput(lane="@target", text="hello", intro=True), ctx)
+
+
+async def test_send_intro_applies_to_queued_delivery(
+    store: Registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="target"), ctx)
+    await store.update_lane_status("lane-1", "busy")
+    client.next_thread_id = "lane-2"
+    sender = await handlers.open_lane(OpenInput(name="Dispatch"), ctx)
+    monkeypatch.setenv("CODEX_THREAD_ID", sender.id)
+
+    ack = await handlers.send_message(
+        SendInput(lane="@target", text="later", mode="queue", intro=True), ctx
+    )
+
+    assert ack.op == "queue"
+    queued = await store.next_pending_message("lane-1")
+    assert queued is not None
+    assert queued.text.startswith(f"[dispatch] From @Dispatch ({sender.ref}).")
+    assert queued.text.endswith("\n\nlater")
+
+
 async def test_send_queue_persists_when_lane_is_busy(store: Registry) -> None:
     client = FakeLaneClient()
     ctx = make_ctx(store, client)

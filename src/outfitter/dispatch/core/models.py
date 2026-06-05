@@ -92,6 +92,15 @@ class SendInput(LaneTextInput):
             "model-visible context."
         ),
     )
+    intro: bool = Field(
+        default=False,
+        description="Prepend a dispatch reply hint derived from the current CODEX_THREAD_ID.",
+    )
+    caller_thread_id: str | None = Field(
+        default=None,
+        exclude=True,
+        json_schema_extra={"x-dispatch-internal": True},
+    )
 
 
 class LaneInput(BaseModel):

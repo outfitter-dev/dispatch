@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import shlex
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ import typer
 
 from .op import Op
 from .registry import OpRegistry
+from .schema import is_internal_field, public_schema
 
 Invoker = Callable[[str, dict[str, object]], dict[str, object]]
 Renderer = Callable[[Op, dict[str, object]], None]
@@ -141,6 +143,8 @@ def _parameters(op: Op, *, positionals: tuple[str, ...] = ()) -> list[inspect.Pa
     parameters: list[inspect.Parameter] = []
     positional_set = set(positionals)
     for name, field in op.input.model_fields.items():
+        if is_internal_field(field):
+            continue
         help_text = field.description or ""
         kind: inspect._ParameterKind
         if name in positional_set:
@@ -181,6 +185,10 @@ def _send_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., No
         context: Annotated[
             bool, typer.Option("--context", help="Inject context without waking.")
         ] = False,
+        intro: Annotated[
+            bool,
+            typer.Option("--intro", help="Prepend dispatch sender intro from CODEX_THREAD_ID."),
+        ] = False,
         json: Annotated[
             bool, typer.Option("--json", help="Render machine-readable JSON output.")
         ] = False,
@@ -191,7 +199,13 @@ def _send_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., No
         if len(chosen) > 1 or (chosen and mode != "send"):
             typer.secho("dispatch: choose exactly one send mode", fg="red", err=True)
             raise typer.Exit(code=2)
-        result = invoke(op.id, {"lane": lane, "text": text, "mode": chosen[0] if chosen else mode})
+        params = {"lane": lane, "text": text, "mode": chosen[0] if chosen else mode, "intro": intro}
+        if intro:
+            params["caller_thread_id"] = os.environ.get("CODEX_THREAD_ID")
+        result = invoke(
+            op.id,
+            params,
+        )
         render(op, result)
         _ignore_json(json)
 
@@ -414,7 +428,7 @@ def _schema_command(registry: OpRegistry) -> Callable[..., None]:
             data={
                 "command": command,
                 "op": op.id,
-                "input": op.input.model_json_schema(),
+                "input": public_schema(op.input.model_json_schema()),
                 "output": op.output.model_json_schema(),
             }
         )
