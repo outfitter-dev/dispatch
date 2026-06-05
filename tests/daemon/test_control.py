@@ -57,7 +57,7 @@ async def test_open_send_show_roster_archive_via_daemon(socket_path: Path) -> No
     lanes = _result(roster)["lanes"]
     assert isinstance(lanes, list) and len(lanes) == 1
 
-    archived = await _call(socket_path, "archive", {"lane": "lane-1"})
+    archived = await _call(socket_path, "archive", {"target": "lane-1"})
     assert _result(archived)["status"] == "archived"
 
 

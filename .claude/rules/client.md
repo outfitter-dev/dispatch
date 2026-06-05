@@ -14,11 +14,12 @@ Demux the single stream: responses by request `id`, notifications by `threadId`,
 
 ## Primitives (typed; Pydantic wire models)
 
-`initialize` → `thread_start/resume/list/read/archive` → `turn_start/steer/interrupt` → `inject_items` → approval responder. Verified gotchas to encode:
+`initialize` → `thread_start/resume/list/read/archive/unarchive/name-set/search` → `turn_start/steer/interrupt` → `inject_items` → approval responder. Verified gotchas to encode:
 
 - `thread/start.sandbox` is a **string** enum (`read-only`/`workspace-write`/`danger-full-access`); `turn/start.sandboxPolicy` is an **object** (`{type:"readOnly", ...}`). Different encodings — model both.
 - `turn/steer` requires `expectedTurnId` (from `turn/started`).
 - `thread/list` results are under `result.data` (not `result.threads`); `useStateDbOnly:true` reads the persisted store.
+- `thread/search` is experimental; enable the experimental API capability before using it and keep the wrapper thin.
 - `thread/resume` of a *persisted* thread yields live event fan-out; pre-persistence it errors `no rollout found`.
 - Approvals are server→client requests: lane emits `thread/status/changed` `activeFlags:["waitingOnApproval"]`; reply `{id, result:{decision}}` (`accept`/`acceptForSession`/`decline`/`cancel`); server emits `serverRequest/resolved`. File-change approvals carry **no diff** — correlate by `itemId` to the `fileChange` item.
 - Threads persist by default (`ephemeral:false`). Pass `ephemeral:true` for throwaway/test lanes.

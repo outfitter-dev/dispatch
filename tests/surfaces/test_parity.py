@@ -36,6 +36,10 @@ _EXPECTED_CLI_SCHEMA_ROUTES = {
     "send": "send",
     "stop": "stop",
     "new": "new",
+    "search": "search",
+    "rename": "lane-rename",
+    "archive": "archive",
+    "restore": "restore",
     "lane get": "show",
     "lane status": "show",
     "lane list": "roster",
@@ -43,10 +47,12 @@ _EXPECTED_CLI_SCHEMA_ROUTES = {
     "lane attach": "attach",
     "lane sync": "sync",
     "lane rename": "lane-rename",
+    "lane search": "search",
     "lane fork": "fork",
     "lane rollback": "rollback",
     "lane compact": "compact",
     "lane archive": "archive",
+    "lane restore": "restore",
     "lane tail": "transcript",
     "lane tail --follow": "watch",
     "goal status": "goal-get",
@@ -110,6 +116,14 @@ def test_cli_composed_routes_invoke_canonical_ops() -> None:
             return {"lane": "L1", "op": "stop", "accepted": True}
         if op_id == "send":
             return {"lane": "L1", "op": "send", "accepted": True}
+        if op_id == "search":
+            return {
+                "query": "needle",
+                "matches": [],
+                "scanned": 0,
+                "next_cursor": None,
+                "experimental": True,
+            }
         if op_id == "goal-get":
             return {"lane": "L1", "goal": None}
         return {}
@@ -120,6 +134,7 @@ def test_cli_composed_routes_invoke_canonical_ops() -> None:
     assert runner.invoke(app, ["stop", "@docs"]).exit_code == 0
     assert runner.invoke(app, ["lane", "list", "--unmanaged"]).exit_code == 0
     assert runner.invoke(app, ["lane", "sync", "@docs"]).exit_code == 0
+    assert runner.invoke(app, ["search", "needle", "--managed"]).exit_code == 0
     assert runner.invoke(app, ["goal", "status", "@docs"]).exit_code == 0
 
     assert calls == [
@@ -127,6 +142,25 @@ def test_cli_composed_routes_invoke_canonical_ops() -> None:
         ("stop", {"lane": "@docs"}),
         ("discover", {"limit": 50}),
         ("sync", {"lane": "@docs", "full": False}),
+        (
+            "search",
+            {
+                "query": "needle",
+                "lane": None,
+                "directory": None,
+                "repo": None,
+                "managed": True,
+                "unmanaged": False,
+                "archived": False,
+                "since": None,
+                "until": None,
+                "date_field": "updated_at",
+                "sort": "updated_at",
+                "ascending": False,
+                "limit": 20,
+                "max_scan": 200,
+            },
+        ),
         ("goal-get", {"lane": "@docs"}),
     ]
 

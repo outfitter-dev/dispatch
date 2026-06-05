@@ -27,6 +27,20 @@ Effort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
 ReasoningSummary = Literal["auto", "concise", "detailed", "none"]
 Personality = Literal["none", "friendly", "pragmatic"]
 Decision = Literal["accept", "acceptForSession", "decline", "cancel"]
+SortDirection = Literal["asc", "desc"]
+ThreadSortKey = Literal["created_at", "updated_at"]
+ThreadSourceKind = Literal[
+    "cli",
+    "vscode",
+    "exec",
+    "appServer",
+    "subAgent",
+    "subAgentReview",
+    "subAgentCompact",
+    "subAgentThreadSpawn",
+    "subAgentOther",
+    "unknown",
+]
 ThreadGoalStatus = Literal[
     "active", "paused", "blocked", "usageLimited", "budgetLimited", "complete"
 ]
@@ -100,6 +114,7 @@ class ThreadInfo(WireModel):
     source: str | None = None
     thread_source: str | None = None
     model_provider: str | None = None
+    created_at: int | None = None
     updated_at: int | None = None
     turns: list[dict[str, object]] = Field(default_factory=list)
 
@@ -163,6 +178,16 @@ class ThreadUnarchiveParams(WireModel):
     thread_id: str
 
 
+class ThreadSearchParams(WireModel):
+    search_term: str
+    archived: bool | None = None
+    cursor: str | None = None
+    limit: int | None = None
+    sort_direction: SortDirection | None = None
+    sort_key: ThreadSortKey | None = None
+    source_kinds: list[ThreadSourceKind] | None = None
+
+
 class ThreadRollbackParams(WireModel):
     thread_id: str
     num_turns: int
@@ -209,6 +234,17 @@ class ThreadListResult(WireModel):
 
     data: list[ThreadInfo] = []
     next_cursor: str | None = None
+
+
+class ThreadSearchMatch(WireModel):
+    snippet: str
+    thread: ThreadInfo
+
+
+class ThreadSearchResult(WireModel):
+    data: list[ThreadSearchMatch] = []
+    next_cursor: str | None = None
+    backwards_cursor: str | None = None
 
 
 class ThreadGoalResult(WireModel):

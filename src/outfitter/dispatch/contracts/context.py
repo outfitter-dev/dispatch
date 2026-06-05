@@ -29,10 +29,14 @@ from outfitter.dispatch.client.models import (
     Personality,
     ReasoningSummary,
     SandboxPolicy,
+    SortDirection,
     ThreadGoal,
     ThreadGoalStatus,
     ThreadInfo,
     ThreadSandbox,
+    ThreadSearchResult,
+    ThreadSortKey,
+    ThreadSourceKind,
 )
 
 if TYPE_CHECKING:
@@ -85,7 +89,21 @@ class LaneClient(Protocol):
 
     async def thread_archive(self, thread_id: str) -> None: ...
 
+    async def thread_unarchive(self, thread_id: str) -> ThreadInfo: ...
+
     async def thread_set_name(self, thread_id: str, name: str) -> None: ...
+
+    async def thread_search(
+        self,
+        search_term: str,
+        *,
+        archived: bool | None = None,
+        cursor: str | None = None,
+        limit: int | None = None,
+        sort_direction: SortDirection | None = None,
+        sort_key: ThreadSortKey | None = None,
+        source_kinds: list[ThreadSourceKind] | None = None,
+    ) -> ThreadSearchResult: ...
 
     async def thread_rollback(self, thread_id: str, num_turns: int) -> ThreadInfo: ...
 

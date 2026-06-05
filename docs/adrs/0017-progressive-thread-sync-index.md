@@ -32,7 +32,7 @@ Attach is metadata-only by default:
 
 - `dispatch lane attach <thread-id>` verifies the id with
   `thread/read(includeTurns:false)`.
-- It registers an observe-only attached lane and stores metadata sync state.
+- It registers a turn-write locked attached lane and stores metadata sync state.
 - It does not call `thread/resume`, load turn history, or grant write authority.
 
 Progressive sync is explicit:

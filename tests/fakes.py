@@ -21,10 +21,15 @@ from outfitter.dispatch.client.models import (
     Personality,
     ReasoningSummary,
     SandboxPolicy,
+    SortDirection,
     ThreadGoal,
     ThreadGoalStatus,
     ThreadInfo,
     ThreadSandbox,
+    ThreadSearchMatch,
+    ThreadSearchResult,
+    ThreadSortKey,
+    ThreadSourceKind,
 )
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.registry.store import Registry
@@ -44,6 +49,7 @@ class FakeLaneClient:
         self.threads: dict[str, ThreadInfo] = {}
         self.list_result: list[ThreadInfo] = []
         self.read_result: dict[str, object] = {}
+        self.search_result = ThreadSearchResult()
         self.goal_result: ThreadGoal | None = None
         self.event_log: list[LaneEvent] = []
         self.raw_log: list[dict[str, object]] = []
@@ -136,8 +142,44 @@ class FakeLaneClient:
     async def thread_archive(self, thread_id: str) -> None:
         self._record("thread_archive", thread_id=thread_id)
 
+    async def thread_unarchive(self, thread_id: str) -> ThreadInfo:
+        self._record("thread_unarchive", thread_id=thread_id)
+        return self.threads.get(thread_id, ThreadInfo(id=thread_id))
+
     async def thread_set_name(self, thread_id: str, name: str) -> None:
         self._record("thread_set_name", thread_id=thread_id, display_name=name)
+
+    async def thread_search(
+        self,
+        search_term: str,
+        *,
+        archived: bool | None = None,
+        cursor: str | None = None,
+        limit: int | None = None,
+        sort_direction: SortDirection | None = None,
+        sort_key: ThreadSortKey | None = None,
+        source_kinds: list[ThreadSourceKind] | None = None,
+    ) -> ThreadSearchResult:
+        self._record(
+            "thread_search",
+            search_term=search_term,
+            archived=archived,
+            cursor=cursor,
+            limit=limit,
+            sort_direction=sort_direction,
+            sort_key=sort_key,
+            source_kinds=source_kinds,
+        )
+        if limit is None:
+            return self.search_result
+        return ThreadSearchResult(
+            data=[
+                ThreadSearchMatch(snippet=match.snippet, thread=match.thread)
+                for match in self.search_result.data[:limit]
+            ],
+            next_cursor=self.search_result.next_cursor,
+            backwards_cursor=self.search_result.backwards_cursor,
+        )
 
     async def thread_rollback(self, thread_id: str, num_turns: int) -> ThreadInfo:
         self._record("thread_rollback", thread_id=thread_id, num_turns=num_turns)

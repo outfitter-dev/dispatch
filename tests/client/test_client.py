@@ -75,6 +75,45 @@ async def test_thread_set_name_sends_verified_method(
     }
 
 
+async def test_thread_unarchive_sends_verified_method(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+    fake.auto = _result_for("thread/unarchive", {"thread": {"id": "L1"}})
+    thread = await c.thread_unarchive("L1")
+    assert thread.id == "L1"
+    assert fake.sent[-1] == {
+        "id": 1,
+        "method": "thread/unarchive",
+        "params": {"threadId": "L1"},
+    }
+
+
+async def test_thread_search_sends_experimental_query_shape(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+    fake.auto = _result_for(
+        "thread/search",
+        {"data": [{"snippet": "hello", "thread": {"id": "L1", "cwd": "/repo"}}]},
+    )
+    result = await c.thread_search(
+        "hello", archived=True, limit=10, sort_direction="asc", sort_key="updated_at"
+    )
+    assert result.data[0].thread.id == "L1"
+    assert fake.sent[-1] == {
+        "id": 1,
+        "method": "thread/search",
+        "params": {
+            "searchTerm": "hello",
+            "archived": True,
+            "limit": 10,
+            "sortDirection": "asc",
+            "sortKey": "updated_at",
+        },
+    }
+
+
 async def test_thread_read_can_include_turns(
     client: tuple[AppServerClient, FakeTransport],
 ) -> None:

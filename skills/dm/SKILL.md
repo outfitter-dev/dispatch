@@ -29,12 +29,12 @@ If the environment is new, run `uv run dispatch doctor` once before messaging.
 Fix PATH, Codex auth, stale daemon files, registry, or plugin asset warnings
 before assuming a DM failure is about the target lane.
 
-The target should be an owned dispatch lane. Attached lanes are observe-only in
-v0, so dispatch will reject write verbs against them.
+The target should be an owned dispatch lane. Attached lanes are not
+turn-writable in v0, so dispatch will reject DM/send verbs against them.
 
-If the user wants to message an existing desktop Codex thread, attach it only
-for observation unless they explicitly choose a different authority model after
-reading ADR-0005.
+If the user wants to message an existing desktop Codex thread, attach/sync it
+only for observation unless they explicitly choose a different authority model
+after reading ADR-0005.
 
 ## Handles And URIs
 
