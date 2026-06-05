@@ -99,6 +99,32 @@ def build_cli(socket_path: Path | None = None) -> typer.Typer:
 
         run_mcp(path)
 
+    @app.command(name="doctor", help="Diagnose install, daemon, registry, and app-server health.")
+    def _doctor(
+        json_output: Annotated[
+            bool, typer.Option("--json/--text", help="Render machine-readable JSON output.")
+        ] = True,
+        app_server: Annotated[
+            bool,
+            typer.Option(
+                "--app-server/--no-app-server",
+                help="Run a low-risk codex app-server initialize smoke.",
+            ),
+        ] = True,
+        timeout: Annotated[
+            float, typer.Option(help="Seconds to wait for app-server startup/initialize.")
+        ] = 10.0,
+    ) -> None:
+        from outfitter.dispatch.doctor import DoctorOptions, render_text, run_doctor
+
+        report = run_doctor(DoctorOptions(app_server=app_server, timeout=timeout))
+        if json_output:
+            typer.echo(report.model_dump_json(indent=2))
+        else:
+            typer.echo(render_text(report))
+        if report.status == "fail":
+            raise typer.Exit(code=8)
+
     # `up`/`down` manage the daemon PROCESS (not ops, which run inside it).
     @app.command(name="up", help="Start the daemon (detached singleton).")
     def _up() -> None:

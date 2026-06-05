@@ -28,6 +28,7 @@ from .models import (
 )
 
 Clock = Callable[[], datetime]
+SCHEMA_VERSION = 1
 
 
 def _utcnow() -> datetime:
@@ -92,7 +93,18 @@ class Registry:
         conn = await aiosqlite.connect(path)
         conn.row_factory = aiosqlite.Row
         store = cls(conn, now)
+        async with store._conn.execute("PRAGMA user_version") as cur:
+            row = await cur.fetchone()
+        user_version = int(row[0]) if row is not None else 0
+        if user_version > SCHEMA_VERSION:
+            await store._conn.close()
+            raise RuntimeError(
+                f"registry schema version {user_version} is newer than supported "
+                f"version {SCHEMA_VERSION}"
+            )
         await store._conn.executescript(_SCHEMA)
+        if user_version == 0:
+            await store._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         await store._conn.commit()
         return store
 

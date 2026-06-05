@@ -11,6 +11,7 @@ Install the CLI from PyPI:
 uv tool install outfitter-dispatch
 dispatch --help
 dispatchd --help
+dispatch doctor
 ```
 
 From a source checkout:
@@ -18,6 +19,7 @@ From a source checkout:
 ```bash
 uv sync
 uv run dispatch --help
+uv run dispatch doctor --no-app-server
 uv run dispatch up
 uv run dispatch daemon status
 ```
@@ -42,6 +44,10 @@ ADR-0005.
 
 For the operator guide, CLI/MCP examples, triggers, and plugin setup, start at
 [`docs/usage/README.md`](docs/usage/README.md).
+
+Start troubleshooting with `dispatch doctor`. It checks PATH visibility, the Codex CLI
+and auth footprint, daemon socket/pidfile state, registry schema/integrity, packaged
+skills/plugin assets, and a low-risk Codex App Server initialize smoke.
 
 ## Agent And Plugin Support
 

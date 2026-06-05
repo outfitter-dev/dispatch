@@ -6,6 +6,8 @@ check:
     uv run ruff format --check .
     uv run mypy src tests
     uv run pytest
+    uv build
+    uv run python scripts/check_package_contents.py
 
 # Run the test suite (unit only; integration is deselected by default).
 test *args:
