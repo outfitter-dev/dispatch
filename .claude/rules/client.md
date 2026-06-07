@@ -19,6 +19,7 @@ Demux the single stream: responses by request `id`, notifications by `threadId`,
 - `thread/start.sandbox` is a **string** enum (`read-only`/`workspace-write`/`danger-full-access`); `turn/start.sandboxPolicy` is an **object** (`{type:"readOnly", ...}`). Different encodings — model both.
 - `turn/steer` requires `expectedTurnId` (from `turn/started`).
 - `thread/list` results are under `result.data` (not `result.threads`); `useStateDbOnly:true` reads the persisted store.
+- Current `thread/list` supports native `archived`, `cwd`, `searchTerm`, `sourceKinds`, and sort filters; use them when they match dispatch semantics, then keep registry/authority filters in core.
 - `thread/search` is experimental; enable the experimental API capability before using it and keep the wrapper thin.
 - `thread/resume` of a *persisted* thread yields live event fan-out; pre-persistence it errors `no rollout found`.
 - Approvals are server→client requests: lane emits `thread/status/changed` `activeFlags:["waitingOnApproval"]`; reply `{id, result:{decision}}` (`accept`/`acceptForSession`/`decline`/`cancel`); server emits `serverRequest/resolved`. File-change approvals carry **no diff** — correlate by `itemId` to the `fileChange` item.
@@ -26,5 +27,5 @@ Demux the single stream: responses by request `id`, notifications by `threadId`,
 
 ## Discipline
 
-- Pin the binary; regenerate wire models from `codex app-server generate-json-schema` for that version. Do NOT depend on the `openai-codex` Python SDK (it pins an older CLI).
+- Pin/record the binary; regenerate wire models from `codex app-server generate-json-schema` for that version. Do not assume the `openai-codex` Python SDK matches the installed CLI; it has lagged before.
 - No business logic here — this layer is transport + typed primitives only. Orchestration lives in `core/`.

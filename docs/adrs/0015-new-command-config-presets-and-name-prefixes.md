@@ -4,7 +4,7 @@ slug: new-command-config-presets-and-name-prefixes
 title: New Command, Config Presets, and Name Prefixes
 status: proposed
 created: 2026-06-03
-updated: 2026-06-03
+updated: 2026-06-09
 owners: ['[galligan](https://github.com/galligan)']
 ---
 
@@ -43,7 +43,6 @@ Configuration has defaults plus named presets:
 cwd = "."
 sandbox = "read-only"
 approval_policy = "never"
-model = "gpt-5-codex"
 effort = "medium"
 ephemeral = false
 prefix = "[${DISPATCH.CWD.REPO}]"
@@ -67,6 +66,11 @@ prefix = "[${DISPATCH.CWD.REPO}]"
 [presets.fast]
 effort = "low"
 ```
+
+Omit `model` unless you intentionally want Codex to use an explicit model.
+When a preset does pin a model, choose it from the live App Server catalog
+(`dispatch model list` once that surface exists) rather than from docs or stale
+examples.
 
 Merge order:
 
@@ -108,7 +112,7 @@ Do not expose arbitrary environment interpolation in v1; it is too easy to leak 
 dispatch should project App Server/SDK options where they are available and verified, but not invent fake knobs. Initial candidates:
 
 - thread/session: `cwd`, `sandbox`, `approval_policy`, `approvals_reviewer`, `model`, `model_provider`, `base_instructions`, `developer_instructions`, `personality`, `ephemeral`, `service_tier`.
-- initial turn: `text`, `effort`, `summary`, `sandbox_policy`, `approval_policy`, `approvals_reviewer`, `model`, `output_schema`.
+- initial turn: `text`, `effort`, `summary`, `sandbox_policy`, `approval_policy`, `approvals_reviewer`, `model`, `service_tier`, `output_schema`.
 
 Options should be added through the contract layer so CLI, MCP, remote, docs, schemas, and examples derive from one source.
 

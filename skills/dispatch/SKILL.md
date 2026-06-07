@@ -27,6 +27,7 @@ The current canonical operator grammar is:
 - health: `doctor`
 - daemon process: `up`, `down`
 - daemon reads: `daemon status`, `daemon log`
+- registry recovery: `registry migrate`
 - thread lifecycle/read/search: `new`, `attach`, `list`, `list --unmanaged`,
   `get`, `sync`, `tail`, `watch`, `search`
 - thread actions: `rename`, `archive`, `restore`
@@ -43,7 +44,7 @@ machine-output contract to be explicit.
 
 ```bash
 uv run dispatch doctor --no-app-server
-uv run dispatch up
+uv run dispatch up --json
 uv run dispatch daemon status
 uv run dispatch daemon log --limit 10
 ```
@@ -53,6 +54,9 @@ untrusted environment. It checks PATH visibility, Codex CLI/auth footprint,
 daemon socket/pidfile state, registry schema/integrity, packaged skills/plugin
 assets, and a low-risk Codex App Server initialize smoke. Use `--no-app-server`
 when you only need local install/runtime diagnostics.
+
+If doctor reports an old registry schema, run `uv run dispatch down`, then
+`uv run dispatch registry migrate`, then `uv run dispatch up --json`.
 
 Stop only when it is clearly your daemon/session to stop:
 
@@ -77,8 +81,17 @@ prefixes, and can send an initial turn:
 
 ```bash
 uv run dispatch new --name my-lane --cwd /path/to/project --text "Do the bounded thing."
+uv run dispatch new --name my-lane --goal "Loop until green." --text "Start with tests."
 uv run dispatch new --name my-lane --preset reviewer --no-send
 ```
+
+Use `--goal` for a native App Server goal before the initial turn. Do not put
+`/goal ...` in `--text`; dispatch treats slash commands as plain text and rejects
+that shape so agents do not create a thread that only looks goal-driven.
+
+`new` returns `message_accepted`, not proof of assistant completion. After launch,
+use `get` to check `latest_turn`, `tail` for persisted history, or `watch` for a
+bounded live sample.
 
 Attached lanes are existing desktop Codex threads registered by raw thread id:
 
@@ -115,8 +128,8 @@ lanes.
 
 `list` shows threads dispatch already manages. `list --unmanaged` lists
 persisted Codex sessions that are not registered in dispatch. It uses App Server
-`thread/list` in state-db-only mode. It is read-only and does not resume or
-register anything:
+`thread/list` in state-db-only mode, asking for active sessions sorted by recent
+updates. It is read-only and does not resume or register anything:
 
 ```bash
 uv run dispatch list
@@ -182,6 +195,13 @@ Use `stop` to cancel the active turn without replacement text:
 uv run dispatch stop <dispatch-ref>
 ```
 
+Destroy-intent commands prompt by default. In scripts, use explicit confirmation:
+
+```bash
+uv run dispatch archive <dispatch-ref> --yes --json
+uv run dispatch trigger rm <trigger-id> --yes --json
+```
+
 For short inter-lane chat, use the companion `$dm` skill, which is backed by
 `dispatch send`.
 
@@ -192,6 +212,10 @@ Use `get` for compact managed-thread metadata:
 ```bash
 uv run dispatch get <dispatch-ref>
 ```
+
+Check `latest_turn` when a message was accepted but no assistant work is visible.
+It records the latest observed turn id, status, and App Server error text/time for
+failed turns.
 
 Use `tail` for persisted turn history:
 
@@ -264,8 +288,12 @@ Use `schema` for derived input/output schemas:
 
 ```bash
 uv run dispatch schema send
+uv run dispatch schema "list --unmanaged"
 uv run dispatch schema "goal set"
 ```
+
+Prefer `schema` for `jq`/automation field discovery. It is derived from the same
+op registry as CLI and MCP, including composed spellings like `list --unmanaged`.
 
 ## MCP And Plugin
 
@@ -290,6 +318,8 @@ plugin bundle under `outfitter.dispatch.assets`; use the repo copies for editing
 - Do not install launchd autostart unless the user explicitly asks.
 - Start troubleshooting with `dispatch doctor`; use its recovery hints rather
   than guessing about stale sockets, PATH, auth, or registry shape.
+- If doctor reports an old registry, stop the daemon and run
+  `dispatch registry migrate` before starting it again.
 - Do not describe `tail --follow` as canonical or streaming forever. Use `watch`
   for bounded live samples until dispatch grows a subscription-capable control socket.
 - Do not treat `rollback` as file undo.

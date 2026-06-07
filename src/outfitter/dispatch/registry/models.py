@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, TypeAdapter
 
 LaneSource = Literal["own", "attached"]
 LaneStatus = Literal["idle", "busy", "waiting_approval", "archived", "error", "unknown"]
+TurnRuntimeStatus = Literal["started", "completed", "failed"]
 SyncState = Literal["unknown", "metadata", "partial", "complete", "error"]
 QueuedMessageStatus = Literal["pending", "sending", "sent", "error"]
 
@@ -28,6 +29,10 @@ class Lane(BaseModel):
     status: LaneStatus = "unknown"
     pinned: bool = False
     active_turn_id: str | None = None  # set by the reactor (Phase 3); needed to steer/interrupt
+    latest_turn_id: str | None = None
+    latest_turn_status: TurnRuntimeStatus | None = None
+    latest_error: str | None = None
+    latest_error_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     last_event_at: datetime | None = None

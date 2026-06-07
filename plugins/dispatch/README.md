@@ -10,14 +10,17 @@ This workspace-local plugin exposes:
 The MCP server and skills expose the same derived operation registry as the CLI,
 including managed-thread creation/messaging, dispatch refs, persisted `tail`,
 bounded live `watch`, native goals, triggers, schemas, and daemon status/log reads.
+`new --goal` creates native App Server goal state; `/goal ...` in message text is
+plain text and should not be used as a goal substitute.
 
 Run `dispatch doctor` after installing or upgrading dispatch. It verifies the CLI
 entrypoints, Codex CLI/auth footprint, daemon socket/pidfile state, registry
 schema/integrity, packaged skills/plugin assets, and a low-risk App Server
 initialize smoke. Use `dispatch doctor --no-app-server` when you only want local
-install checks.
+install checks. If doctor reports an old registry schema, run `dispatch down`,
+`dispatch registry migrate`, then `dispatch up`.
 
-Run `dispatch up` before MCP tool calls that need the daemon. `dispatch mcp`
+Run `dispatch up --json` before MCP tool calls that need the daemon. `dispatch mcp`
 serves the derived tools over stdio; the daemon remains the executor.
 
 `skills` is a symlink to the repo-root [`../../skills`](../../skills) tree so the plugin

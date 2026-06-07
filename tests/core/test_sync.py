@@ -39,7 +39,7 @@ def test_quick_scan_reads_bounded_top_and_tail_without_partial_line(tmp_path: Pa
             {
                 "type": "turn_context",
                 "timestamp": "2026-06-05T10:00:01.000Z",
-                "payload": {"cwd": "/work", "model": "gpt-5-codex", "effort": "low"},
+                "payload": {"cwd": "/work", "model": "test-model", "effort": "low"},
             },
             {
                 "type": "event_msg",
@@ -71,7 +71,7 @@ def test_quick_scan_reads_bounded_top_and_tail_without_partial_line(tmp_path: Pa
     assert facts.source_kind == "vscode"
     assert facts.thread_source == "user"
     assert facts.model_provider == "openai"
-    assert facts.model == "gpt-5-codex"
+    assert facts.model == "test-model"
     assert facts.reasoning_effort == "low"
     assert facts.latest_turn_id == "turn-1"
     assert facts.latest_event_at == "2026-06-05T10:00:03.000Z"

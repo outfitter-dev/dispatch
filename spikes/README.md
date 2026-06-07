@@ -1,6 +1,6 @@
 # spikes
 
-Exploratory scripts that probed the Codex App Server (`codex-cli 0.136.0-alpha.2`) to verify the primitives `dispatch` is built on. They are **reference + the seed of the integration suite** — Phase 1 of `PLAN.md` promotes them into `tests/` against a real ephemeral app-server. Preserved here from a verification session (they previously lived in `/tmp`).
+Exploratory scripts that probed the Codex App Server (`codex-cli 0.136.0-alpha.2`) to verify the primitives `dispatch` is built on. They are **reference + the seed of the integration suite** — Phase 1 of `PLAN.md` promotes them into `tests/` against a real ephemeral app-server. Preserved here from a verification session (they previously lived in `/tmp`). Schema counts below were refreshed against `codex-cli 0.137.0-alpha.4`.
 
 Run ad hoc with: `python3 spikes/<file>.py` (drives a real `codex app-server`; uses your `~/.codex` unless edited — prefer an isolated `CODEX_HOME` when re-running).
 
@@ -15,8 +15,8 @@ Run ad hoc with: `python3 spikes/<file>.py` (drives a real `codex app-server`; u
 ## Regenerate the protocol schema (per binary)
 
 ```bash
-codex app-server generate-json-schema --out <dir>                # stable (217 v2 types)
-codex app-server generate-json-schema --experimental --out <dir> # + gated (261)
+codex app-server generate-json-schema --out <dir>                # stable (256 files)
+codex app-server generate-json-schema --experimental --out <dir> # + gated (312 files)
 ```
 
 Full written findings: see the research notes referenced in `.agents/plans/v0/REFS.md`.

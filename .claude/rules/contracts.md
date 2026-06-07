@@ -20,6 +20,11 @@ compose ops (for example `list --unmanaged` → `discover`, `goal status` →
 derived from the registry; never hand-implement the same behavior separately in a
 surface.
 
+If the CLI needs custom shell grammar, declare it in the CLI projection manifest
+(`CliRoute`, `cli_public_routes`, and when needed `cli_schema_routes`). Do not add
+or special-case a command path without a parity test proving the path reaches the
+canonical op and that `dispatch schema <command>` reports the canonical op schema.
+
 ## Derivation (never hand-write a surface per op)
 
 Surfaces are pure projections of the registry, mirroring Trails' `derive* → create* → surface`:
@@ -44,6 +49,9 @@ One `DispatchError` hierarchy in `errors.py` (e.g. `NotFoundError`, `LaneBusyErr
 - Adding capability = adding an op, registering it, and ensuring the derived
   projections route it intentionally. If a route is missing, the parity tests
   should fail.
+- If a route is intentionally a surface control rather than an op (`doctor`,
+  `up`, `down`, `registry migrate`, `schema`, `mcp`), document why and keep it out
+  of per-op business logic.
 - Every op exposed on MCP/remote must define `output`.
 - Keep handlers pure-ish: input in, output out (or raise). Side effects go through injected dependencies (the App Server client, the registry) passed via `ctx`, never imported ad hoc.
 - A parity test must stay green — and it checks **behavior/reachability, not

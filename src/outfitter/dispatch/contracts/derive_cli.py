@@ -35,7 +35,16 @@ class CliRoute:
     positionals: tuple[str, ...] = ()
 
 
-_ROUTES: tuple[CliRoute, ...] = (
+_CUSTOM_ROUTES: tuple[CliRoute, ...] = (
+    CliRoute(("send",), "send", ("lane", "text")),
+    CliRoute(("stop",), "stop", ("lane",)),
+    CliRoute(("search",), "search", ("query",)),
+    CliRoute(("list",), "roster"),
+    CliRoute(("trigger", "list"), "trigger-list"),
+    CliRoute(("goal", "set"), "goal-set", ("lane", "objective")),
+)
+
+_SIMPLE_ROUTES: tuple[CliRoute, ...] = (
     CliRoute(("new",), "new"),
     CliRoute(("attach",), "attach", ("thread",)),
     CliRoute(("get",), "show", ("lane",)),
@@ -54,6 +63,22 @@ _ROUTES: tuple[CliRoute, ...] = (
     CliRoute(("daemon", "status"), "status"),
     CliRoute(("daemon", "log"), "log"),
 )
+
+CLI_PROJECTION_CONTROL_PATHS: tuple[tuple[str, ...], ...] = (("schema",),)
+_COMPOSED_SCHEMA_ROUTES: dict[str, str] = {"list --unmanaged": "discover"}
+
+
+def cli_public_routes() -> tuple[CliRoute, ...]:
+    """All op-backed CLI routes. Custom route functions are still manifest entries;
+    the custom code is an explicit projection override, not an untracked surface."""
+    return (*_CUSTOM_ROUTES, *_SIMPLE_ROUTES)
+
+
+def cli_schema_routes() -> dict[str, str]:
+    """Public command spellings accepted by ``dispatch schema``."""
+    routes = {" ".join(route.path): route.op_id for route in cli_public_routes()}
+    routes.update(_COMPOSED_SCHEMA_ROUTES)
+    return routes
 
 
 def derive_cli(
@@ -86,7 +111,7 @@ def derive_cli(
     )
     _register_command(app, ("schema",), _schema_command(registry))
 
-    for route in _ROUTES:
+    for route in _SIMPLE_ROUTES:
         _register_command(
             app,
             route.path,
@@ -127,8 +152,18 @@ def _op_command(
 
     def command(**kwargs: object) -> None:
         json_requested = bool(kwargs.pop("json", False))
+        yes = bool(kwargs.pop("yes", False))
+        no_interactive = bool(kwargs.pop("no_interactive", False))
         if op.intent == "destroy":
-            typer.confirm(f"Run destroy op {op.id!r}?", abort=True, err=json_requested)
+            if no_interactive and not yes:
+                typer.secho(
+                    f"dispatch: destroy op {op.id!r} requires --yes with --no-interactive",
+                    fg="red",
+                    err=True,
+                )
+                raise typer.Exit(code=2)
+            if not yes:
+                typer.confirm(f"Run destroy op {op.id!r}?", abort=True, err=True)
         result = invoke(op.id, dict(kwargs))
         render(op, result)
         _ignore_json(json_requested)
@@ -160,6 +195,27 @@ def _parameters(op: Op, *, positionals: tuple[str, ...] = ()) -> list[inspect.Pa
             kind = inspect.Parameter.KEYWORD_ONLY
         parameters.append(
             inspect.Parameter(name, kind, default=default, annotation=field.annotation)
+        )
+    if op.intent == "destroy":
+        parameters.extend(
+            [
+                inspect.Parameter(
+                    "yes",
+                    inspect.Parameter.KEYWORD_ONLY,
+                    default=typer.Option(False, "--yes", help="Confirm this destroy operation."),
+                    annotation=bool,
+                ),
+                inspect.Parameter(
+                    "no_interactive",
+                    inspect.Parameter.KEYWORD_ONLY,
+                    default=typer.Option(
+                        False,
+                        "--no-interactive",
+                        help="Fail instead of prompting unless --yes is also provided.",
+                    ),
+                    annotation=bool,
+                ),
+            ]
         )
     parameters.append(
         inspect.Parameter(
@@ -439,25 +495,6 @@ def _schema_command(registry: OpRegistry) -> Callable[..., None]:
 
 
 def _schema_op_id(command: str) -> str:
-    aliases = {
-        "stop": "stop",
-        "list": "roster",
-        "list-unmanaged": "discover",
-        "attach": "attach",
-        "get": "show",
-        "tail": "transcript",
-        "watch": "watch",
-        "sync": "sync",
-        "search": "search",
-        "rename": "lane-rename",
-        "archive": "archive",
-        "restore": "restore",
-        "goal-status": "goal-get",
-        "goal-set": "goal-set",
-        "goal-clear": "goal-clear",
-        "daemon-status": "status",
-        "daemon-log": "log",
-    }
     try:
         parts = shlex.split(command.strip())
     except ValueError:
@@ -467,9 +504,10 @@ def _schema_op_id(command: str) -> str:
     normalized = "-".join(words) if words else command.strip().replace(" ", "-")
     if normalized == "tail" and "--follow" in flags:
         return "__unknown_tail_follow__"
-    if normalized == "list" and "--unmanaged" in flags:
-        return "discover"
-    return aliases.get(normalized, normalized)
+    schema_routes = cli_schema_routes()
+    aliases = {command.replace(" ", "-"): op_id for command, op_id in schema_routes.items()}
+    flagged = " ".join((*words, *sorted(flags)))
+    return schema_routes.get(flagged) or aliases.get(normalized, normalized)
 
 
 def _default_render(op: Op, result: dict[str, object]) -> None:

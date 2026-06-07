@@ -30,7 +30,7 @@ from .models import (
 from .refs import BASE58BTC_ALPHABET, CODEX_REF_SOURCE, codex_ref_payload, make_ref
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _utcnow() -> datetime:
@@ -51,6 +51,10 @@ CREATE TABLE IF NOT EXISTS lanes (
     status TEXT NOT NULL DEFAULT 'unknown',
     pinned INTEGER NOT NULL DEFAULT 0,
     active_turn_id TEXT,
+    latest_turn_id TEXT,
+    latest_turn_status TEXT,
+    latest_error TEXT,
+    latest_error_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     last_event_at TEXT
@@ -167,6 +171,8 @@ class Registry:
             await self._conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_lanes_ref ON lanes(ref)"
             )
+        if user_version < 4:
+            await self._ensure_lane_runtime_columns()
 
     async def _ensure_ref_columns(self) -> None:
         async with self._conn.execute("PRAGMA table_info(lanes)") as cur:
@@ -175,6 +181,20 @@ class Registry:
         for name in ("ref", "ref_source", "ref_payload", "ref_mixer"):
             if name not in columns:
                 await self._conn.execute(f"ALTER TABLE lanes ADD COLUMN {name} TEXT")
+
+    async def _ensure_lane_runtime_columns(self) -> None:
+        async with self._conn.execute("PRAGMA table_info(lanes)") as cur:
+            rows = await cur.fetchall()
+        columns = {str(row["name"]) for row in rows}
+        column_defs = {
+            "latest_turn_id": "TEXT",
+            "latest_turn_status": "TEXT",
+            "latest_error": "TEXT",
+            "latest_error_at": "TEXT",
+        }
+        for name, definition in column_defs.items():
+            if name not in columns:
+                await self._conn.execute(f"ALTER TABLE lanes ADD COLUMN {name} {definition}")
 
     # --- lanes ----------------------------------------------------------------
 
@@ -264,8 +284,9 @@ class Registry:
     async def _insert_lane(self, lane: Lane) -> None:
         await self._conn.execute(
             "INSERT INTO lanes (id, ref, ref_source, ref_payload, ref_mixer, handle, role, cwd, "
-            "source, status, pinned, active_turn_id, created_at, updated_at, last_event_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "source, status, pinned, active_turn_id, latest_turn_id, latest_turn_status, "
+            "latest_error, latest_error_at, created_at, updated_at, last_event_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 lane.id,
                 lane.ref,
@@ -279,6 +300,10 @@ class Registry:
                 lane.status,
                 int(lane.pinned),
                 lane.active_turn_id,
+                lane.latest_turn_id,
+                lane.latest_turn_status,
+                lane.latest_error,
+                lane.latest_error_at.isoformat() if lane.latest_error_at else None,
                 lane.created_at.isoformat(),
                 lane.updated_at.isoformat(),
                 lane.last_event_at.isoformat() if lane.last_event_at else None,
@@ -378,6 +403,57 @@ class Registry:
         await self._conn.execute(
             "UPDATE lanes SET active_turn_id = ?, updated_at = ? WHERE id = ?",
             (turn_id, self._now().isoformat(), lane_id),
+        )
+        await self._conn.commit()
+
+    async def record_turn_started(self, lane_id: str, turn_id: str | None) -> None:
+        await self._conn.execute(
+            "UPDATE lanes SET active_turn_id = ?, latest_turn_id = ?, "
+            "latest_turn_status = 'started', latest_error = NULL, latest_error_at = NULL, "
+            "status = 'busy', updated_at = ? WHERE id = ?",
+            (turn_id, turn_id, self._now().isoformat(), lane_id),
+        )
+        await self._conn.commit()
+
+    async def record_turn_completed(self, lane_id: str, turn_id: str | None) -> None:
+        await self._conn.execute(
+            "UPDATE lanes SET active_turn_id = NULL, latest_turn_id = COALESCE(?, latest_turn_id), "
+            "latest_turn_status = 'completed', latest_error = NULL, latest_error_at = NULL, "
+            "status = 'idle', updated_at = ? WHERE id = ?",
+            (turn_id, self._now().isoformat(), lane_id),
+        )
+        await self._conn.commit()
+
+    async def record_turn_failed(
+        self, lane_id: str, turn_id: str | None, message: str | None
+    ) -> None:
+        now = self._now().isoformat()
+        await self._conn.execute(
+            "UPDATE lanes SET active_turn_id = NULL, latest_turn_id = COALESCE(?, latest_turn_id), "
+            "latest_turn_status = 'failed', latest_error = ?, latest_error_at = ?, "
+            "status = 'error', updated_at = ? WHERE id = ?",
+            (turn_id, message, now if message is not None else None, now, lane_id),
+        )
+        await self._conn.commit()
+
+    async def record_turn_request_failed(self, lane_id: str, message: str | None) -> None:
+        now = self._now().isoformat()
+        await self._conn.execute(
+            "UPDATE lanes SET active_turn_id = NULL, latest_turn_id = NULL, "
+            "latest_turn_status = 'failed', latest_error = ?, latest_error_at = ?, "
+            "status = 'error', updated_at = ? WHERE id = ?",
+            (message, now if message is not None else None, now, lane_id),
+        )
+        await self._conn.commit()
+
+    async def mark_lane_idle(self, lane_id: str) -> None:
+        lane = await self.find_lane(lane_id)
+        status: LaneStatus = (
+            "error" if lane is not None and lane.latest_turn_status == "failed" else "idle"
+        )
+        await self._conn.execute(
+            "UPDATE lanes SET active_turn_id = NULL, status = ?, updated_at = ? WHERE id = ?",
+            (status, self._now().isoformat(), lane_id),
         )
         await self._conn.commit()
 

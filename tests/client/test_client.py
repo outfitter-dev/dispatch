@@ -45,6 +45,20 @@ async def test_bounded_request_timeout_discards_pending(
     assert c._router._pending == {}
 
 
+async def test_thread_resume_can_avoid_initial_turn_hydration(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+    fake.auto = _result_for("thread/resume", {"thread": {"id": "L1"}})
+    thread = await c.thread_resume("L1", exclude_turns=True)
+    assert thread.id == "L1"
+    assert fake.sent[-1] == {
+        "id": 1,
+        "method": "thread/resume",
+        "params": {"threadId": "L1", "excludeTurns": True},
+    }
+
+
 async def test_thread_start_parses_thread_info(
     client: tuple[AppServerClient, FakeTransport],
 ) -> None:
@@ -200,6 +214,53 @@ async def test_thread_list_reads_data_key(
     fake.auto = _result_for("thread/list", {"data": [{"id": "a"}, {"id": "b"}]})
     threads = await c.thread_list()
     assert [t.id for t in threads] == ["a", "b"]
+
+
+async def test_thread_list_sends_current_native_filters(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+    fake.auto = _result_for("thread/list", {"data": []})
+    await c.thread_list(
+        limit=10,
+        archived=False,
+        cwd="/repo",
+        search_term="schema",
+        sort_direction="desc",
+        sort_key="updated_at",
+        source_kinds=["cli"],
+        use_state_db_only=True,
+    )
+    assert fake.sent[-1] == {
+        "id": 1,
+        "method": "thread/list",
+        "params": {
+            "limit": 10,
+            "archived": False,
+            "cwd": "/repo",
+            "searchTerm": "schema",
+            "sortDirection": "desc",
+            "sortKey": "updated_at",
+            "sourceKinds": ["cli"],
+            "useStateDbOnly": True,
+        },
+    }
+
+
+async def test_turn_start_sends_service_tier_when_set(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+    fake.auto = _result_for("turn/start", {"turnId": "turn-1"})
+    await c.turn_start("L1", "go", cwd="/work", service_tier="priority")
+    assert fake.sent[-1]["params"] == {
+        "threadId": "L1",
+        "input": [{"type": "text", "text": "go"}],
+        "cwd": "/work",
+        "approvalPolicy": "never",
+        "sandboxPolicy": {"type": "readOnly"},
+        "serviceTier": "priority",
+    }
 
 
 async def test_request_error_raises_app_server_error(

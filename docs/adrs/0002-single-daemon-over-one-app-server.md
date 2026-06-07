@@ -4,7 +4,7 @@ slug: single-daemon-over-one-app-server
 title: Single Daemon over One App Server
 status: accepted
 created: 2026-06-02
-updated: 2026-06-05
+updated: 2026-06-09
 owners: ['[galligan](https://github.com/galligan)']
 ---
 
@@ -18,7 +18,7 @@ dispatch drives many lanes (Codex threads), reacts to their live events for trig
 
 Run one long-lived **daemon** (`dispatchd`) that spawns and owns **one** `codex app-server --listen stdio://` (sharing `CODEX_HOME=~/.codex` so it sees existing desktop lanes). A message router demuxes the single connection by request id / `threadId` into per-lane event streams. The daemon hosts the core and executes all op handlers, and exposes a Unix-socket control API — the canonical projection surfaces render. The CLI is a thin **sync** client; MCP (`dispatch mcp`) is a stdio server routing to the same control API.
 
-We drive the App Server binary directly (not the `openai-codex` SDK, which pins an older CLI than local).
+We drive the App Server binary directly; the `openai-codex` SDK has lagged the installed CLI before, so adopting it would require a fresh bundled-binary check.
 
 ## Consequences
 

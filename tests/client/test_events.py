@@ -11,6 +11,7 @@ from outfitter.dispatch.client.events import (
     StatusChanged,
     ThreadCompacted,
     TurnCompleted,
+    TurnFailed,
     TurnStarted,
     project_notification,
     project_server_request,
@@ -22,6 +23,13 @@ def test_turn_started_and_completed_carry_lane_and_turn() -> None:
     assert started == [TurnStarted("L1", "T1")]
     completed = project_notification("turn/completed", {"threadId": "L1", "turnId": "T1"})
     assert completed == [TurnCompleted("L1", "T1")]
+
+
+def test_turn_failed_carries_message() -> None:
+    failed = project_notification(
+        "turn/failed", {"threadId": "L1", "turnId": "T1", "message": "unsupported model"}
+    )
+    assert failed == [TurnFailed("L1", "T1", "unsupported model")]
 
 
 def test_item_completed_carries_item_id() -> None:

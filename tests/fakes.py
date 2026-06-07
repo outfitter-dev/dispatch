@@ -25,6 +25,7 @@ from outfitter.dispatch.client.models import (
     ThreadGoal,
     ThreadGoalStatus,
     ThreadInfo,
+    ThreadListCwdFilter,
     ThreadSandbox,
     ThreadSearchMatch,
     ThreadSearchResult,
@@ -89,8 +90,17 @@ class FakeLaneClient:
         self.threads[thread.id] = thread
         return thread
 
-    async def thread_resume(self, thread_id: str) -> ThreadInfo:
-        self._record("thread_resume", thread_id=thread_id)
+    async def thread_resume(
+        self,
+        thread_id: str,
+        *,
+        exclude_turns: bool | None = None,
+    ) -> ThreadInfo:
+        self._record(
+            "thread_resume",
+            thread_id=thread_id,
+            exclude_turns=exclude_turns,
+        )
         return self.threads.get(thread_id, ThreadInfo(id=thread_id))
 
     async def thread_fork(
@@ -127,9 +137,32 @@ class FakeLaneClient:
         return fork
 
     async def thread_list(
-        self, limit: int = 50, cursor: str | None = None, use_state_db_only: bool | None = None
+        self,
+        limit: int = 50,
+        cursor: str | None = None,
+        use_state_db_only: bool | None = None,
+        *,
+        archived: bool | None = None,
+        cwd: ThreadListCwdFilter | None = None,
+        model_providers: list[str] | None = None,
+        search_term: str | None = None,
+        sort_direction: SortDirection | None = None,
+        sort_key: ThreadSortKey | None = None,
+        source_kinds: list[ThreadSourceKind] | None = None,
     ) -> list[ThreadInfo]:
-        self._record("thread_list", limit=limit, use_state_db_only=use_state_db_only)
+        self._record(
+            "thread_list",
+            limit=limit,
+            cursor=cursor,
+            archived=archived,
+            cwd=cwd,
+            model_providers=model_providers,
+            search_term=search_term,
+            sort_direction=sort_direction,
+            sort_key=sort_key,
+            source_kinds=source_kinds,
+            use_state_db_only=use_state_db_only,
+        )
         return self.list_result
 
     async def thread_read(self, thread_id: str, include_turns: bool = False) -> dict[str, object]:
@@ -235,6 +268,7 @@ class FakeLaneClient:
         effort: Effort | None = None,
         summary: ReasoningSummary | None = None,
         model: str | None = None,
+        service_tier: str | None = None,
         output_schema: dict[str, object] | None = None,
         personality: Personality | None = None,
     ) -> dict[str, object]:
@@ -249,6 +283,7 @@ class FakeLaneClient:
             effort=effort,
             summary=summary,
             model=model,
+            service_tier=service_tier,
             output_schema=output_schema,
             personality=personality,
         )
@@ -309,9 +344,14 @@ class FakeSupervisedClient(FakeLaneClient):
         self.closed = asyncio.Event()
         self.resumed: list[str] = []
 
-    async def thread_resume(self, thread_id: str) -> ThreadInfo:
+    async def thread_resume(
+        self,
+        thread_id: str,
+        *,
+        exclude_turns: bool | None = None,
+    ) -> ThreadInfo:
         self.resumed.append(thread_id)
-        return await super().thread_resume(thread_id)
+        return await super().thread_resume(thread_id, exclude_turns=exclude_turns)
 
     async def wait_closed(self) -> None:
         await self.closed.wait()
