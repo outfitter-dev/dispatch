@@ -35,9 +35,9 @@ Use this clean-machine smoke after installing or upgrading:
 ```bash
 dispatch doctor
 dispatch schema send
-dispatch up
+dispatch up --json
 dispatch daemon status
-dispatch down
+dispatch down --json
 ```
 
 If `dispatch doctor` fails before the app-server smoke because the Codex CLI is
@@ -114,6 +114,10 @@ Common recovery paths:
   isolated state, confirm `DISPATCH_HOME`, `DISPATCH_SOCKET`, and `DISPATCH_PIDFILE`.
 - Registry schema newer than the installed binary: upgrade with
   `uv tool upgrade outfitter-dispatch` before starting the daemon.
+- Registry schema older than the installed binary: run `dispatch down`, then
+  `dispatch registry migrate`, then `dispatch up`. Migration backs up the registry
+  by default and refuses to run while the daemon is reachable unless
+  `--allow-running` is explicitly set for a controlled recovery.
 - Registry integrity failure: stop the daemon, back up the database at the path shown
   by doctor, and recreate it or inspect with `sqlite3`.
 - App Server initialize failure: run `codex app-server --listen stdio://` directly in
@@ -150,6 +154,7 @@ An owned lane is a Codex thread created by dispatch. Owned lanes are writable. U
 uv run dispatch new \
   --name docs-review \
   --cwd /path/to/dispatch \
+  --goal "Review until no P2 findings remain." \
   --text "Review the README for missing usage steps."
 ```
 
@@ -197,6 +202,19 @@ developer_file = ".dispatch/instructions/builder.md"
 ```
 
 Preset order matters: later presets win, and CLI flags win over presets.
+When `service_tier` is configured, dispatch sends it to both `thread/start` and
+the optional initial `turn/start` request.
+
+Use `--goal` to create a native App Server goal before the initial message is sent.
+Slash commands in `--text` are not interpreted by dispatch; `--text "/goal ..."`
+is rejected so agents do not accidentally create a thread that looks goal-driven but
+has no native goal state. Goals require non-ephemeral threads, so `new --goal`
+cannot be combined with `--ephemeral`.
+
+The `new` response reports `message_accepted` and `goal_set`. `message_accepted`
+means the App Server accepted the initial turn request; it does not prove the
+assistant produced work. Use `get` to inspect `latest_turn`, `tail` for persisted
+history, or `watch` for a bounded live event sample after launch.
 
 Use `send --context` for silent context injection. It adds model-visible context without
 starting a turn:
@@ -247,6 +265,11 @@ uv run dispatch send @docs-review "Can you sanity-check this?" --intro
 uv run dispatch get <dispatch-ref>
 ```
 
+The response includes `latest_turn` when dispatch has observed turn lifecycle events:
+the latest turn id, runtime status (`started`, `completed`, or `failed`), and the
+last App Server error message/time when a turn fails. This is the first place to look
+when a send or initial message was accepted but no assistant output appears.
+
 Use `tail` when you want persisted turn history. It reads `thread/read` with
 `includeTurns:true` and returns a compact item list; it is a history snapshot, not a
 full execution log. App Server does not support `includeTurns` on ephemeral threads.
@@ -290,6 +313,8 @@ uv run dispatch restore <codex-thread-id>
 ```
 
 `restore` unarchives the thread only; it does not resume the thread or start a new turn.
+Destroy-intent commands prompt on a TTY. In scripts, use `--yes --json`; if you also
+set `--no-interactive`, `--yes` is required or the command exits with a usage error.
 
 Use `search` to search Codex thread history without first attaching every thread:
 
@@ -313,8 +338,9 @@ local substring scan. Date bounds accept ISO dates or datetimes and default to f
 
 `list` shows the threads dispatch already manages. `list --unmanaged` is the other
 half: it lists the persisted Codex sessions on this machine — desktop threads and prior
-runs — that you could attach. It uses App Server `thread/list` in state-db-only mode, so
-it is fast and read-only; it never resumes, writes, or registers anything.
+runs — that you could attach. It uses App Server `thread/list` in state-db-only mode,
+asks for active sessions sorted by recent updates, and remains read-only; it never
+resumes, writes, or registers anything.
 
 ```bash
 uv run dispatch list --unmanaged --limit 20
@@ -432,7 +458,7 @@ Manage triggers:
 uv run dispatch trigger list
 uv run dispatch trigger pause <trigger-id>
 uv run dispatch trigger resume <trigger-id>
-uv run dispatch trigger rm <trigger-id>
+uv run dispatch trigger rm <trigger-id> --yes --json
 ```
 
 ## Schemas
@@ -444,10 +470,15 @@ derived from the contract registry:
 ```bash
 uv run dispatch list --json
 uv run dispatch schema send
+uv run dispatch schema "list --unmanaged"
 uv run dispatch schema sync
 uv run dispatch schema watch
 uv run dispatch schema "goal set"
 ```
+
+`schema` uses the CLI projection manifest, including composed command spellings such
+as `list --unmanaged`. It is the preferred way to discover stable fields for `jq`
+instead of scraping `--help` or hand-copying Pydantic schemas.
 
 ## MCP
 

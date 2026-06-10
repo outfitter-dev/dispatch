@@ -1,19 +1,28 @@
-# Codex App Server — verification against local binary (2026-06-02)
+# Codex App Server — verification against local binary (refreshed 2026-06-09)
 
 Verifies the "Codex App Server Technical Report (§1–15)" against the actually installed binary. Report is accurate for its pinned era (~CLI 0.132); several conclusions are already stale on the newer local binary.
 
 ## Ground truth on this machine
 
-- `codex-cli 0.136.0-alpha.2` at `~/.local/bin/codex`
-- A **managed control daemon is already running**: `codex app-server daemon version` →
-  ```json
-  {"status":"running",
-   "managedCodexPath":"~/.codex/packages/standalone/current/codex",
-   "socketPath":"~/.codex/app-server-control/app-server-control.sock",
-   "cliVersion":"0.136.0-alpha.2","appServerVersion":"0.135.0-alpha.1"}
-  ```
-- Desktop `Codex.app` separately spawns ~10 `codex app-server --listen stdio://` processes (one per thread) — so **both topologies run side by side** today.
-- Python SDK (`openai-codex`) still pins `openai-codex-cli-bin==0.132.0`, i.e. installing it gives an **older** App Server than the local CLI. Pin deliberately.
+Refreshed 2026-06-09:
+
+- `~/.local/bin/codex` and `/Applications/Codex.app/Contents/Resources/codex`
+  both report `codex-cli 0.137.0-alpha.4`.
+- `codex app-server daemon version` could not connect because the managed daemon
+  control socket was absent:
+  `~/.codex/app-server-control/app-server-control.sock` did not exist.
+- Desktop `Codex.app` still spawns separate
+  `codex app-server --listen stdio://` processes per active thread. A Desktop
+  SSH/proxy process was also visible for a remote `mini` host, but that proxy is
+  not yet a supported Dispatch transport.
+
+Original 2026-06-02 behavioral probes ran against `codex-cli 0.136.0-alpha.2`
+with a managed daemon reporting `appServerVersion:"0.135.0-alpha.1"`. Keep the
+empirical findings below unless re-probed; update schema facts per binary.
+
+The Python SDK (`openai-codex`) pinned an older app-server binary during the
+2026-06-02 review. Re-verify before adopting it; Dispatch still drives the
+installed `codex` binary directly.
 
 ## Biggest delta vs the report: daemon + proxy = attach to a running server
 
@@ -33,13 +42,29 @@ Regenerate any time (read-only, no network):
 codex app-server generate-json-schema --out <DIR>                # stable
 codex app-server generate-json-schema --experimental --out <DIR> # + gated
 ```
-Counts on this binary: stable v2 = 217 types, experimental v2 = 261. Protocol is namespaced `v1/` (just Initialize) + `v2/` (everything else). Initialize is still v1 and returns `{codexHome, platformFamily, platformOs, userAgent}`.
+Current 0.137.0-alpha.4 generated schema files: stable = 256, experimental =
+312. Current method counts: stable client requests = 82, experimental client
+requests = 112; server request/notification counts did not materially change in
+the refresh. Protocol is namespaced `v1/` (just Initialize) + `v2/` (everything
+else). Initialize is still v1 and returns `{codexHome, platformFamily,
+platformOs, userAgent}`.
 
 ### Client → server methods (STABLE — non-experimental)
-Lifecycle/threads/turns: `thread/start resume fork read list loaded/list archive unarchive unsubscribe metadata/update name/set rollback inject_items compact/start goal/{get,set,clear} approveGuardianDeniedAction shellCommand`, `turn/start steer interrupt`. Accounts/models/config: `account/{read,login/start,login/cancel,logout, rateLimits/read,sendAddCreditsNudgeEmail}`, `model/list`, `modelProvider/capabilities/read`, `config/{read,value/write,batchWrite, mcpServer/reload}`, `configRequirements/read`, `permissionProfile/list`. Tools/ecosystem: `skills/{list,config/write,extraRoots/set}`, `plugin/{install,installed,list,read,uninstall,skill/read,share/*}`, `marketplace/{add,remove,upgrade}`, `hooks/list`, `app/list`, `review/start`, `mcpServer/{tool/call,resource/read,oauth/login}`, `mcpServerStatus/list`. System: `command/exec{,/write,/resize,/terminate}`, full `fs/*` (`readFile writeFile readDirectory createDirectory copy remove getMetadata watch unwatch`), `externalAgentConfig/{detect,import}`, `feedback/upload`, `experimentalFeature/{list,enablement/set}`, `windowsSandbox/{readiness,setupStart}`.
+Lifecycle/threads/turns: `thread/start resume fork read list loaded/list archive unarchive unsubscribe metadata/update name/set rollback inject_items compact/start goal/{get,set,clear} approveGuardianDeniedAction shellCommand`, `turn/start steer interrupt`. Accounts/models/config: `account/{read,login/start,login/cancel,logout, rateLimits/read,sendAddCreditsNudgeEmail}`, `model/list`, `modelProvider/capabilities/read`, `config/{read,value/write,batchWrite, mcpServer/reload}`, `configRequirements/read`, `permissionProfile/list`. Tools/ecosystem: `skills/{list,config/write,extraRoots/set}`, `plugin/{install,installed,list,read,uninstall,skill/read,share/*}`, `marketplace/{add,remove,upgrade}`, `hooks/list`, `app/list`, `review/start`, `mcpServer/{tool/call,resource/read,oauth/login}`, `mcpServerStatus/list`. System: `command/exec{,/write,/resize,/terminate}`, full `fs/*` (`readFile writeFile readDirectory createDirectory copy remove getMetadata watch unwatch`), stable `fuzzyFileSearch`, `externalAgentConfig/{detect,import}`, `feedback/upload`, `experimentalFeature/{list,enablement/set}`, `windowsSandbox/{readiness,setupStart}`.
+
+0.137 parameter deltas Dispatch should care about:
+
+- `thread/list` now accepts native `archived`, `cwd`, `searchTerm`,
+  `modelProviders`, `sourceKinds`, and sort filters. Dispatch should prefer
+  those when they match existing CLI/MCP semantics, then keep dispatch-side
+  filters for managed/unmanaged and date predicates.
+- `turn/start` accepts `serviceTier` plus richer context/environment metadata.
+  Dispatch projects `service_tier` through configured `new` turns.
+- `thread/resume` accepts `excludeTurns` / `initialTurnsPage`, useful for future
+  live observation without heavy initial history hydration.
 
 ### Client → server methods (EXPERIMENTAL-gated — diff stable↔exp)
-`process/{spawn,kill,writeStdin,resizePty}` (unsandboxed; matches report's warning), `thread/{search, turns/list, turns/items/list, settings/update, memoryMode/set, increment/decrementElicitation, backgroundTerminals/clean}`, `thread/realtime/{start,stop,appendAudio,appendText,listVoices}`, `remoteControl/{enable,disable,status/read}`, `collaborationMode/list`, `environment/add`, `memory/reset`, `mockExperimentalMethod`.
+`process/{spawn,kill,writeStdin,resizePty}` (unsandboxed; matches report's warning), `thread/{search, turns/list, turns/items/list, settings/update, memoryMode/set, increment/decrementElicitation, backgroundTerminals/clean}`, `thread/realtime/{start,stop,appendAudio,appendText,listVoices}`, `remoteControl/{enable,disable,status/read,pairing/start,client/list,client/revoke}`, `collaborationMode/list`, `environment/add`, experimental `fuzzyFileSearch/session{Start,Update,Stop}`, `memory/reset`, `mockExperimentalMethod`.
 > Note: `thread/turns/list` and `thread/search` are EXPERIMENTAL here — the report
 > listed turns/list as Supported. The realtime *control* verbs are gated, but the
 > realtime *notifications* below ship in stable.
@@ -113,20 +138,21 @@ Two WS clients (A, B), one `ws://` server. **Earlier "partial fan-out" was wrong
 
 ## Status of original open questions
 - **Q1 transports — RESOLVED.** stdio=JSONL (build here); unix/ws=WebSocket; daemon control socket=auth-gated + undocumented handshake.
-- **Q2 multi-client — RESOLVED.** Resume of a *persisted* thread = live co-presence (full content fan-out). thread/list discovery unreliable; track ids yourself.
+- **Q2 multi-client — RESOLVED.** Resume of a *persisted* thread = live co-presence (full content fan-out). `thread/list(useStateDbOnly:true)` discovery works when reading `result.data`; track ids/refs yourself for authority.
 - **Q3 Guardian — RESOLVED (behaviorally).** auto_review is selective (escalations only); benign approvals still hit the client. Approval responder is mandatory.
 
 ## Remaining unknowns (lower priority / deliberately not chased)
 1. The `proxy`/control-socket handshake — IS attaching to the live managed daemon supported for third parties at all? (Undocumented; volatile. Spawn-your-own is the pragmatic path regardless.)
 2. Triggering `item/autoApprovalReview/*` — needs a real risk-category action (network/sandbox-escape/MCP) with `auto_review`; not yet exercised.
 3. `thread/fork`, `thread/rollback`, `thread/compact/start` runtime semantics.
-4. Python SDK (`openai-codex`) actual high-level API vs raw (it pins CLI 0.132, not local 0.136) — evaluate before adopting vs hand-rolling a stdio client.
+4. Python SDK (`openai-codex`) actual high-level API vs raw — it has lagged the installed CLI before, so evaluate its bundled binary before adopting it over the direct stdio client.
 
 ## Building blocks confirmed (ready to design against)
 - Transport: stdio JSONL (1:1) or ws loopback (multi-viewer via resume).
 - Lifecycle: initialize → initialized → thread/start → turn/start → stream → resume.
 - Approval responder: reply `{id,result:{decision}}`; watch `waitingOnApproval` flag + `serverRequest/resolved`; correlate file diffs by `itemId`.
 - Sandbox: thread `sandbox:"read-only|workspace-write|danger-full-access"`; turn `sandboxPolicy:{type:"readOnly|workspaceWrite|externalSandbox|dangerFullAccess"}`.
-- Schema: regenerate per binary; 217 stable / 261 experimental v2 types.
+- Schema: regenerate per binary; current 0.137.0-alpha.4 generated 256 stable /
+  312 experimental schema files.
 
 Scratch this session: schema at path in `/tmp/codex-appserver-scratch-path`; probe scripts `/tmp/codex_{stdio,ws,fanout,lab4}.py`.

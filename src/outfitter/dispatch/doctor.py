@@ -281,6 +281,11 @@ def _registry_check() -> DoctorCheck:
                     "SELECT name FROM sqlite_master WHERE type = 'table'"
                 ).fetchall()
             }
+            row_counts = {
+                table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in ("lanes", "triggers")
+                if table in tables
+            }
     except sqlite3.Error as exc:
         return DoctorCheck(
             name="registry",
@@ -298,7 +303,15 @@ def _registry_check() -> DoctorCheck:
         "lane_sync_sources",
         "lane_snapshots",
     }
-    data.update({"schema_version": version, "integrity": integrity, "tables": sorted(tables)})
+    data.update(
+        {
+            "schema_version": version,
+            "supported_schema_version": SCHEMA_VERSION,
+            "integrity": integrity,
+            "tables": sorted(tables),
+            "row_counts": row_counts,
+        }
+    )
     if integrity != "ok":
         return DoctorCheck(
             name="registry",
@@ -325,8 +338,8 @@ def _registry_check() -> DoctorCheck:
             summary="registry schema is unversioned",
             detail=detail,
             recovery=(
-                "Restart dispatchd with this dispatch version (`dispatch down`, then "
-                "`dispatch up`) to apply compatibility migrations."
+                "Back up the registry, then run `dispatch down`, `dispatch registry migrate`, "
+                "and `dispatch up` to apply compatibility migrations."
             ),
             data=data,
         )
@@ -337,7 +350,20 @@ def _registry_check() -> DoctorCheck:
             summary="registry is missing required tables",
             detail=", ".join(missing),
             recovery=(
-                "Run `dispatch up` with a compatible dispatch version or recreate the registry."
+                "Run `dispatch down`, `dispatch registry migrate`, then `dispatch up`. "
+                "If migration fails, inspect the backup path from `registry migrate`."
+            ),
+            data=data,
+        )
+    if version < SCHEMA_VERSION:
+        return DoctorCheck(
+            name="registry",
+            status="warn",
+            summary="registry schema is older than this dispatch binary supports",
+            detail=f"{version} < {SCHEMA_VERSION}",
+            recovery=(
+                "Run `dispatch down`, `dispatch registry migrate`, then `dispatch up` "
+                "to apply compatibility migrations."
             ),
             data=data,
         )

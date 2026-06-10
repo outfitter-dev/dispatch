@@ -12,6 +12,8 @@ uv tool install outfitter-dispatch
 dispatch --help
 dispatchd --help
 dispatch doctor
+dispatch up --json
+dispatch down --json
 ```
 
 From a source checkout:
@@ -20,7 +22,7 @@ From a source checkout:
 uv sync
 uv run dispatch --help
 uv run dispatch doctor --no-app-server
-uv run dispatch up
+uv run dispatch up --json
 uv run dispatch daemon status
 ```
 
@@ -30,12 +32,13 @@ Create an owned managed thread, send it work, and inspect the daemon:
 uv run dispatch new \
   --name docs \
   --cwd /path/to/dispatch \
+  --goal "Finish the docs review." \
   --text "Please summarize the current stack state."
 uv run dispatch list
+uv run dispatch get <dispatch-ref>
 uv run dispatch tail <dispatch-ref> --limit 20
-uv run dispatch goal set <dispatch-ref> "Finish the docs review."
 uv run dispatch daemon log --limit 10
-uv run dispatch down
+uv run dispatch down --json
 ```
 
 Use owned managed threads for turn-writing work. Existing desktop Codex threads can be attached as
@@ -48,12 +51,19 @@ unmanaged Codex thread ids, and `search` can span both. Attach is metadata-only 
 default; use `dispatch sync <selector>` when you want dispatch to refresh its local
 indexed view of an attached thread.
 
+`new` reports whether the first message was accepted by the App Server, not whether
+assistant work completed. Use `get` to inspect the latest turn state and persisted
+App Server errors, or `watch` for a bounded live event sample. Slash commands in
+`--text` are plain text; use `--goal` when creating a native App Server goal.
+
 For the operator guide, CLI/MCP examples, triggers, and plugin setup, start at
 [`docs/usage/README.md`](docs/usage/README.md).
 
 Start troubleshooting with `dispatch doctor`. It checks PATH visibility, the Codex CLI
 and auth footprint, daemon socket/pidfile state, registry schema/integrity, packaged
-skills/plugin assets, and a low-risk Codex App Server initialize smoke.
+skills/plugin assets, and a low-risk Codex App Server initialize smoke. If doctor reports
+an old registry schema, stop the daemon and run `dispatch registry migrate` before
+starting it again.
 
 ## Agent And Plugin Support
 

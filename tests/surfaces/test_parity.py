@@ -8,10 +8,17 @@ requiring one top-level command per op.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
+import typer
 from typer.testing import CliRunner
 
-from outfitter.dispatch.contracts.derive_cli import derive_cli
+from outfitter.dispatch.contracts.derive_cli import (
+    CLI_PROJECTION_CONTROL_PATHS,
+    cli_public_routes,
+    cli_schema_routes,
+    derive_cli,
+)
 from outfitter.dispatch.contracts.derive_mcp import derive_mcp_projection
 from outfitter.dispatch.contracts.errors import (
     AppServerError,
@@ -24,6 +31,7 @@ from outfitter.dispatch.contracts.errors import (
 )
 from outfitter.dispatch.contracts.schema import is_internal_field
 from outfitter.dispatch.core.ops import REGISTRY
+from outfitter.dispatch.surfaces.cli import CLI_SURFACE_CONTROL_PATHS, build_cli
 
 
 def _stub_invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
@@ -91,13 +99,50 @@ def test_mcp_model_parity_per_op() -> None:
 def test_cli_schema_routes_cover_public_ops() -> None:
     app = derive_cli(REGISTRY, _stub_invoke)
 
-    routed_ops = set(_EXPECTED_CLI_SCHEMA_ROUTES.values())
+    routed_ops = set(cli_schema_routes().values())
     assert set(REGISTRY.ids()) - routed_ops == {"open", "fork", "rollback", "compact"}
+    assert cli_schema_routes() == _EXPECTED_CLI_SCHEMA_ROUTES
 
-    for command, op_id in _EXPECTED_CLI_SCHEMA_ROUTES.items():
+    for command, op_id in cli_schema_routes().items():
         result = runner.invoke(app, ["schema", command])
         assert result.exit_code == 0, command
         assert json.loads(result.output)["op"] == op_id
+
+
+def test_cli_registered_commands_are_declared_in_projection_manifest() -> None:
+    app = derive_cli(REGISTRY, _stub_invoke)
+
+    registered = _registered_paths(app)
+    declared = {route.path for route in cli_public_routes()} | set(CLI_PROJECTION_CONTROL_PATHS)
+
+    assert registered == declared
+
+
+def test_full_cli_commands_are_declared_projection_or_control_paths() -> None:
+    app = build_cli(socket_path=Path("/tmp/dispatch-test.sock"))
+
+    registered = _registered_paths(app)
+    declared = (
+        {route.path for route in cli_public_routes()}
+        | set(CLI_PROJECTION_CONTROL_PATHS)
+        | set(CLI_SURFACE_CONTROL_PATHS)
+    )
+
+    assert registered == declared
+
+
+def _registered_paths(app: typer.Typer) -> set[tuple[str, ...]]:
+    root_paths = {
+        (command.name,) for command in app.registered_commands if command.name is not None
+    }
+    group_paths: set[tuple[str, str]] = set()
+    for group in app.registered_groups:
+        if group.name is None or group.typer_instance is None:
+            continue
+        for command in group.typer_instance.registered_commands:
+            if command.name is not None:
+                group_paths.add((group.name, command.name))
+    return root_paths | group_paths
 
 
 def test_managed_thread_outputs_include_stable_identity_fields() -> None:

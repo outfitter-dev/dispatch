@@ -33,6 +33,7 @@ from outfitter.dispatch.client.models import (
     ThreadGoal,
     ThreadGoalStatus,
     ThreadInfo,
+    ThreadListCwdFilter,
     ThreadSandbox,
     ThreadSearchResult,
     ThreadSortKey,
@@ -61,7 +62,12 @@ class LaneClient(Protocol):
         ephemeral: bool = False,
     ) -> ThreadInfo: ...
 
-    async def thread_resume(self, thread_id: str) -> ThreadInfo: ...
+    async def thread_resume(
+        self,
+        thread_id: str,
+        *,
+        exclude_turns: bool | None = None,
+    ) -> ThreadInfo: ...
 
     async def thread_fork(
         self,
@@ -80,7 +86,18 @@ class LaneClient(Protocol):
     ) -> ThreadInfo: ...
 
     async def thread_list(
-        self, limit: int = 50, cursor: str | None = None, use_state_db_only: bool | None = None
+        self,
+        limit: int = 50,
+        cursor: str | None = None,
+        use_state_db_only: bool | None = None,
+        *,
+        archived: bool | None = None,
+        cwd: ThreadListCwdFilter | None = None,
+        model_providers: list[str] | None = None,
+        search_term: str | None = None,
+        sort_direction: SortDirection | None = None,
+        sort_key: ThreadSortKey | None = None,
+        source_kinds: list[ThreadSourceKind] | None = None,
     ) -> list[ThreadInfo]: ...
 
     async def thread_read(
@@ -133,6 +150,7 @@ class LaneClient(Protocol):
         effort: Effort | None = None,
         summary: ReasoningSummary | None = None,
         model: str | None = None,
+        service_tier: str | None = None,
         output_schema: dict[str, object] | None = None,
         personality: Personality | None = None,
     ) -> dict[str, object]: ...

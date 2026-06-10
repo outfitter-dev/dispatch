@@ -98,7 +98,14 @@ NEW = define_op(
                 "source": "own",
                 "status": "idle",
                 "cwd": "/work",
-                "sent": False,
+                "message_accepted": False,
+                "goal_set": False,
+                "latest_turn": {
+                    "id": None,
+                    "status": None,
+                    "error": None,
+                    "error_at": None,
+                },
             },
         )
     ],

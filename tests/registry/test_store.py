@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 
+import aiosqlite
 import pytest
 import pytest_asyncio
 
@@ -108,6 +109,7 @@ async def test_v2_registry_migration_backfills_unique_refs(tmp_path: Path) -> No
         assert [lane.id for lane in lanes] == ["A", "B"]
         assert len({lane.ref for lane in lanes}) == 2
         assert all(lane.ref for lane in lanes)
+        assert all(lane.latest_turn_status is None for lane in lanes)
         async with migrated._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
         assert row is not None
@@ -116,10 +118,131 @@ async def test_v2_registry_migration_backfills_unique_refs(tmp_path: Path) -> No
         await migrated.close()
 
 
+async def test_migrates_v3_registry_with_runtime_columns(tmp_path: Path) -> None:
+    db = tmp_path / "registry-v3.db"
+    conn = await aiosqlite.connect(db)
+    await conn.executescript(
+        """
+        CREATE TABLE lanes (
+            id TEXT PRIMARY KEY,
+            ref TEXT NOT NULL UNIQUE,
+            ref_source TEXT NOT NULL,
+            ref_payload TEXT NOT NULL,
+            ref_mixer TEXT NOT NULL,
+            handle TEXT NOT NULL,
+            role TEXT,
+            cwd TEXT,
+            source TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'unknown',
+            pinned INTEGER NOT NULL DEFAULT 0,
+            active_turn_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_event_at TEXT
+        );
+        INSERT INTO lanes (
+            id, ref, ref_source, ref_payload, ref_mixer, handle, source, status,
+            pinned, created_at, updated_at
+        ) VALUES (
+            'A', '0abc1', '0', 'abc', '1', '@a', 'own', 'idle', 0,
+            '2026-06-03T12:00:01+00:00', '2026-06-03T12:00:01+00:00'
+        );
+        CREATE TABLE triggers (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            lane_selector TEXT NOT NULL,
+            when_spec TEXT NOT NULL,
+            action_spec TEXT NOT NULL,
+            guard_spec TEXT,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT,
+            last_fired_at TEXT
+        );
+        CREATE TABLE actions_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            op TEXT NOT NULL,
+            lane TEXT,
+            trigger_id TEXT,
+            detail TEXT,
+            outcome TEXT NOT NULL DEFAULT 'ok'
+        );
+        CREATE TABLE queued_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            lane TEXT NOT NULL,
+            text TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            error TEXT
+        );
+        CREATE TABLE lane_sync_sources (
+            lane TEXT PRIMARY KEY,
+            state TEXT NOT NULL,
+            source_path TEXT,
+            source_device INTEGER,
+            source_inode INTEGER,
+            source_size INTEGER,
+            source_mtime_ns INTEGER,
+            line_count INTEGER,
+            first_offset INTEGER,
+            tail_offset INTEGER,
+            last_synced_at TEXT,
+            error TEXT
+        );
+        CREATE TABLE lane_snapshots (
+            lane TEXT PRIMARY KEY,
+            display_name TEXT,
+            preview TEXT,
+            cwd TEXT,
+            source TEXT,
+            thread_source TEXT,
+            model_provider TEXT,
+            model TEXT,
+            reasoning_effort TEXT,
+            session_id TEXT,
+            latest_event_at TEXT,
+            latest_turn_id TEXT,
+            transcript_partial INTEGER NOT NULL DEFAULT 1
+        );
+        PRAGMA user_version = 3;
+        """
+    )
+    await conn.commit()
+    await conn.close()
+
+    migrated = await Registry.open(db, now=_clock)
+    try:
+        lane = await migrated.get_lane("A")
+        assert lane.latest_turn_id is None
+        assert lane.latest_turn_status is None
+        await migrated.record_turn_failed("A", "turn-1", "unsupported model")
+        failed = await migrated.get_lane("A")
+        assert failed.status == "error"
+        assert failed.latest_turn_id == "turn-1"
+        assert failed.latest_turn_status == "failed"
+        assert failed.latest_error == "unsupported model"
+    finally:
+        await migrated.close()
+
+
 async def test_get_missing_lane_raises_not_found(store: Registry) -> None:
     assert await store.find_lane("nope") is None
     with pytest.raises(NotFoundError):
         await store.get_lane("nope")
+
+
+async def test_turn_request_failure_clears_stale_turn_id(store: Registry) -> None:
+    await store.add_lane(id="L1", handle="@a", source="own")
+    await store.record_turn_started("L1", "turn-1")
+    await store.record_turn_failed("L1", "turn-1", "old failure")
+
+    await store.record_turn_request_failed("L1", "request rejected")
+
+    lane = await store.get_lane("L1")
+    assert lane.latest_turn_id is None
+    assert lane.latest_turn_status == "failed"
+    assert lane.latest_error == "request rejected"
 
 
 async def test_list_excludes_archived_by_default(store: Registry) -> None:
@@ -240,7 +363,7 @@ async def test_lane_sync_roundtrip_and_many_lookup(store: Registry) -> None:
             source="vscode",
             thread_source="user",
             model_provider="openai",
-            model="gpt-5-codex",
+            model="test-model",
             reasoning_effort="low",
             session_id="L1",
             latest_event_at="2026-06-05T10:00:00.000Z",

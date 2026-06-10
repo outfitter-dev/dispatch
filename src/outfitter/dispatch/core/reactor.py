@@ -43,22 +43,18 @@ class Reactor:
             return  # an event for a thread dispatch does not track
 
         if isinstance(event, TurnStarted):
-            await registry.set_active_turn(lane.id, event.turn_id)
-            await registry.update_lane_status(lane.id, "busy")
+            await registry.record_turn_started(lane.id, event.turn_id)
             await registry.touch_lane_event(lane.id)
         elif isinstance(event, TurnCompleted):
-            await registry.set_active_turn(lane.id, None)
-            await registry.update_lane_status(lane.id, "idle")
+            await registry.record_turn_completed(lane.id, event.turn_id)
             await registry.touch_lane_event(lane.id)
             await self._fire_event(lane.id, "turn_completed")
             await drain_next_queued_message(self._ctx, lane.id)
         elif isinstance(event, TurnFailed):
-            await registry.set_active_turn(lane.id, None)
-            await registry.update_lane_status(lane.id, "error")
+            await registry.record_turn_failed(lane.id, event.turn_id, event.message)
             await registry.touch_lane_event(lane.id)
         elif isinstance(event, LaneIdle):
-            await registry.set_active_turn(lane.id, None)
-            await registry.update_lane_status(lane.id, "idle")
+            await registry.mark_lane_idle(lane.id)
             await registry.touch_lane_event(lane.id)
             await drain_next_queued_message(self._ctx, lane.id)
         elif isinstance(event, ItemCompleted | GoalUpdated | GoalCleared | ThreadCompacted):

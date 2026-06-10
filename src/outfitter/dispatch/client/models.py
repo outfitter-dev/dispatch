@@ -29,6 +29,7 @@ Personality = Literal["none", "friendly", "pragmatic"]
 Decision = Literal["accept", "acceptForSession", "decline", "cancel"]
 SortDirection = Literal["asc", "desc"]
 ThreadSortKey = Literal["created_at", "updated_at"]
+ThreadListCwdFilter = str | list[str]
 ThreadSourceKind = Literal[
     "cli",
     "vscode",
@@ -105,6 +106,7 @@ class ThreadInfo(WireModel):
     id: str
     session_id: str | None = None
     forked_from_id: str | None = None
+    parent_thread_id: str | None = None
     ephemeral: bool | None = None
     status: ThreadStatus | None = None
     cwd: str | None = None
@@ -138,6 +140,7 @@ class ThreadStartParams(WireModel):
 
 class ThreadResumeParams(WireModel):
     thread_id: str
+    exclude_turns: bool | None = None
 
 
 class ThreadForkParams(WireModel):
@@ -162,6 +165,13 @@ class ThreadSetNameParams(WireModel):
 class ThreadListParams(WireModel):
     limit: int = 50
     cursor: str | None = None
+    archived: bool | None = None
+    cwd: ThreadListCwdFilter | None = None
+    model_providers: list[str] | None = None
+    search_term: str | None = None
+    sort_direction: SortDirection | None = None
+    sort_key: ThreadSortKey | None = None
+    source_kinds: list[ThreadSourceKind] | None = None
     use_state_db_only: bool | None = None
 
 
@@ -268,6 +278,7 @@ class TurnStartParams(WireModel):
     effort: Effort | None = None
     summary: ReasoningSummary | None = None
     model: str | None = None
+    service_tier: str | None = None
     output_schema: dict[str, object] | None = None
     personality: Personality | None = None
 

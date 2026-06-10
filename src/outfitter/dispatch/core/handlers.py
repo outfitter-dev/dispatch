@@ -60,6 +60,7 @@ from .models import (
     LaneSyncResult,
     LaneSyncView,
     LaneTextInput,
+    LatestTurnView,
     LogInput,
     LogOutput,
     NewInput,
@@ -185,8 +186,19 @@ def _sync_view(sync: LaneSync | None) -> LaneSyncView:
     )
 
 
+def _latest_turn_view(lane: Lane) -> LatestTurnView:
+    return LatestTurnView(
+        id=lane.latest_turn_id,
+        status=lane.latest_turn_status,
+        error=lane.latest_error,
+        error_at=lane.latest_error_at.isoformat() if lane.latest_error_at else None,
+    )
+
+
 def _list_item(lane: Lane, sync: LaneSync | None) -> LaneListItem:
-    return LaneListItem(**_ref(lane).model_dump(), sync=_sync_view(sync))
+    return LaneListItem(
+        **_ref(lane).model_dump(), sync=_sync_view(sync), latest_turn=_latest_turn_view(lane)
+    )
 
 
 def _handle(name: str) -> str:
@@ -260,6 +272,13 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         ),
     )
     settings = resolved.settings
+    if inp.text is not None and inp.text.lstrip().startswith("/goal") and inp.goal is None:
+        raise ValidationError(
+            "`dispatch new --text` sends plain message text; slash commands are not "
+            "interpreted. Use `--goal` for a native dispatch/App Server goal."
+        )
+    if inp.goal is not None and settings.ephemeral:
+        raise ValidationError("native goals require non-ephemeral threads")
     sandbox = settings.sandbox or "read-only"
     approval_policy = settings.approval_policy or "never"
     thread = await ctx.client.thread_start(
@@ -284,7 +303,22 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
     except ClientError as exc:
         ctx.log.warning("lane.name_set_failed", lane=lane.id, error=str(exc))
 
-    sent = False
+    goal_set = False
+    if inp.goal is not None:
+        try:
+            await ctx.client.thread_goal_set(thread.id, objective=inp.goal)
+        except (DispatchError, ClientError) as exc:
+            await ctx.registry.log_action(
+                "goal-set",
+                lane=lane.id,
+                detail=inp.goal[:120],
+                outcome=project_error(exc).code,
+            )
+            raise
+        await ctx.registry.log_action("goal-set", lane=lane.id, detail=inp.goal[:120])
+        goal_set = True
+
+    message_accepted = False
     if settings.text is not None and inp.send:
         try:
             await ctx.client.turn_start(
@@ -297,10 +331,12 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
                 effort=settings.effort,
                 summary=settings.summary,
                 model=settings.model,
+                service_tier=settings.service_tier,
                 output_schema=settings.output_schema,
                 personality=settings.personality,
             )
         except (DispatchError, ClientError) as exc:
+            await ctx.registry.record_turn_request_failed(lane.id, str(exc))
             await ctx.registry.log_action(
                 "send",
                 lane=lane.id,
@@ -309,10 +345,15 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
             )
             raise
         await ctx.registry.log_action("send", lane=lane.id, detail=settings.text[:120])
-        sent = True
-    ctx.log.info("lane.new", lane=lane.id, handle=lane.handle, sent=sent)
+        message_accepted = True
+    ctx.log.info("lane.new", lane=lane.id, handle=lane.handle, message_accepted=message_accepted)
     ref = _ref(lane)
-    return NewLane(**ref.model_dump(), sent=sent)
+    return NewLane(
+        **ref.model_dump(),
+        message_accepted=message_accepted,
+        goal_set=goal_set,
+        latest_turn=_latest_turn_view(lane),
+    )
 
 
 def _turn_sandbox(sandbox: ThreadSandbox) -> SandboxPolicy:
@@ -464,7 +505,16 @@ def _metadata_sync(
 async def send(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
     lane = await _resolve(ctx, inp.lane)
     _require_writable(lane)
-    await ctx.client.turn_start(lane.id, inp.text, cwd=lane.cwd or ".", sandbox_policy=_READ_ONLY)
+    try:
+        await ctx.client.turn_start(
+            lane.id, inp.text, cwd=lane.cwd or ".", sandbox_policy=_READ_ONLY
+        )
+    except (DispatchError, ClientError) as exc:
+        await ctx.registry.record_turn_request_failed(lane.id, str(exc))
+        await ctx.registry.log_action(
+            "send", lane=lane.id, detail=inp.text[:120], outcome=project_error(exc).code
+        )
+        raise
     await ctx.registry.update_lane_status(lane.id, "busy")
     await ctx.registry.log_action("send", lane=lane.id, detail=inp.text[:120])
     return ActionAck(**_managed_identity(lane), op="send")
@@ -485,9 +535,16 @@ async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
             turn_id = _require_active_turn(lane, "interject")
             await ctx.client.turn_interrupt(lane.id, turn_id)
             await ctx.registry.log_action("interrupt", lane=lane.id, detail="interject")
-            await ctx.client.turn_start(
-                lane.id, text, cwd=lane.cwd or ".", sandbox_policy=_READ_ONLY
-            )
+            try:
+                await ctx.client.turn_start(
+                    lane.id, text, cwd=lane.cwd or ".", sandbox_policy=_READ_ONLY
+                )
+            except (DispatchError, ClientError) as exc:
+                await ctx.registry.record_turn_request_failed(lane.id, str(exc))
+                await ctx.registry.log_action(
+                    "send", lane=lane.id, detail=text[:120], outcome=project_error(exc).code
+                )
+                raise
             await ctx.registry.update_lane_status(lane.id, "busy")
             await ctx.registry.log_action("send", lane=lane.id, detail=text[:120])
             return ActionAck(**_managed_identity(lane), op="interject")
@@ -564,6 +621,7 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
         status=lane.status,
         cwd=lane.cwd,
         active_turn_id=lane.active_turn_id,
+        latest_turn=_latest_turn_view(lane),
         sync=_sync_view(sync),
         transcript=transcript,
     )
@@ -1069,7 +1127,13 @@ async def discover(inp: DiscoverInput, ctx: Ctx) -> Discovery:
     """List persisted Codex sessions (``thread/list``, state-db only) — read-only and
     distinct from ``roster``: these are candidates to ``attach``, not managed lanes.
     Discovery does not resume or register anything."""
-    threads = await ctx.client.thread_list(limit=inp.limit, use_state_db_only=True)
+    threads = await ctx.client.thread_list(
+        limit=inp.limit,
+        archived=False,
+        sort_direction="desc",
+        sort_key="updated_at",
+        use_state_db_only=True,
+    )
     return Discovery(sessions=[_session(thread) for thread in threads])
 
 

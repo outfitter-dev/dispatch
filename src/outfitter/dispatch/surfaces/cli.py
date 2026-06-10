@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import socket
+import sqlite3
 from functools import partial
 from pathlib import Path
 from typing import Annotated
@@ -15,6 +16,14 @@ import typer
 from outfitter.dispatch import config
 from outfitter.dispatch.contracts.derive_cli import derive_cli
 from outfitter.dispatch.version import package_version
+
+CLI_SURFACE_CONTROL_PATHS: tuple[tuple[str, ...], ...] = (
+    ("doctor",),
+    ("mcp",),
+    ("up",),
+    ("down",),
+    ("registry", "migrate"),
+)
 
 
 def _recv_line(sock: socket.socket) -> bytes:
@@ -127,7 +136,11 @@ def build_cli(socket_path: Path | None = None) -> typer.Typer:
 
     # `up`/`down` manage the daemon PROCESS (not ops, which run inside it).
     @app.command(name="up", help="Start the daemon (detached singleton).")
-    def _up() -> None:
+    def _up(
+        json_output: Annotated[
+            bool, typer.Option("--json/--text", help="Render machine-readable JSON output.")
+        ] = False,
+    ) -> None:
         from outfitter.dispatch.daemon import lifecycle
 
         config.ensure_base()
@@ -136,13 +149,150 @@ def build_cli(socket_path: Path | None = None) -> typer.Typer:
         except (RuntimeError, TimeoutError) as exc:
             typer.secho(f"dispatch: {exc}", fg="red", err=True)
             raise typer.Exit(code=1) from exc
-        typer.echo("dispatchd started" if started else "dispatchd already running")
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "status": "started" if started else "already_running",
+                        "started": started,
+                        "socket": str(path),
+                        "pidfile": str(config.pidfile_path()),
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            typer.echo("dispatchd started" if started else "dispatchd already running")
 
     @app.command(name="down", help="Stop the daemon.")
-    def _down() -> None:
+    def _down(
+        json_output: Annotated[
+            bool, typer.Option("--json/--text", help="Render machine-readable JSON output.")
+        ] = False,
+    ) -> None:
         from outfitter.dispatch.daemon import lifecycle
 
         stopped = lifecycle.stop_daemon(path, config.pidfile_path())
-        typer.echo("dispatchd stopped" if stopped else "dispatchd not running")
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "status": "stopped" if stopped else "not_running",
+                        "stopped": stopped,
+                        "socket": str(path),
+                        "pidfile": str(config.pidfile_path()),
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            typer.echo("dispatchd stopped" if stopped else "dispatchd not running")
+
+    registry = typer.Typer(no_args_is_help=True, add_completion=False)
+    app.add_typer(registry, name="registry")
+
+    @registry.command(name="migrate", help="Apply registry compatibility migrations safely.")
+    def _registry_migrate(
+        json_output: Annotated[
+            bool, typer.Option("--json/--text", help="Render machine-readable JSON output.")
+        ] = True,
+        backup: Annotated[
+            bool,
+            typer.Option(
+                "--backup/--no-backup",
+                help="Back up the registry before migrating.",
+            ),
+        ] = True,
+        allow_running: Annotated[
+            bool,
+            typer.Option(
+                "--allow-running",
+                help=(
+                    "Allow migration while dispatchd is reachable. "
+                    "Use only for controlled recovery."
+                ),
+            ),
+        ] = False,
+    ) -> None:
+        import asyncio
+        import shutil
+        from datetime import UTC, datetime
+
+        from outfitter.dispatch.daemon import lifecycle
+        from outfitter.dispatch.registry.store import SCHEMA_VERSION, Registry
+
+        config.ensure_base()
+        db = config.db_path()
+        running = lifecycle.is_daemon_up(path)
+        if running and not allow_running:
+            recovery = "Run `dispatch down`, then `dispatch registry migrate`, then `dispatch up`."
+            payload = {
+                "status": "blocked",
+                "migrated": False,
+                "reason": "daemon_running",
+                "recovery": recovery,
+                "db": str(db),
+            }
+            if json_output:
+                typer.echo(json.dumps(payload, indent=2))
+            else:
+                typer.secho(recovery, fg="red", err=True)
+            raise typer.Exit(code=8)
+
+        before = _registry_version(db)
+        backup_path: str | None = None
+        if backup and db.exists():
+            stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+            backup_file = db.with_name(f"{db.name}.bak-{stamp}")
+            shutil.copy2(db, backup_file)
+            backup_path = str(backup_file)
+
+        async def _migrate() -> None:
+            store = await Registry.open(db)
+            await store.close()
+
+        try:
+            asyncio.run(_migrate())
+        except RuntimeError as exc:
+            payload = {
+                "status": "failed",
+                "migrated": False,
+                "reason": str(exc),
+                "db": str(db),
+                "from_schema_version": before,
+                "to_schema_version": SCHEMA_VERSION,
+                "backup": backup_path,
+            }
+            if json_output:
+                typer.echo(json.dumps(payload, indent=2))
+            else:
+                typer.secho(f"dispatch: {exc}", fg="red", err=True)
+            raise typer.Exit(code=8) from exc
+
+        after = _registry_version(db)
+        payload = {
+            "status": "ok",
+            "migrated": before != after,
+            "db": str(db),
+            "from_schema_version": before,
+            "to_schema_version": after,
+            "backup": backup_path,
+            "daemon_running": running,
+        }
+        if json_output:
+            typer.echo(json.dumps(payload, indent=2))
+        else:
+            typer.echo(
+                f"registry schema {before if before is not None else 'none'} -> {after}; "
+                f"backup: {backup_path or 'none'}"
+            )
 
     return app
+
+
+def _registry_version(path: Path) -> int | None:
+    if not path.exists():
+        return None
+    with sqlite3.connect(path) as conn:
+        row = conn.execute("PRAGMA user_version").fetchone()
+    return int(row[0]) if row is not None else None

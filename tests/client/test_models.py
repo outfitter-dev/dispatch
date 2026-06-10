@@ -11,8 +11,10 @@ from outfitter.dispatch.client.models import (
     ThreadGoal,
     ThreadGoalSetParams,
     ThreadInfo,
+    ThreadListParams,
     ThreadListResult,
     ThreadReadParams,
+    ThreadResumeParams,
     ThreadRollbackParams,
     ThreadStartParams,
     TurnStartParams,
@@ -38,7 +40,7 @@ def test_thread_start_includes_rich_session_options() -> None:
         developer_instructions="dev",
         personality="pragmatic",
         service_tier="priority",
-        model="gpt-5-codex",
+        model="test-model",
         model_provider="openai",
     )
     dumped = params.model_dump(by_alias=True, exclude_none=True)
@@ -48,7 +50,7 @@ def test_thread_start_includes_rich_session_options() -> None:
     assert dumped["developerInstructions"] == "dev"
     assert dumped["personality"] == "pragmatic"
     assert dumped["serviceTier"] == "priority"
-    assert dumped["model"] == "gpt-5-codex"
+    assert dumped["model"] == "test-model"
     assert dumped["modelProvider"] == "openai"
 
 
@@ -79,7 +81,8 @@ def test_turn_start_includes_optional_overrides_when_set() -> None:
         approvals_reviewer="user",
         effort="xhigh",
         summary="concise",
-        model="gpt-5-codex",
+        model="test-model",
+        service_tier="priority",
         personality="friendly",
         output_schema={"type": "object"},
     )
@@ -87,7 +90,8 @@ def test_turn_start_includes_optional_overrides_when_set() -> None:
     assert dumped["approvalsReviewer"] == "user"
     assert dumped["effort"] == "xhigh"
     assert dumped["summary"] == "concise"
-    assert dumped["model"] == "gpt-5-codex"
+    assert dumped["model"] == "test-model"
+    assert dumped["serviceTier"] == "priority"
     assert dumped["personality"] == "friendly"
     assert dumped["outputSchema"] == {"type": "object"}
 
@@ -106,11 +110,44 @@ def test_thread_list_result_reads_data_key() -> None:
     assert result.next_cursor == "c1"
 
 
+def test_thread_list_params_include_current_native_filters() -> None:
+    params = ThreadListParams(
+        limit=25,
+        archived=False,
+        cwd=["/repo", "/other"],
+        search_term="schema drift",
+        sort_direction="desc",
+        sort_key="updated_at",
+        source_kinds=["cli", "appServer"],
+        use_state_db_only=True,
+    )
+    dumped = params.model_dump(by_alias=True, exclude_none=True)
+    assert dumped == {
+        "limit": 25,
+        "archived": False,
+        "cwd": ["/repo", "/other"],
+        "searchTerm": "schema drift",
+        "sortDirection": "desc",
+        "sortKey": "updated_at",
+        "sourceKinds": ["cli", "appServer"],
+        "useStateDbOnly": True,
+    }
+
+
+def test_thread_resume_can_request_low_hydration_subscription() -> None:
+    params = ThreadResumeParams(thread_id="t1", exclude_turns=True)
+    assert params.model_dump(by_alias=True, exclude_none=True) == {
+        "threadId": "t1",
+        "excludeTurns": True,
+    }
+
+
 def test_thread_info_keeps_sync_metadata_fields() -> None:
     thread = ThreadInfo.model_validate(
         {
             "id": "t1",
             "sessionId": "t1",
+            "parentThreadId": "parent",
             "path": "/tmp/rollout.jsonl",
             "modelProvider": "openai",
             "threadSource": "user",
@@ -119,6 +156,7 @@ def test_thread_info_keeps_sync_metadata_fields() -> None:
     )
 
     assert thread.session_id == "t1"
+    assert thread.parent_thread_id == "parent"
     assert thread.path == "/tmp/rollout.jsonl"
     assert thread.model_provider == "openai"
     assert thread.thread_source == "user"
@@ -162,7 +200,7 @@ def test_thread_fork_rollback_and_compact_params() -> None:
         cwd="/w",
         sandbox="workspace-write",
         approval_policy="on-request",
-        model="gpt-5-codex",
+        model="test-model",
         ephemeral=True,
     )
     assert fork.model_dump(by_alias=True, exclude_none=True) == {
@@ -170,7 +208,7 @@ def test_thread_fork_rollback_and_compact_params() -> None:
         "cwd": "/w",
         "sandbox": "workspace-write",
         "approvalPolicy": "on-request",
-        "model": "gpt-5-codex",
+        "model": "test-model",
         "ephemeral": True,
     }
     assert ThreadRollbackParams(thread_id="t1", num_turns=2).model_dump(

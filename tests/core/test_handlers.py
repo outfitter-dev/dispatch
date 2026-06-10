@@ -11,6 +11,7 @@ import pytest_asyncio
 
 from outfitter.dispatch.client.errors import AppServerError as ClientAppServerError
 from outfitter.dispatch.client.errors import TransportError
+from outfitter.dispatch.client.events import LaneIdle, TurnFailed, TurnStarted
 from outfitter.dispatch.client.models import (
     ThreadGoal,
     ThreadInfo,
@@ -50,6 +51,8 @@ from outfitter.dispatch.core.models import (
     TranscriptInput,
     WatchInput,
 )
+from outfitter.dispatch.core.reactor import Reactor
+from outfitter.dispatch.core.triggers import TriggerRunner
 from outfitter.dispatch.registry.store import Registry
 from tests.fakes import FakeLaneClient, make_ctx
 
@@ -89,19 +92,22 @@ async def test_new_lane_sets_name_and_sends_initial_turn(store: Registry, tmp_pa
             sandbox="workspace-write",
             approval_policy="on-request",
             effort="low",
-            model="gpt-5-codex",
+            model="test-model",
+            service_tier="priority",
             developer_instructions="stay focused",
         ),
         ctx,
     )
 
     assert out.handle == "@[dispatch] builder"
-    assert out.sent is True
+    assert out.message_accepted is True
+    assert out.goal_set is False
+    assert out.latest_turn.status is None
     assert any(
         name == "thread_start"
         and kw["sandbox"] == "workspace-write"
         and kw["approval_policy"] == "on-request"
-        and kw["model"] == "gpt-5-codex"
+        and kw["model"] == "test-model"
         and kw["developer_instructions"] == "stay focused"
         for name, kw in client.calls
     )
@@ -114,6 +120,7 @@ async def test_new_lane_sets_name_and_sends_initial_turn(store: Registry, tmp_pa
         and kw["text"] == "start"
         and kw["sandbox_policy"] == {"type": "workspaceWrite"}
         and kw["effort"] == "low"
+        and kw["service_tier"] == "priority"
         for name, kw in client.calls
     )
 
@@ -126,9 +133,45 @@ async def test_new_lane_no_send_registers_without_turn(store: Registry, tmp_path
         NewInput(name="idle", cwd=str(tmp_path), text="do not send", send=False), ctx
     )
 
-    assert out.sent is False
+    assert out.message_accepted is False
     assert (await store.find_lane("lane-1")) is not None
     assert not any(name == "turn_start" for name, _ in client.calls)
+
+
+async def test_new_lane_sets_native_goal_before_initial_turn(
+    store: Registry, tmp_path: Path
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.new_lane(
+        NewInput(name="goal-worker", cwd=str(tmp_path), goal="Loop until green.", text="Begin."),
+        ctx,
+    )
+
+    assert out.goal_set is True
+    assert out.message_accepted is True
+    goal_index = [name for name, _ in client.calls].index("thread_goal_set")
+    turn_index = [name for name, _ in client.calls].index("turn_start")
+    assert goal_index < turn_index
+    assert any(
+        name == "thread_goal_set" and kw["objective"] == "Loop until green."
+        for name, kw in client.calls
+    )
+
+
+async def test_new_lane_rejects_goal_slash_command_text_without_native_goal(
+    store: Registry, tmp_path: Path
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    with pytest.raises(ValidationError, match="slash commands are not interpreted"):
+        await handlers.new_lane(
+            NewInput(name="bad-goal", cwd=str(tmp_path), text="/goal ship"), ctx
+        )
+
+    assert not client.calls
 
 
 class _FailingTurnClient(FakeLaneClient):
@@ -148,6 +191,10 @@ async def test_new_lane_initial_send_failure_leaves_lane_registered(
 
     lane = await store.find_lane("lane-1")
     assert lane is not None
+    assert lane.status == "error"
+    assert lane.latest_turn_id is None
+    assert lane.latest_turn_status == "failed"
+    assert lane.latest_error == "boom"
     log = await handlers.show_log(LogInput(limit=10), ctx)
     send_records = [record for record in log.actions if record.op == "send"]
     assert send_records
@@ -162,6 +209,21 @@ async def test_send_resolves_by_handle(store: Registry) -> None:
     assert ack.lane == "lane-1"
     by_ref = await handlers.send(LaneTextInput(lane=ref.ref, text="again"), ctx)
     assert by_ref.lane == "lane-1"
+
+
+async def test_send_failure_marks_latest_turn_error(store: Registry) -> None:
+    client = _FailingTurnClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="beta"), ctx)
+
+    with pytest.raises(TransportError):
+        await handlers.send(LaneTextInput(lane="@beta", text="boom"), ctx)
+
+    detail = await handlers.show(ShowInput(lane="@beta"), ctx)
+    assert detail.status == "error"
+    assert detail.latest_turn.id is None
+    assert detail.latest_turn.status == "failed"
+    assert detail.latest_turn.error == "boom"
 
 
 async def test_send_modes_context_and_interject(store: Registry) -> None:
@@ -422,6 +484,22 @@ async def test_watch_zero_timeout_returns_immediately(store: Registry) -> None:
 
     assert out.events == []
     assert out.timed_out is True
+
+
+async def test_reactor_persists_turn_failure_for_get(store: Registry) -> None:
+    ctx = make_ctx(store)
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+    reactor = Reactor(ctx, runner=TriggerRunner(ctx, now=lambda: store._now()))
+
+    await reactor.handle(TurnStarted("lane-1", "turn-1"))
+    await reactor.handle(TurnFailed("lane-1", "turn-1", "unsupported model"))
+    await reactor.handle(LaneIdle("lane-1"))
+
+    out = await handlers.show(ShowInput(lane="lane-1"), ctx)
+    assert out.status == "error"
+    assert out.latest_turn.id == "turn-1"
+    assert out.latest_turn.status == "failed"
+    assert out.latest_turn.error == "unsupported model"
 
 
 async def test_goal_get_set_and_clear_use_native_goal_api(store: Registry) -> None:
@@ -818,7 +896,7 @@ async def test_attach_with_sync_indexes_jsonl_and_roster_reports_state(
                 '"payload":{"id":"T9","cwd":"/work","source":"vscode",'
                 '"thread_source":"user","model_provider":"openai"}}',
                 '{"type":"turn_context","timestamp":"2026-06-05T10:00:01.000Z",'
-                '"payload":{"model":"gpt-5-codex","effort":"low"}}',
+                '"payload":{"model":"test-model","effort":"low"}}',
                 '{"type":"event_msg","timestamp":"2026-06-05T10:00:02.000Z",'
                 '"payload":{"type":"task_complete","turn_id":"turn-1"}}',
             ]
@@ -900,7 +978,12 @@ async def test_discover_lists_persisted_sessions_from_client(store: Registry) ->
     # Discovery reads through to the client's thread_list with the requested limit
     # AND state-db only — the latter is what keeps it read-only (no live resume).
     assert any(
-        name == "thread_list" and kw["limit"] == 10 and kw["use_state_db_only"] is True
+        name == "thread_list"
+        and kw["limit"] == 10
+        and kw["archived"] is False
+        and kw["sort_direction"] == "desc"
+        and kw["sort_key"] == "updated_at"
+        and kw["use_state_db_only"] is True
         for name, kw in client.calls
     )
     # ...and registers nothing (pure read; lane authority untouched).

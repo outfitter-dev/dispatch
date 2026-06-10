@@ -93,7 +93,15 @@ def test_new_command_maps_repeated_presets_and_no_send() -> None:
     def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
         captured["op"] = op_id
         captured["params"] = params
-        return {"id": "L1", "handle": "@x", "source": "own", "status": "idle", "sent": False}
+        return {
+            "id": "L1",
+            "handle": "@x",
+            "source": "own",
+            "status": "idle",
+            "message_accepted": False,
+            "goal_set": False,
+            "latest_turn": {"id": None, "status": None, "error": None, "error_at": None},
+        }
 
     app = derive_cli(REGISTRY, invoke)
     result = runner.invoke(
@@ -273,6 +281,29 @@ def test_lane_archive_prompts_for_confirmation() -> None:
     assert declined.exit_code != 0
     confirmed = runner.invoke(app, ["archive", "L1"], input="y\n")
     assert confirmed.exit_code == 0
+
+
+def test_destroy_ops_support_explicit_noninteractive_confirmation() -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        calls.append((op_id, params))
+        return {
+            "id": "L1",
+            "handle": "@x",
+            "managed": True,
+            "source": "own",
+            "status": "archived",
+        }
+
+    app = derive_cli(REGISTRY, invoke)
+    refused = runner.invoke(app, ["archive", "L1", "--no-interactive", "--json"])
+    confirmed = runner.invoke(app, ["archive", "L1", "--yes", "--no-interactive", "--json"])
+
+    assert refused.exit_code == 2
+    assert "requires --yes" in refused.stderr
+    assert confirmed.exit_code == 0
+    assert calls == [("archive", {"target": "L1"})]
 
 
 def test_json_destroy_prompt_does_not_pollute_stdout() -> None:

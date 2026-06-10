@@ -16,7 +16,12 @@ from outfitter.dispatch.client.models import (
     ThreadGoalStatus,
     ThreadSandbox,
 )
-from outfitter.dispatch.registry.models import LaneSource, LaneStatus, SyncState
+from outfitter.dispatch.registry.models import (
+    LaneSource,
+    LaneStatus,
+    SyncState,
+    TurnRuntimeStatus,
+)
 
 # --- inputs -------------------------------------------------------------------
 
@@ -47,6 +52,10 @@ class NewInput(BaseModel):
     name: str = Field(description="Thread title; prefix/presets may decorate it.")
     preset: list[str] = Field(
         default_factory=list, description="Preset(s) to apply, left to right."
+    )
+    goal: str | None = Field(
+        default=None,
+        description="Native App Server goal objective to create before the initial message.",
     )
     text: str | None = Field(default=None, description="Initial message text.")
     send: bool = Field(default=True, description="Send the initial message when text is present.")
@@ -280,16 +289,33 @@ class LaneSyncView(BaseModel):
     error: str | None = None
 
 
+class LatestTurnView(BaseModel):
+    id: str | None = Field(default=None, description="Latest observed App Server turn id.")
+    status: TurnRuntimeStatus | None = Field(
+        default=None, description="Latest observed turn runtime status."
+    )
+    error: str | None = Field(default=None, description="Latest App Server turn error text.")
+    error_at: str | None = Field(default=None, description="When the latest turn error occurred.")
+
+
 class LaneListItem(LaneRef):
     sync: LaneSyncView = Field(default_factory=LaneSyncView)
+    latest_turn: LatestTurnView = Field(default_factory=LatestTurnView)
 
 
 class NewLane(LaneRef):
-    sent: bool
+    message_accepted: bool = Field(
+        description="Whether the App Server accepted the initial message request."
+    )
+    goal_set: bool = Field(
+        default=False, description="Whether a native App Server goal was set before launch."
+    )
+    latest_turn: LatestTurnView = Field(default_factory=LatestTurnView)
 
 
 class LaneDetail(LaneRef):
     active_turn_id: str | None = None
+    latest_turn: LatestTurnView = Field(default_factory=LatestTurnView)
     sync: LaneSyncView = Field(default_factory=LaneSyncView)
     transcript: list[TranscriptItem] = Field(default_factory=list)
 
