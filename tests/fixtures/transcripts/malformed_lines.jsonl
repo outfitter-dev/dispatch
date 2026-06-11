@@ -1,0 +1,6 @@
+not json
+{"type":"session_meta","timestamp":"2026-06-11T12:00:00.000Z","payload":{"id":"019f0000-0000-7000-9000-000000000099","cwd":"/fixture/malformed","source":"cli","thread_source":"user","model_provider":"openai"}}
+[]
+{"type":"turn_context","timestamp":"2026-06-11T12:00:01.000Z","payload":{"cwd":"/fixture/malformed","model":"gpt-5.3-codex-spark","effort":"low"}}
+{"type":"event_msg","timestamp":"2026-06-11T12:00:02.000Z","payload":{"type":"task_complete","turn_id":"turn-malformed"}}
+{"type": "event_msg"

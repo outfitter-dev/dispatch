@@ -1,0 +1,31 @@
+{
+  "thread": {
+    "id": "019f0000-0000-7000-9000-000000000001",
+    "sessionId": "019f0000-0000-7000-9000-000000000001",
+    "name": "[dispatch] fixture",
+    "cwd": "/fixture/repo",
+    "modelProvider": "openai",
+    "model": "gpt-5.5",
+    "reasoningEffort": "xhigh",
+    "serviceTier": "priority",
+    "turns": [
+      {
+        "id": "turn-1",
+        "status": "completed",
+        "items": [
+          {
+            "id": "item-user-1",
+            "type": "userMessage",
+            "text": "Summarize the fixture."
+          },
+          {
+            "id": "item-agent-1",
+            "type": "agentMessage",
+            "text": "Fixture summary."
+          }
+        ]
+      }
+    ]
+  }
+}
+

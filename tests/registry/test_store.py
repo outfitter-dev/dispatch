@@ -11,14 +11,10 @@ import pytest
 import pytest_asyncio
 
 from outfitter.dispatch.contracts.errors import NotFoundError
-from outfitter.dispatch.registry.models import (
-    LaneModelSettings,
-    LaneSync,
-    ModelCatalogEntry,
-    ServiceTierEntry,
-)
+from outfitter.dispatch.registry.models import LaneSync
 from outfitter.dispatch.registry.refs import BASE58BTC_ALPHABET, codex_ref_payload
 from outfitter.dispatch.registry.store import SCHEMA_VERSION, Registry
+from tests.fixtures.registry.builders import lane_model_settings, model_catalog_entry
 
 
 def _clock() -> datetime:
@@ -236,26 +232,7 @@ async def test_migrates_v3_registry_with_runtime_columns(tmp_path: Path) -> None
 
 async def test_model_catalog_and_lane_model_settings_roundtrip(store: Registry) -> None:
     now = store.now_iso()
-    entry = ModelCatalogEntry(
-        id="gpt-5.5",
-        provider="openai",
-        display_name="GPT-5.5",
-        is_default=True,
-        hidden=False,
-        default_reasoning_effort="xhigh",
-        supported_reasoning_efforts=["low", "xhigh"],
-        default_service_tier="priority",
-        service_tiers=[
-            ServiceTierEntry(
-                id="priority",
-                name="Fast",
-                description="1.5x speed, increased usage",
-            )
-        ],
-        additional_speed_tiers=["fast"],
-        first_seen_at=now,
-        last_seen_at=now,
-    )
+    entry = model_catalog_entry(now=now)
     await store.upsert_model_catalog([entry])
     refreshed = entry.model_copy(update={"last_seen_at": "2026-06-03T12:05:00+00:00"})
     await store.upsert_model_catalog([refreshed])
@@ -265,17 +242,7 @@ async def test_model_catalog_and_lane_model_settings_roundtrip(store: Registry) 
     assert await store.list_model_catalog() == [got]
 
     lane = await store.add_lane(id="L1", handle="@alpha", source="own")
-    settings = LaneModelSettings(
-        lane=lane.id,
-        model_provider="openai",
-        model="gpt-5.5",
-        reasoning_effort="xhigh",
-        requested_service_tier="fast",
-        resolved_service_tier="priority",
-        service_tier_name="Fast",
-        service_tier_source="dispatch",
-        updated_at=now,
-    )
+    settings = lane_model_settings(lane=lane.id, updated_at=now)
     await store.upsert_lane_model_settings(settings)
 
     assert await store.get_lane_model_settings(lane.id) == settings

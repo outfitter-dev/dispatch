@@ -1,0 +1,9 @@
+{
+  "config": {
+    "model": "gpt-5.5",
+    "modelProvider": "openai",
+    "serviceTier": "fast",
+    "modelReasoningEffort": "xhigh"
+  }
+}
+

@@ -1,0 +1,26 @@
+{
+  "data": [
+    {
+      "id": "019f0000-0000-7000-9000-000000000001",
+      "sessionId": "019f0000-0000-7000-9000-000000000001",
+      "name": "[dispatch] fixture",
+      "status": {
+        "type": "idle",
+        "activeFlags": []
+      },
+      "cwd": "/fixture/repo",
+      "path": "/tmp/dispatch-fixture.jsonl",
+      "preview": "Fixture thread preview",
+      "source": "appServer",
+      "threadSource": "user",
+      "modelProvider": "openai",
+      "model": "gpt-5.5",
+      "reasoningEffort": "xhigh",
+      "serviceTier": "priority",
+      "createdAt": 1781190000,
+      "updatedAt": 1781190300
+    }
+  ],
+  "nextCursor": "cursor-1"
+}
+

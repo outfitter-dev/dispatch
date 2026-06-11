@@ -18,6 +18,10 @@ test *args:
 test-int *args:
     uv run pytest -m integration {{args}}
 
+# Smoke-test the published PyPI package from a clean temporary DISPATCH_HOME.
+pypi-smoke *args:
+    uv run python scripts/check_pypi_smoke.py {{args}}
+
 # Lint with ruff.
 lint:
     uv run ruff check .

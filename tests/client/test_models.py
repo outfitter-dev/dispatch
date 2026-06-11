@@ -24,6 +24,7 @@ from outfitter.dispatch.client.models import (
     TurnStartParams,
     TurnSteerParams,
 )
+from tests.fixtures import load_json
 
 
 def test_thread_start_sandbox_is_string_enum() -> None:
@@ -185,52 +186,42 @@ def test_thread_info_keeps_observed_model_service_tier() -> None:
 
 
 def test_config_and_model_catalog_wire_models_accept_camel_case() -> None:
-    config = ConfigInfo.model_validate(
-        {
-            "model": "gpt-5.5",
-            "modelProvider": "openai",
-            "serviceTier": "priority",
-            "modelReasoningEffort": "xhigh",
-        }
-    )
-    catalog = ModelListResult.model_validate(
-        {
-            "data": [
-                {
-                    "id": "gpt-5.5",
-                    "displayName": "GPT-5.5",
-                    "defaultReasoningEffort": "xhigh",
-                    "supportedReasoningEfforts": [
-                        {"reasoningEffort": "low", "description": "faster"},
-                        {"reasoningEffort": "xhigh", "description": "deeper"},
-                    ],
-                    "serviceTiers": [
-                        {
-                            "id": "priority",
-                            "name": "Fast",
-                            "description": "1.5x speed, increased usage",
-                        }
-                    ],
-                    "additionalSpeedTiers": ["fast"],
-                }
-            ]
-        }
-    )
+    config_payload = load_json("app_server", "config_read", "current.json")["config"]
+    config = ConfigInfo.model_validate(config_payload)
+    catalog = ModelListResult.model_validate(load_json("app_server", "model_list", "current.json"))
 
     assert config.model_provider == "openai"
+    assert config.service_tier == "fast"
+    assert catalog.data[0] == AppModel(
+        id="gpt-5.5",
+        model="gpt-5.5",
+        display_name="GPT-5.5",
+        description="Frontier model for complex coding, research, and real-world work.",
+        is_default=True,
+        hidden=False,
+        default_reasoning_effort="medium",
+        supported_reasoning_efforts=["low", "medium", "high", "xhigh"],
+        service_tiers=[
+            ModelServiceTier(
+                id="priority",
+                name="Fast",
+                description="1.5x speed, increased usage",
+            )
+        ],
+    )
+
+
+def test_legacy_model_catalog_fixture_keeps_speed_tier_fallback() -> None:
+    catalog = ModelListResult.model_validate(
+        load_json("app_server", "model_list", "legacy_additional_speed_tiers.json")
+    )
+
     assert catalog.data == [
         AppModel(
-            id="gpt-5.5",
-            display_name="GPT-5.5",
-            default_reasoning_effort="xhigh",
-            supported_reasoning_efforts=["low", "xhigh"],
-            service_tiers=[
-                ModelServiceTier(
-                    id="priority",
-                    name="Fast",
-                    description="1.5x speed, increased usage",
-                )
-            ],
+            id="legacy-fast-model",
+            display_name="Legacy Fast Model",
+            default_reasoning_effort="medium",
+            supported_reasoning_efforts=["low", "medium"],
             additional_speed_tiers=["fast"],
         )
     ]
