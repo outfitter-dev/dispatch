@@ -39,6 +39,7 @@ from outfitter.dispatch.core.models import (
     LaneSyncInput,
     LaneTextInput,
     LogInput,
+    ModelsInput,
     NewInput,
     OpenInput,
     RollbackInput,
@@ -92,7 +93,7 @@ async def test_new_lane_sets_name_and_sends_initial_turn(store: Registry, tmp_pa
             sandbox="workspace-write",
             approval_policy="on-request",
             effort="low",
-            model="test-model",
+            model="gpt-5.5",
             service_tier="priority",
             developer_instructions="stay focused",
         ),
@@ -107,7 +108,7 @@ async def test_new_lane_sets_name_and_sends_initial_turn(store: Registry, tmp_pa
         name == "thread_start"
         and kw["sandbox"] == "workspace-write"
         and kw["approval_policy"] == "on-request"
-        and kw["model"] == "test-model"
+        and kw["model"] == "gpt-5.5"
         and kw["developer_instructions"] == "stay focused"
         for name, kw in client.calls
     )
@@ -123,6 +124,96 @@ async def test_new_lane_sets_name_and_sends_initial_turn(store: Registry, tmp_pa
         and kw["service_tier"] == "priority"
         for name, kw in client.calls
     )
+
+
+async def test_new_lane_resolves_fast_service_tier_alias_and_records_provenance(
+    store: Registry, tmp_path: Path
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.new_lane(
+        NewInput(
+            name="fast-worker",
+            cwd=str(tmp_path),
+            text="start",
+            model="gpt-5.5",
+            service_tier="fast",
+        ),
+        ctx,
+    )
+
+    assert out.model.model == "gpt-5.5"
+    assert out.model.service_tier.requested == "fast"
+    assert out.model.service_tier.resolved == "priority"
+    assert out.model.service_tier.name == "Fast"
+    assert out.model.service_tier.source == "dispatch"
+    assert any(
+        name == "thread_start" and kw["service_tier"] == "priority" for name, kw in client.calls
+    )
+    assert any(
+        name == "turn_start" and kw["service_tier"] == "priority" for name, kw in client.calls
+    )
+    stored = await store.get_lane_model_settings(out.id)
+    assert stored is not None
+    assert stored.requested_service_tier == "fast"
+    assert stored.resolved_service_tier == "priority"
+    assert stored.service_tier_source == "dispatch"
+
+
+async def test_new_lane_without_model_override_preserves_codex_default_call_shape(
+    store: Registry, tmp_path: Path
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.new_lane(
+        NewInput(name="default-worker", cwd=str(tmp_path), send=False), ctx
+    )
+
+    assert out.model.model == "gpt-5.5"
+    assert out.model.service_tier.source == "unknown"
+    call = next(kw for name, kw in client.calls if name == "thread_start")
+    assert call["model"] is None
+    assert call["model_provider"] is None
+    assert call["service_tier"] is None
+
+
+async def test_new_lane_rejects_unadvertised_service_tier_with_catalog_guidance(
+    store: Registry, tmp_path: Path
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    with pytest.raises(ValidationError, match="available service tiers: auto, default"):
+        await handlers.new_lane(
+            NewInput(
+                name="spark",
+                cwd=str(tmp_path),
+                model="gpt-5.3-codex-spark",
+                service_tier="fast",
+                send=False,
+            ),
+            ctx,
+        )
+
+
+async def test_models_refreshes_catalog_and_reports_fast_alias(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    refreshed = await handlers.models(ModelsInput(), ctx)
+    cached = await handlers.models(ModelsInput(refresh=False), ctx)
+
+    assert refreshed.source == "app-server"
+    assert refreshed.configured_default.model == "gpt-5.5"
+    assert refreshed.models[0].id == "gpt-5.5"
+    assert refreshed.models[0].aliases == {"fast": "priority"}
+    assert refreshed.models[0].service_tiers[0].id == "priority"
+    assert cached.source == "registry"
+    cached_by_id = {model.id: model for model in cached.models}
+    assert cached_by_id["gpt-5.5"].aliases == {"fast": "priority"}
+    assert [name for name, _ in client.calls].count("model_list") == 1
 
 
 async def test_new_lane_no_send_registers_without_turn(store: Registry, tmp_path: Path) -> None:
@@ -914,6 +1005,7 @@ async def test_attach_with_sync_indexes_jsonl_and_roster_reports_state(
             "path": str(path),
             "sessionId": "T9",
             "modelProvider": "openai",
+            "serviceTier": "priority",
         }
     }
     ctx = make_ctx(store, client)
@@ -926,8 +1018,19 @@ async def test_attach_with_sync_indexes_jsonl_and_roster_reports_state(
     assert detail.sync.state == "partial"
     assert detail.sync.latest_turn_id == "turn-1"
     assert detail.sync.source_size == path.stat().st_size
+    assert detail.model.model == "test-model"
+    assert detail.model.service_tier.resolved == "priority"
+    assert detail.model.service_tier.source == "observed"
     assert roster.lanes[0].sync.state == "partial"
     assert roster.lanes[0].sync.latest_event_at == "2026-06-05T10:00:02.000Z"
+    assert roster.lanes[0].model.model == "test-model"
+    stored = await store.get_lane_model_settings("T9")
+    assert stored is not None
+    assert stored.model_provider == "openai"
+    assert stored.model == "test-model"
+    assert stored.reasoning_effort == "low"
+    assert stored.resolved_service_tier == "priority"
+    assert stored.service_tier_source == "observed"
     assert sum(1 for name, _ in client.calls if name == "thread_read") == 1
     assert not any(name == "thread_resume" for name, _ in client.calls)
 
@@ -938,7 +1041,16 @@ async def test_lane_sync_can_full_scan_existing_lane(store: Registry, tmp_path: 
         '{"type":"session_meta","timestamp":"2026-06-05T10:00:00.000Z","payload":{"id":"T9"}}\n'
     )
     client = FakeLaneClient()
-    client.read_result = {"thread": {"id": "T9", "path": str(path)}}
+    client.read_result = {
+        "thread": {
+            "id": "T9",
+            "path": str(path),
+            "modelProvider": "openai",
+            "model": "gpt-5.5",
+            "reasoningEffort": "xhigh",
+            "serviceTier": "priority",
+        }
+    }
     ctx = make_ctx(store, client)
     await store.add_lane(id="T9", handle="@desktop", source="attached")
 
@@ -947,6 +1059,9 @@ async def test_lane_sync_can_full_scan_existing_lane(store: Registry, tmp_path: 
     assert out.lane == "T9"
     assert out.sync.state == "complete"
     assert out.sync.transcript_partial is False
+    assert out.model.model == "gpt-5.5"
+    assert out.model.service_tier.resolved == "priority"
+    assert out.model.service_tier.source == "observed"
     assert any(name == "thread_read" for name, _ in client.calls)
 
 
@@ -961,6 +1076,10 @@ async def test_discover_lists_persisted_sessions_from_client(store: Registry) ->
             source="cli",
             ephemeral=False,
             status=ThreadStatus(type="idle"),
+            model_provider="openai",
+            model="gpt-5.5",
+            reasoning_effort="xhigh",
+            service_tier="priority",
         ),
         ThreadInfo(id="t2"),  # sparse row: only an id
     ]
@@ -975,6 +1094,9 @@ async def test_discover_lists_persisted_sessions_from_client(store: Registry) ->
     assert first.cwd == "/work"
     assert first.source == "cli"
     assert first.ephemeral is False
+    assert first.model.model == "gpt-5.5"
+    assert first.model.service_tier.resolved == "priority"
+    assert first.model.service_tier.source == "observed"
     # Discovery reads through to the client's thread_list with the requested limit
     # AND state-db only — the latter is what keeps it read-only (no live resume).
     assert any(

@@ -19,6 +19,7 @@ from outfitter.dispatch.client.models import (
 from outfitter.dispatch.registry.models import (
     LaneSource,
     LaneStatus,
+    ServiceTierSource,
     SyncState,
     TurnRuntimeStatus,
 )
@@ -238,6 +239,13 @@ class DiscoverInput(BaseModel):
     limit: int = Field(default=50, ge=1, description="Max persisted Codex sessions to list.")
 
 
+class ModelsInput(BaseModel):
+    refresh: bool = Field(
+        default=True, description="Refresh from the Codex App Server before returning the catalog."
+    )
+    include_hidden: bool = Field(default=False, description="Include hidden model catalog rows.")
+
+
 # --- outputs ------------------------------------------------------------------
 
 
@@ -298,9 +306,24 @@ class LatestTurnView(BaseModel):
     error_at: str | None = Field(default=None, description="When the latest turn error occurred.")
 
 
+class ServiceTierView(BaseModel):
+    requested: str | None = None
+    resolved: str | None = None
+    name: str | None = None
+    source: ServiceTierSource = "unknown"
+
+
+class ThreadModelView(BaseModel):
+    provider: str | None = None
+    model: str | None = None
+    reasoning_effort: str | None = None
+    service_tier: ServiceTierView = Field(default_factory=ServiceTierView)
+
+
 class LaneListItem(LaneRef):
     sync: LaneSyncView = Field(default_factory=LaneSyncView)
     latest_turn: LatestTurnView = Field(default_factory=LatestTurnView)
+    model: ThreadModelView = Field(default_factory=ThreadModelView)
 
 
 class NewLane(LaneRef):
@@ -311,12 +334,14 @@ class NewLane(LaneRef):
         default=False, description="Whether a native App Server goal was set before launch."
     )
     latest_turn: LatestTurnView = Field(default_factory=LatestTurnView)
+    model: ThreadModelView = Field(default_factory=ThreadModelView)
 
 
 class LaneDetail(LaneRef):
     active_turn_id: str | None = None
     latest_turn: LatestTurnView = Field(default_factory=LatestTurnView)
     sync: LaneSyncView = Field(default_factory=LaneSyncView)
+    model: ThreadModelView = Field(default_factory=ThreadModelView)
     transcript: list[TranscriptItem] = Field(default_factory=list)
 
 
@@ -365,6 +390,7 @@ class ActionAck(ManagedThreadIdentity):
 
 class LaneSyncResult(ManagedThreadIdentity):
     sync: LaneSyncView
+    model: ThreadModelView = Field(default_factory=ThreadModelView)
 
 
 class Roster(BaseModel):
@@ -382,6 +408,7 @@ class DiscoveredSession(BaseModel):
     status: str | None = None
     source: str | None = None
     ephemeral: bool | None = None
+    model: ThreadModelView = Field(default_factory=ThreadModelView)
 
 
 class Discovery(BaseModel):
@@ -409,6 +436,41 @@ class SearchOutput(BaseModel):
     scanned: int
     next_cursor: str | None = None
     experimental: bool = True
+
+
+class ModelServiceTierView(BaseModel):
+    id: str
+    name: str
+    description: str
+
+
+class ModelCatalogItem(BaseModel):
+    id: str
+    provider: str
+    display_name: str | None = None
+    description: str | None = None
+    is_default: bool | None = None
+    hidden: bool | None = None
+    default_reasoning_effort: str | None = None
+    supported_reasoning_efforts: list[str] = Field(default_factory=list)
+    default_service_tier: str | None = None
+    service_tiers: list[ModelServiceTierView] = Field(default_factory=list)
+    aliases: dict[str, str] = Field(default_factory=dict)
+    last_seen_at: str
+
+
+class ModelConfigView(BaseModel):
+    model: str | None = None
+    model_provider: str | None = None
+    service_tier: str | None = None
+    model_reasoning_effort: str | None = None
+
+
+class ModelCatalogOutput(BaseModel):
+    refreshed_at: str | None = None
+    source: str
+    configured_default: ModelConfigView
+    models: list[ModelCatalogItem]
 
 
 # --- trigger ops --------------------------------------------------------------

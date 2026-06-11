@@ -67,3 +67,12 @@ def test_action_schema_and_annotations_from_op() -> None:
         "rollback",
         "goal_clear",
     }
+
+    daemon_read = tools["dispatch_daemon_read"]
+    assert daemon_read.annotations is not None
+    assert daemon_read.annotations.readOnlyHint is True
+    assert {s["properties"]["op"]["const"] for s in daemon_read.inputSchema["oneOf"]} >= {
+        "status",
+        "log",
+        "models",
+    }

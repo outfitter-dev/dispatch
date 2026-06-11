@@ -12,6 +12,42 @@ LaneStatus = Literal["idle", "busy", "waiting_approval", "archived", "error", "u
 TurnRuntimeStatus = Literal["started", "completed", "failed"]
 SyncState = Literal["unknown", "metadata", "partial", "complete", "error"]
 QueuedMessageStatus = Literal["pending", "sending", "sent", "error"]
+ServiceTierSource = Literal["dispatch", "configured_default", "observed", "unknown"]
+
+
+class ServiceTierEntry(BaseModel):
+    id: str
+    name: str
+    description: str
+
+
+class ModelCatalogEntry(BaseModel):
+    id: str
+    provider: str = "openai"
+    display_name: str | None = None
+    description: str | None = None
+    is_default: bool | None = None
+    hidden: bool | None = None
+    default_reasoning_effort: str | None = None
+    supported_reasoning_efforts: list[str] = Field(default_factory=list)
+    default_service_tier: str | None = None
+    service_tiers: list[ServiceTierEntry] = Field(default_factory=list)
+    additional_speed_tiers: list[str] = Field(default_factory=list)
+    first_seen_at: str
+    last_seen_at: str
+    source: str = "app-server"
+
+
+class LaneModelSettings(BaseModel):
+    lane: str
+    model_provider: str | None = None
+    model: str | None = None
+    reasoning_effort: str | None = None
+    requested_service_tier: str | None = None
+    resolved_service_tier: str | None = None
+    service_tier_name: str | None = None
+    service_tier_source: ServiceTierSource = "unknown"
+    updated_at: str
 
 
 class Lane(BaseModel):

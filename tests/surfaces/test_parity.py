@@ -56,6 +56,7 @@ _EXPECTED_CLI_SCHEMA_ROUTES = {
     "rename": "lane-rename",
     "archive": "archive",
     "restore": "restore",
+    "models": "models",
     "goal status": "goal-get",
     "goal set": "goal-set",
     "goal clear": "goal-clear",

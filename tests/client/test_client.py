@@ -216,6 +216,54 @@ async def test_thread_list_reads_data_key(
     assert [t.id for t in threads] == ["a", "b"]
 
 
+async def test_config_read_and_model_list_parse_current_catalog_shape(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+    fake.auto = _result_for(
+        "config/read",
+        {
+            "config": {
+                "model": "gpt-5.5",
+                "modelProvider": "openai",
+                "serviceTier": "priority",
+                "modelReasoningEffort": "xhigh",
+            }
+        },
+    )
+    config = await c.config_read()
+    assert config.model == "gpt-5.5"
+    assert config.model_provider == "openai"
+    assert config.service_tier == "priority"
+    assert config.model_reasoning_effort == "xhigh"
+    assert fake.sent[-1] == {"id": 1, "method": "config/read", "params": {}}
+
+    fake.auto = _result_for(
+        "model/list",
+        {
+            "data": [
+                {
+                    "id": "gpt-5.5",
+                    "defaultReasoningEffort": "xhigh",
+                    "supportedReasoningEfforts": ["low", "xhigh"],
+                    "serviceTiers": [
+                        {
+                            "id": "priority",
+                            "name": "Fast",
+                            "description": "1.5x speed, increased usage",
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+    models = await c.model_list()
+    assert models[0].id == "gpt-5.5"
+    assert models[0].service_tiers[0].id == "priority"
+    assert models[0].service_tiers[0].name == "Fast"
+    assert fake.sent[-1] == {"id": 2, "method": "model/list", "params": {}}
+
+
 async def test_thread_list_sends_current_native_filters(
     client: tuple[AppServerClient, FakeTransport],
 ) -> None:

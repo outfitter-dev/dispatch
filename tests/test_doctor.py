@@ -163,7 +163,10 @@ def test_doctor_warns_for_unversioned_registry_migration(
     registry = next(check for check in report.checks if check.name == "registry")
     assert registry.status == "warn"
     assert registry.summary == "registry schema is unversioned"
-    assert registry.detail == "missing tables: lane_snapshots, lane_sync_sources, queued_messages"
+    assert registry.detail == (
+        "missing tables: lane_model_settings, lane_snapshots, lane_sync_sources, "
+        "model_catalog, queued_messages"
+    )
     assert registry.recovery is not None
     assert "dispatch down" in registry.recovery
 

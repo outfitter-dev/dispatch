@@ -28,6 +28,7 @@ The current canonical operator grammar is:
 - daemon process: `up`, `down`
 - daemon reads: `daemon status`, `daemon log`
 - registry recovery: `registry migrate`
+- model catalog: `models`
 - thread lifecycle/read/search: `new`, `attach`, `list`, `list --unmanaged`,
   `get`, `sync`, `tail`, `watch`, `search`
 - thread actions: `rename`, `archive`, `restore`
@@ -92,6 +93,20 @@ that shape so agents do not create a thread that only looks goal-driven.
 `new` returns `message_accepted`, not proof of assistant completion. After launch,
 use `get` to check `latest_turn`, `tail` for persisted history, or `watch` for a
 bounded live sample.
+
+Before choosing explicit `--model`, `--model-provider`, or `--service-tier`
+values, ask dispatch for the live catalog:
+
+```bash
+uv run dispatch models
+uv run dispatch models --no-refresh
+uv run dispatch schema models
+```
+
+Omit model/tier values when Codex defaults are acceptable. If a preset uses a
+user-facing tier such as `fast`, Dispatch resolves it through `model/list`
+service tiers before starting the thread. Do not guess current model ids from
+memory; use the catalog output and its `aliases` field.
 
 Attached lanes are existing desktop Codex threads registered by raw thread id:
 
@@ -289,6 +304,7 @@ Use `schema` for derived input/output schemas:
 ```bash
 uv run dispatch schema send
 uv run dispatch schema "list --unmanaged"
+uv run dispatch schema models
 uv run dispatch schema "goal set"
 ```
 
@@ -307,6 +323,8 @@ The MCP surface is grouped for agent ergonomics, not one tool per CLI
 subcommand. Tools are grouped by workflow and safety boundary, and each call
 selects an `op` inside the tool. In this repo, the workspace-local Codex plugin
 lives at `plugins/dispatch`. It exposes these skills and the same MCP registry.
+Use the daemon-read MCP tool's `models` op before setting explicit model or
+service-tier arguments.
 If the plugin does not appear immediately, restart Codex for the workspace.
 Installed PyPI packages also include read-only copies of these skills and the
 plugin bundle under `outfitter.dispatch.assets`; use the repo copies for editing.
