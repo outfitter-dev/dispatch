@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 Status = Literal["pending", "started", "completed", "failed"]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 @dataclass(frozen=True)
@@ -72,8 +73,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("scenario", type=Path, help="TOML scenario fixture to run.")
     parser.add_argument(
         "--dispatch-bin",
-        default="uv run dispatch",
-        help="Command used to run dispatch, shell-split. Defaults to in-tree uv.",
+        default=None,
+        help=(
+            "Command used to run dispatch, shell-split. "
+            "Defaults to `uv run --project <repo> dispatch`."
+        ),
     )
     parser.add_argument(
         "--keep-home",
@@ -143,7 +147,7 @@ def _print_plan(scenario: Scenario, args: argparse.Namespace) -> None:
     print(f"scenario={scenario.name}")
     if scenario.description:
         print(f"description={scenario.description}")
-    print(f"dispatch_bin={args.dispatch_bin}")
+    print(f"dispatch_bin={shlex.join(_dispatch_cmd(args))}")
     print(f"preferred_model={scenario.preferred_model or '<codex default>'}")
     print(f"effort={scenario.effort}")
     print(f"parallel={scenario.parallel}")
@@ -155,7 +159,7 @@ class ScenarioRunner:
     def __init__(self, *, scenario: Scenario, args: argparse.Namespace) -> None:
         self.scenario = scenario
         self.args = args
-        self.dispatch_cmd = shlex.split(args.dispatch_bin)
+        self.dispatch_cmd = _dispatch_cmd(args)
         self.dispatch_home = _mktemp("dispatch-scenario-home.")
         self.codex_home = _mktemp("dispatch-scenario-codex.")
         self.work_dir = _mktemp("dispatch-scenario-work.")
@@ -199,11 +203,13 @@ class ScenarioRunner:
 
     def _resolve_model(self) -> str | None:
         models = self._dispatch_json(["models", "--json"])
-        available = {
-            item.get("id")
-            for item in _list(models.get("models"))
-            if isinstance(item, dict) and isinstance(item.get("id"), str)
-        }
+        available: set[str] = set()
+        for item in _list(models.get("models")):
+            if not isinstance(item, dict):
+                continue
+            model_id = item.get("id")
+            if isinstance(model_id, str):
+                available.add(model_id)
         preferred = self.scenario.preferred_model
         if preferred is None:
             return None
@@ -332,6 +338,12 @@ class ScenarioRunner:
 
 def _list(value: object) -> list[object]:
     return value if isinstance(value, list) else []
+
+
+def _dispatch_cmd(args: argparse.Namespace) -> list[str]:
+    if args.dispatch_bin is not None:
+        return shlex.split(args.dispatch_bin)
+    return ["uv", "run", "--project", str(REPO_ROOT), "dispatch"]
 
 
 def _mktemp(prefix: str) -> Path:

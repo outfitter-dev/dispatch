@@ -21,5 +21,6 @@ def test_basic_scenario_dry_run_validates() -> None:
 
     assert result.returncode == 0, result.stderr
     assert "scenario=basic_coordination" in result.stdout
+    assert "dispatch_bin=uv run --project" in result.stdout
     assert "lane alpha" in result.stdout
     assert "lane beta" in result.stdout
