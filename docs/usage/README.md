@@ -53,6 +53,17 @@ derived `models` schema, starts the daemon, reads the live App Server model
 catalog, verifies the cached registry read, checks the empty first-run lane list,
 and shuts the daemon down.
 
+For an agent-level live scenario against the in-tree CLI, run:
+
+```bash
+just scenario -- tests/scenarios/basic_coordination.toml
+```
+
+This starts Dispatch with temporary `DISPATCH_HOME` and `CODEX_HOME`, creates
+synthetic Codex lanes, waits for their turns to complete, verifies `list`/`get`
+/`tail` state, then shuts the daemon down. It uses real Codex auth/model calls,
+so it is intentionally separate from `just check`.
+
 If `dispatch doctor` fails before the app-server smoke because the Codex CLI is
 not installed or authenticated, fix that first and rerun the doctor. Use
 `dispatch doctor --no-app-server` when you only need to inspect package, PATH,
