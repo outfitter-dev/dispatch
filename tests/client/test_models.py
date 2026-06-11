@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from outfitter.dispatch.client.models import (
+    AppModel,
+    ConfigInfo,
     InitializeResult,
+    ModelListResult,
+    ModelServiceTier,
     SandboxPolicy,
     TextInput,
     ThreadCompactStartParams,
@@ -161,6 +165,75 @@ def test_thread_info_keeps_sync_metadata_fields() -> None:
     assert thread.model_provider == "openai"
     assert thread.thread_source == "user"
     assert thread.updated_at == 123
+
+
+def test_thread_info_keeps_observed_model_service_tier() -> None:
+    thread = ThreadInfo.model_validate(
+        {
+            "id": "t1",
+            "modelProvider": "openai",
+            "model": "gpt-5.5",
+            "reasoningEffort": "xhigh",
+            "serviceTier": "priority",
+        }
+    )
+
+    assert thread.model_provider == "openai"
+    assert thread.model == "gpt-5.5"
+    assert thread.reasoning_effort == "xhigh"
+    assert thread.service_tier == "priority"
+
+
+def test_config_and_model_catalog_wire_models_accept_camel_case() -> None:
+    config = ConfigInfo.model_validate(
+        {
+            "model": "gpt-5.5",
+            "modelProvider": "openai",
+            "serviceTier": "priority",
+            "modelReasoningEffort": "xhigh",
+        }
+    )
+    catalog = ModelListResult.model_validate(
+        {
+            "data": [
+                {
+                    "id": "gpt-5.5",
+                    "displayName": "GPT-5.5",
+                    "defaultReasoningEffort": "xhigh",
+                    "supportedReasoningEfforts": [
+                        {"reasoningEffort": "low", "description": "faster"},
+                        {"reasoningEffort": "xhigh", "description": "deeper"},
+                    ],
+                    "serviceTiers": [
+                        {
+                            "id": "priority",
+                            "name": "Fast",
+                            "description": "1.5x speed, increased usage",
+                        }
+                    ],
+                    "additionalSpeedTiers": ["fast"],
+                }
+            ]
+        }
+    )
+
+    assert config.model_provider == "openai"
+    assert catalog.data == [
+        AppModel(
+            id="gpt-5.5",
+            display_name="GPT-5.5",
+            default_reasoning_effort="xhigh",
+            supported_reasoning_efforts=["low", "xhigh"],
+            service_tiers=[
+                ModelServiceTier(
+                    id="priority",
+                    name="Fast",
+                    description="1.5x speed, increased usage",
+                )
+            ],
+            additional_speed_tiers=["fast"],
+        )
+    ]
 
 
 def test_thread_read_include_turns_alias() -> None:

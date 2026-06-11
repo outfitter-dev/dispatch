@@ -34,9 +34,19 @@ from outfitter.dispatch.contracts.errors import (
     ValidationError,
     project_error,
 )
-from outfitter.dispatch.registry.models import Lane, LaneSource, LaneStatus, LaneSync, SyncState
+from outfitter.dispatch.registry.models import (
+    Lane,
+    LaneModelSettings,
+    LaneSource,
+    LaneStatus,
+    LaneSync,
+    ModelCatalogEntry,
+    ServiceTierSource,
+    SyncState,
+)
 
 from . import queue
+from .model_registry import refresh_model_catalog, resolve_model_settings
 from .models import (
     ActionAck,
     ActionView,
@@ -63,6 +73,11 @@ from .models import (
     LatestTurnView,
     LogInput,
     LogOutput,
+    ModelCatalogItem,
+    ModelCatalogOutput,
+    ModelConfigView,
+    ModelServiceTierView,
+    ModelsInput,
     NewInput,
     NewLane,
     OpenInput,
@@ -73,10 +88,12 @@ from .models import (
     SearchMatch,
     SearchOutput,
     SendInput,
+    ServiceTierView,
     ShowInput,
     StatusInput,
     StatusOutput,
     ThreadActionRef,
+    ThreadModelView,
     ThreadTargetInput,
     TranscriptInput,
     TranscriptItem,
@@ -195,9 +212,78 @@ def _latest_turn_view(lane: Lane) -> LatestTurnView:
     )
 
 
-def _list_item(lane: Lane, sync: LaneSync | None) -> LaneListItem:
+def _model_view_from_values(
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+    requested_service_tier: str | None = None,
+    resolved_service_tier: str | None = None,
+    service_tier_name: str | None = None,
+    service_tier_source: ServiceTierSource = "unknown",
+) -> ThreadModelView:
+    return ThreadModelView(
+        provider=provider,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        service_tier=ServiceTierView(
+            requested=requested_service_tier,
+            resolved=resolved_service_tier,
+            name=service_tier_name,
+            source=service_tier_source,
+        ),
+    )
+
+
+def _model_view(
+    settings: LaneModelSettings | None = None, sync: LaneSync | None = None
+) -> ThreadModelView:
+    if settings is not None:
+        return _model_view_from_values(
+            provider=settings.model_provider,
+            model=settings.model,
+            reasoning_effort=settings.reasoning_effort,
+            requested_service_tier=settings.requested_service_tier,
+            resolved_service_tier=settings.resolved_service_tier,
+            service_tier_name=settings.service_tier_name,
+            service_tier_source=settings.service_tier_source,
+        )
+    if sync is not None:
+        return _model_view_from_values(
+            provider=sync.model_provider,
+            model=sync.model,
+            reasoning_effort=sync.reasoning_effort,
+            service_tier_source="observed"
+            if sync.model_provider or sync.model or sync.reasoning_effort
+            else "unknown",
+        )
+    return ThreadModelView()
+
+
+def _model_view_from_thread(thread: ThreadInfo) -> ThreadModelView:
+    has_model_data = any(
+        (
+            thread.model_provider,
+            thread.model,
+            thread.reasoning_effort,
+            thread.service_tier,
+        )
+    )
+    return _model_view_from_values(
+        provider=thread.model_provider,
+        model=thread.model,
+        reasoning_effort=thread.reasoning_effort,
+        resolved_service_tier=thread.service_tier,
+        service_tier_source="observed" if has_model_data else "unknown",
+    )
+
+
+def _list_item(lane: Lane, sync: LaneSync | None, model: LaneModelSettings | None) -> LaneListItem:
     return LaneListItem(
-        **_ref(lane).model_dump(), sync=_sync_view(sync), latest_turn=_latest_turn_view(lane)
+        **_ref(lane).model_dump(),
+        sync=_sync_view(sync),
+        latest_turn=_latest_turn_view(lane),
+        model=_model_view(model, sync),
     )
 
 
@@ -281,6 +367,14 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         raise ValidationError("native goals require non-ephemeral threads")
     sandbox = settings.sandbox or "read-only"
     approval_policy = settings.approval_policy or "never"
+    resolved_model = await resolve_model_settings(
+        ctx,
+        model=settings.model,
+        model_provider=settings.model_provider,
+        reasoning_effort=settings.effort,
+        service_tier=settings.service_tier,
+    )
+    explicit_service_tier = resolved_model.resolved_service_tier if settings.service_tier else None
     thread = await ctx.client.thread_start(
         cwd=str(resolved.cwd),
         sandbox=sandbox,
@@ -289,7 +383,7 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         base_instructions=resolved.base_instructions,
         developer_instructions=resolved.developer_instructions,
         personality=settings.personality,
-        service_tier=settings.service_tier,
+        service_tier=explicit_service_tier,
         model=settings.model,
         model_provider=settings.model_provider,
         ephemeral=bool(settings.ephemeral),
@@ -297,6 +391,8 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
     lane = await ctx.registry.add_lane(
         id=thread.id, handle=resolved.handle, source="own", cwd=str(resolved.cwd), status="idle"
     )
+    lane_model = resolved_model.for_lane(lane.id, ctx.registry.now_iso())
+    await ctx.registry.upsert_lane_model_settings(lane_model)
     await ctx.registry.log_action("new", lane=lane.id, detail=resolved.display_name)
     try:
         await ctx.client.thread_set_name(thread.id, resolved.display_name)
@@ -331,7 +427,7 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
                 effort=settings.effort,
                 summary=settings.summary,
                 model=settings.model,
-                service_tier=settings.service_tier,
+                service_tier=explicit_service_tier,
                 output_schema=settings.output_schema,
                 personality=settings.personality,
             )
@@ -353,6 +449,7 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         message_accepted=message_accepted,
         goal_set=goal_set,
         latest_turn=_latest_turn_view(lane),
+        model=_model_view(lane_model),
     )
 
 
@@ -398,6 +495,7 @@ async def attach_lane(inp: AttachInput, ctx: Ctx) -> LaneRef:
         audit_op="attach",
         audit_detail=handle,
     )
+    await _record_observed_model(lane, thread, sync, ctx)
     ctx.log.info("lane.attach", lane=lane.id, handle=handle)
     return _ref(lane)
 
@@ -416,7 +514,36 @@ async def _sync_lane(
     lane: Lane, ctx: Ctx, *, full: bool, metadata: ThreadInfo | None = None
 ) -> LaneSync:
     thread = metadata or await _read_thread_metadata(ctx, lane.id)
-    return await ctx.registry.upsert_lane_sync(await _sync_from_thread(lane.id, thread, full=full))
+    sync = await ctx.registry.upsert_lane_sync(await _sync_from_thread(lane.id, thread, full=full))
+    await _record_observed_model(lane, thread, sync, ctx)
+    return sync
+
+
+async def _record_observed_model(
+    lane: Lane, thread: ThreadInfo, sync: LaneSync, ctx: Ctx
+) -> LaneModelSettings | None:
+    existing = await ctx.registry.get_lane_model_settings(lane.id)
+    if existing is not None and existing.service_tier_source == "dispatch":
+        return existing
+    provider = sync.model_provider or thread.model_provider
+    model = sync.model or thread.model
+    reasoning_effort = sync.reasoning_effort or thread.reasoning_effort
+    service_tier = thread.service_tier
+    if not any((provider, model, reasoning_effort, service_tier)):
+        return existing
+    observed = LaneModelSettings(
+        lane=lane.id,
+        model_provider=provider,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        requested_service_tier=None,
+        resolved_service_tier=service_tier,
+        service_tier_name=None,
+        service_tier_source="observed",
+        updated_at=ctx.registry.now_iso(),
+    )
+    await ctx.registry.upsert_lane_model_settings(observed)
+    return observed
 
 
 async def _sync_from_thread(lane_id: str, thread: ThreadInfo, *, full: bool) -> LaneSync:
@@ -493,8 +620,8 @@ def _metadata_sync(
         source=source or thread.source,
         thread_source=thread_source or thread.thread_source,
         model_provider=model_provider or thread.model_provider,
-        model=model,
-        reasoning_effort=reasoning_effort,
+        model=model or thread.model,
+        reasoning_effort=reasoning_effort or thread.reasoning_effort,
         session_id=session_id or thread.session_id,
         latest_event_at=latest_event_at,
         latest_turn_id=latest_turn_id,
@@ -609,6 +736,7 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
         raise NotFoundError(f"no managed thread {inp.lane!r}")
     lane = resolved.lane
     sync = await ctx.registry.get_lane_sync(lane.id)
+    model_settings = await ctx.registry.get_lane_model_settings(lane.id)
     transcript: list[TranscriptItem] = []
     if inp.include_transcript:
         result = await ctx.client.thread_read(lane.id, include_turns=True)
@@ -623,6 +751,7 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
         active_turn_id=lane.active_turn_id,
         latest_turn=_latest_turn_view(lane),
         sync=_sync_view(sync),
+        model=_model_view(model_settings, sync),
         transcript=transcript,
     )
 
@@ -630,10 +759,15 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
 async def sync_lane(inp: LaneSyncInput, ctx: Ctx) -> LaneSyncResult:
     lane = await _resolve(ctx, inp.lane)
     sync = await _sync_lane(lane, ctx, full=inp.full)
+    model_settings = await ctx.registry.get_lane_model_settings(lane.id)
     await ctx.registry.log_action(
         "sync", lane=lane.id, detail=f"state={sync.state}; full={inp.full}"
     )
-    return LaneSyncResult(**_managed_identity(lane), sync=_sync_view(sync))
+    return LaneSyncResult(
+        **_managed_identity(lane),
+        sync=_sync_view(sync),
+        model=_model_view(model_settings, sync),
+    )
 
 
 async def rename_lane(inp: LaneRenameInput, ctx: Ctx) -> ThreadActionRef:
@@ -1049,6 +1183,14 @@ async def goal_clear(inp: GoalClearInput, ctx: Ctx) -> GoalView:
 async def fork(inp: ForkInput, ctx: Ctx) -> LaneRef:
     source = await _resolve(ctx, inp.lane)
     _require_writable(source)
+    resolved_model = await resolve_model_settings(
+        ctx,
+        model=inp.model,
+        model_provider=inp.model_provider,
+        reasoning_effort=None,
+        service_tier=inp.service_tier,
+    )
+    explicit_service_tier = resolved_model.resolved_service_tier if inp.service_tier else None
     thread = await ctx.client.thread_fork(
         source.id,
         cwd=inp.cwd or source.cwd,
@@ -1057,7 +1199,7 @@ async def fork(inp: ForkInput, ctx: Ctx) -> LaneRef:
         approvals_reviewer=inp.approvals_reviewer,
         base_instructions=inp.base_instructions,
         developer_instructions=inp.developer_instructions,
-        service_tier=inp.service_tier,
+        service_tier=explicit_service_tier,
         model=inp.model,
         model_provider=inp.model_provider,
         ephemeral=inp.ephemeral,
@@ -1069,6 +1211,9 @@ async def fork(inp: ForkInput, ctx: Ctx) -> LaneRef:
         source="own",
         cwd=thread.cwd or inp.cwd or source.cwd,
         status="idle",
+    )
+    await ctx.registry.upsert_lane_model_settings(
+        resolved_model.for_lane(lane.id, ctx.registry.now_iso())
     )
     await ctx.registry.log_action("fork", lane=lane.id, detail=f"from {source.id}")
     try:
@@ -1099,7 +1244,10 @@ async def compact(inp: CompactInput, ctx: Ctx) -> ActionAck:
 async def roster(inp: RosterInput, ctx: Ctx) -> Roster:
     lanes = await ctx.registry.list_lanes(include_archived=inp.include_archived)
     syncs = await ctx.registry.get_lane_sync_many([lane.id for lane in lanes])
-    return Roster(lanes=[_list_item(lane, syncs.get(lane.id)) for lane in lanes])
+    models = await ctx.registry.get_lane_model_settings_many([lane.id for lane in lanes])
+    return Roster(
+        lanes=[_list_item(lane, syncs.get(lane.id), models.get(lane.id)) for lane in lanes]
+    )
 
 
 def _short(text: str | None, limit: int = _PREVIEW_MAX) -> str | None:
@@ -1120,6 +1268,7 @@ def _session(thread: ThreadInfo) -> DiscoveredSession:
         status=thread.status.type if thread.status is not None else None,
         source=thread.source,
         ephemeral=thread.ephemeral,
+        model=_model_view_from_thread(thread),
     )
 
 
@@ -1135,6 +1284,66 @@ async def discover(inp: DiscoverInput, ctx: Ctx) -> Discovery:
         use_state_db_only=True,
     )
     return Discovery(sessions=[_session(thread) for thread in threads])
+
+
+async def models(inp: ModelsInput, ctx: Ctx) -> ModelCatalogOutput:
+    refreshed_at: str | None
+    if inp.refresh:
+        snapshot = await refresh_model_catalog(ctx)
+        entries = snapshot.models
+        config = snapshot.config
+        refreshed_at = snapshot.refreshed_at
+        source = "app-server"
+    else:
+        config = await ctx.client.config_read()
+        entries = await ctx.registry.list_model_catalog()
+        source = "registry"
+        refreshed_at = max((entry.last_seen_at for entry in entries), default=None)
+    if not inp.include_hidden:
+        entries = [entry for entry in entries if not entry.hidden]
+    return ModelCatalogOutput(
+        refreshed_at=refreshed_at,
+        source=source,
+        configured_default=ModelConfigView(
+            model=config.model,
+            model_provider=config.model_provider,
+            service_tier=config.service_tier,
+            model_reasoning_effort=config.model_reasoning_effort,
+        ),
+        models=[_model_catalog_item(entry) for entry in entries],
+    )
+
+
+def _model_catalog_item(entry: ModelCatalogEntry) -> ModelCatalogItem:
+    aliases: dict[str, str] = {}
+    for tier in entry.service_tiers:
+        if tier.name.lower() == "fast":
+            aliases["fast"] = tier.id
+    if "fast" not in aliases and any(
+        tier.lower() == "fast" for tier in entry.additional_speed_tiers
+    ):
+        aliases["fast"] = "fast"
+    return ModelCatalogItem(
+        id=entry.id,
+        provider=entry.provider,
+        display_name=entry.display_name,
+        description=entry.description,
+        is_default=entry.is_default,
+        hidden=entry.hidden,
+        default_reasoning_effort=entry.default_reasoning_effort,
+        supported_reasoning_efforts=entry.supported_reasoning_efforts,
+        default_service_tier=entry.default_service_tier,
+        service_tiers=[
+            ModelServiceTierView(
+                id=tier.id,
+                name=tier.name,
+                description=tier.description,
+            )
+            for tier in entry.service_tiers
+        ],
+        aliases=aliases,
+        last_seen_at=entry.last_seen_at,
+    )
 
 
 async def archive(inp: ThreadTargetInput, ctx: Ctx) -> ThreadActionRef:

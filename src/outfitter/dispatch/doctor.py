@@ -302,6 +302,8 @@ def _registry_check() -> DoctorCheck:
         "queued_messages",
         "lane_sync_sources",
         "lane_snapshots",
+        "model_catalog",
+        "lane_model_settings",
     }
     data.update(
         {
@@ -343,18 +345,6 @@ def _registry_check() -> DoctorCheck:
             ),
             data=data,
         )
-    if missing:
-        return DoctorCheck(
-            name="registry",
-            status="fail",
-            summary="registry is missing required tables",
-            detail=", ".join(missing),
-            recovery=(
-                "Run `dispatch down`, `dispatch registry migrate`, then `dispatch up`. "
-                "If migration fails, inspect the backup path from `registry migrate`."
-            ),
-            data=data,
-        )
     if version < SCHEMA_VERSION:
         return DoctorCheck(
             name="registry",
@@ -364,6 +354,18 @@ def _registry_check() -> DoctorCheck:
             recovery=(
                 "Run `dispatch down`, `dispatch registry migrate`, then `dispatch up` "
                 "to apply compatibility migrations."
+            ),
+            data=data,
+        )
+    if missing:
+        return DoctorCheck(
+            name="registry",
+            status="fail",
+            summary="registry is missing required tables",
+            detail=", ".join(missing),
+            recovery=(
+                "Run `dispatch down`, `dispatch registry migrate`, then `dispatch up`. "
+                "If migration fails, inspect the backup path from `registry migrate`."
             ),
             data=data,
         )

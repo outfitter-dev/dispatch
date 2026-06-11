@@ -29,6 +29,8 @@ from .models import (
     LaneSyncResult,
     LogInput,
     LogOutput,
+    ModelCatalogOutput,
+    ModelsInput,
     NewInput,
     NewLane,
     OpenInput,
@@ -105,6 +107,17 @@ NEW = define_op(
                     "status": None,
                     "error": None,
                     "error_at": None,
+                },
+                "model": {
+                    "provider": "openai",
+                    "model": "gpt-5.5",
+                    "reasoning_effort": "xhigh",
+                    "service_tier": {
+                        "requested": None,
+                        "resolved": None,
+                        "name": None,
+                        "source": "unknown",
+                    },
                 },
             },
         )
@@ -268,6 +281,33 @@ SEARCH = define_op(
                 "scanned": 0,
                 "next_cursor": None,
                 "experimental": True,
+            },
+        )
+    ],
+)
+
+MODELS = define_op(
+    id="models",
+    summary="List available Codex models and service tiers from the App Server catalog.",
+    input=ModelsInput,
+    output=ModelCatalogOutput,
+    intent="read",
+    idempotent=True,
+    handler=handlers.models,
+    examples=[
+        Example(
+            "empty",
+            input={"refresh": False},
+            output={
+                "refreshed_at": None,
+                "source": "registry",
+                "configured_default": {
+                    "model": "gpt-5.5",
+                    "model_provider": "openai",
+                    "service_tier": None,
+                    "model_reasoning_effort": "xhigh",
+                },
+                "models": [],
             },
         )
     ],
@@ -494,6 +534,7 @@ _ALL = (
     ROSTER,
     DISCOVER,
     SEARCH,
+    MODELS,
     ARCHIVE,
     RESTORE,
     GOAL_GET,

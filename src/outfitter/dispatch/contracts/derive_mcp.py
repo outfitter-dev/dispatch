@@ -104,9 +104,9 @@ _GROUPS: tuple[_ToolGroup, ...] = (
     ),
     _ToolGroup(
         name="dispatch_daemon_read",
-        summary="Read daemon health and audit log state.",
+        summary="Read daemon, model catalog, and audit log state.",
         intent="read",
-        actions=(("status", "status"), ("log", "log")),
+        actions=(("status", "status"), ("log", "log"), ("models", "models")),
     ),
 )
 

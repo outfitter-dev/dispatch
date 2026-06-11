@@ -18,14 +18,17 @@ from pydantic import BaseModel
 from .errors import ClientError, TransportError
 from .events import LaneEvent
 from .models import (
+    AppModel,
     ApprovalPolicy,
     ApprovalsReviewer,
     ClientInfo,
+    ConfigInfo,
     Decision,
     Effort,
     InitializeParams,
     InitializeResult,
     InjectItemsParams,
+    ModelListResult,
     Personality,
     ReasoningSummary,
     SandboxPolicy,
@@ -163,6 +166,17 @@ class AppServerClient:
         result = await self._request("initialize", _dump(params))
         await self._notify("initialized", {})
         return InitializeResult.model_validate(result)
+
+    # --- config/models ---------------------------------------------------------
+
+    async def config_read(self) -> ConfigInfo:
+        result = await self._request("config/read", {})
+        payload = result.get("config") if isinstance(result.get("config"), dict) else result
+        return ConfigInfo.model_validate(payload)
+
+    async def model_list(self) -> list[AppModel]:
+        result = await self._request("model/list", {})
+        return ModelListResult.model_validate(result).data
 
     # --- threads --------------------------------------------------------------
 

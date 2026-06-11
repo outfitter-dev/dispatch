@@ -14,10 +14,13 @@ import structlog
 
 from outfitter.dispatch.client.events import LaneEvent
 from outfitter.dispatch.client.models import (
+    AppModel,
     ApprovalPolicy,
     ApprovalsReviewer,
+    ConfigInfo,
     Decision,
     Effort,
+    ModelServiceTier,
     Personality,
     ReasoningSummary,
     SandboxPolicy,
@@ -51,12 +54,42 @@ class FakeLaneClient:
         self.list_result: list[ThreadInfo] = []
         self.read_result: dict[str, object] = {}
         self.search_result = ThreadSearchResult()
+        self.config_result = ConfigInfo(
+            model="gpt-5.5",
+            model_provider="openai",
+            service_tier=None,
+            model_reasoning_effort="xhigh",
+        )
+        self.models_result: list[AppModel] = [
+            AppModel(
+                id="gpt-5.5",
+                default_reasoning_effort="xhigh",
+                supported_reasoning_efforts=["low", "medium", "high", "xhigh"],
+                service_tiers=[
+                    ModelServiceTier(
+                        id="priority",
+                        name="Fast",
+                        description="1.5x speed, increased usage",
+                    )
+                ],
+                additional_speed_tiers=["fast"],
+            ),
+            AppModel(id="gpt-5.3-codex-spark"),
+        ]
         self.goal_result: ThreadGoal | None = None
         self.event_log: list[LaneEvent] = []
         self.raw_log: list[dict[str, object]] = []
 
     def _record(self, name: str, **kwargs: object) -> None:
         self.calls.append((name, kwargs))
+
+    async def config_read(self) -> ConfigInfo:
+        self._record("config_read")
+        return self.config_result
+
+    async def model_list(self) -> list[AppModel]:
+        self._record("model_list")
+        return self.models_result
 
     async def thread_start(
         self,

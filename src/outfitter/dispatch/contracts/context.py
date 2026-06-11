@@ -22,8 +22,10 @@ import structlog
 
 from outfitter.dispatch.client.events import LaneEvent
 from outfitter.dispatch.client.models import (
+    AppModel,
     ApprovalPolicy,
     ApprovalsReviewer,
+    ConfigInfo,
     Decision,
     Effort,
     Personality,
@@ -46,6 +48,10 @@ if TYPE_CHECKING:
 
 class LaneClient(Protocol):
     """The App Server primitives handlers depend on (ADR-0006 DI seam)."""
+
+    async def config_read(self) -> ConfigInfo: ...
+
+    async def model_list(self) -> list[AppModel]: ...
 
     async def thread_start(
         self,

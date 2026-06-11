@@ -7,6 +7,7 @@ and the ``actions_log`` audit of every send/action.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,17 +21,20 @@ from .models import (
     ActionRecord,
     Guard,
     Lane,
+    LaneModelSettings,
     LaneSource,
     LaneStatus,
     LaneSync,
+    ModelCatalogEntry,
     QueuedMessage,
+    ServiceTierEntry,
     Trigger,
     WhenAdapter,
 )
 from .refs import BASE58BTC_ALPHABET, CODEX_REF_SOURCE, codex_ref_payload, make_ref
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def _utcnow() -> datetime:
@@ -119,6 +123,35 @@ CREATE TABLE IF NOT EXISTS lane_snapshots (
     transcript_partial INTEGER NOT NULL DEFAULT 1,
     FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS model_catalog (
+    id TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT 'openai',
+    display_name TEXT,
+    description TEXT,
+    is_default INTEGER,
+    hidden INTEGER,
+    default_reasoning_effort TEXT,
+    supported_reasoning_efforts TEXT NOT NULL DEFAULT '[]',
+    default_service_tier TEXT,
+    service_tiers TEXT NOT NULL DEFAULT '[]',
+    additional_speed_tiers TEXT NOT NULL DEFAULT '[]',
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'app-server',
+    PRIMARY KEY(provider, id)
+);
+CREATE TABLE IF NOT EXISTS lane_model_settings (
+    lane TEXT PRIMARY KEY,
+    model_provider TEXT,
+    model TEXT,
+    reasoning_effort TEXT,
+    requested_service_tier TEXT,
+    resolved_service_tier TEXT,
+    service_tier_name TEXT,
+    service_tier_source TEXT NOT NULL DEFAULT 'unknown',
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
+);
 """
 
 
@@ -153,6 +186,9 @@ class Registry:
     async def close(self) -> None:
         await self._conn.close()
 
+    def now_iso(self) -> str:
+        return self._now().isoformat()
+
     async def _migrate(self, user_version: int) -> None:
         if user_version < 3:
             await self._ensure_ref_columns()
@@ -173,6 +209,8 @@ class Registry:
             )
         if user_version < 4:
             await self._ensure_lane_runtime_columns()
+        if user_version < 5:
+            await self._ensure_model_registry_tables()
 
     async def _ensure_ref_columns(self) -> None:
         async with self._conn.execute("PRAGMA table_info(lanes)") as cur:
@@ -195,6 +233,41 @@ class Registry:
         for name, definition in column_defs.items():
             if name not in columns:
                 await self._conn.execute(f"ALTER TABLE lanes ADD COLUMN {name} {definition}")
+
+    async def _ensure_model_registry_tables(self) -> None:
+        await self._conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS model_catalog (
+                id TEXT NOT NULL,
+                provider TEXT NOT NULL DEFAULT 'openai',
+                display_name TEXT,
+                description TEXT,
+                is_default INTEGER,
+                hidden INTEGER,
+                default_reasoning_effort TEXT,
+                supported_reasoning_efforts TEXT NOT NULL DEFAULT '[]',
+                default_service_tier TEXT,
+                service_tiers TEXT NOT NULL DEFAULT '[]',
+                additional_speed_tiers TEXT NOT NULL DEFAULT '[]',
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'app-server',
+                PRIMARY KEY(provider, id)
+            );
+            CREATE TABLE IF NOT EXISTS lane_model_settings (
+                lane TEXT PRIMARY KEY,
+                model_provider TEXT,
+                model TEXT,
+                reasoning_effort TEXT,
+                requested_service_tier TEXT,
+                resolved_service_tier TEXT,
+                service_tier_name TEXT,
+                service_tier_source TEXT NOT NULL DEFAULT 'unknown',
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
+            );
+            """
+        )
 
     # --- lanes ----------------------------------------------------------------
 
@@ -619,6 +692,111 @@ class Registry:
             rows = await cur.fetchall()
         return {sync.lane: sync for sync in (_row_to_lane_sync(row) for row in rows)}
 
+    # --- model catalog / lane model provenance ---------------------------------
+
+    async def upsert_model_catalog(self, models: list[ModelCatalogEntry]) -> None:
+        for model in models:
+            existing = await self.get_model_catalog_entry(model.id, provider=model.provider)
+            first_seen_at = existing.first_seen_at if existing is not None else model.first_seen_at
+            await self._conn.execute(
+                "INSERT INTO model_catalog (id, provider, display_name, description, "
+                "is_default, hidden, default_reasoning_effort, supported_reasoning_efforts, "
+                "default_service_tier, service_tiers, additional_speed_tiers, first_seen_at, "
+                "last_seen_at, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(provider, id) DO UPDATE SET display_name = excluded.display_name, "
+                "description = excluded.description, is_default = excluded.is_default, "
+                "hidden = excluded.hidden, "
+                "default_reasoning_effort = excluded.default_reasoning_effort, "
+                "supported_reasoning_efforts = excluded.supported_reasoning_efforts, "
+                "default_service_tier = excluded.default_service_tier, "
+                "service_tiers = excluded.service_tiers, "
+                "additional_speed_tiers = excluded.additional_speed_tiers, "
+                "last_seen_at = excluded.last_seen_at, source = excluded.source",
+                (
+                    model.id,
+                    model.provider,
+                    model.display_name,
+                    model.description,
+                    _bool_or_none(model.is_default),
+                    _bool_or_none(model.hidden),
+                    model.default_reasoning_effort,
+                    json.dumps(model.supported_reasoning_efforts),
+                    model.default_service_tier,
+                    json.dumps([tier.model_dump(mode="python") for tier in model.service_tiers]),
+                    json.dumps(model.additional_speed_tiers),
+                    first_seen_at,
+                    model.last_seen_at,
+                    model.source,
+                ),
+            )
+        await self._conn.commit()
+
+    async def list_model_catalog(self, provider: str | None = None) -> list[ModelCatalogEntry]:
+        query = "SELECT * FROM model_catalog"
+        params: tuple[str, ...] = ()
+        if provider is not None:
+            query += " WHERE provider = ?"
+            params = (provider,)
+        query += " ORDER BY provider, hidden, id"
+        async with self._conn.execute(query, params) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_model_catalog_entry(row) for row in rows]
+
+    async def get_model_catalog_entry(
+        self, model_id: str, *, provider: str = "openai"
+    ) -> ModelCatalogEntry | None:
+        async with self._conn.execute(
+            "SELECT * FROM model_catalog WHERE provider = ? AND id = ?",
+            (provider, model_id),
+        ) as cur:
+            row = await cur.fetchone()
+        return _row_to_model_catalog_entry(row) if row is not None else None
+
+    async def upsert_lane_model_settings(self, settings: LaneModelSettings) -> None:
+        await self._conn.execute(
+            "INSERT INTO lane_model_settings (lane, model_provider, model, reasoning_effort, "
+            "requested_service_tier, resolved_service_tier, service_tier_name, "
+            "service_tier_source, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(lane) DO UPDATE SET model_provider = excluded.model_provider, "
+            "model = excluded.model, reasoning_effort = excluded.reasoning_effort, "
+            "requested_service_tier = excluded.requested_service_tier, "
+            "resolved_service_tier = excluded.resolved_service_tier, "
+            "service_tier_name = excluded.service_tier_name, "
+            "service_tier_source = excluded.service_tier_source, updated_at = excluded.updated_at",
+            (
+                settings.lane,
+                settings.model_provider,
+                settings.model,
+                settings.reasoning_effort,
+                settings.requested_service_tier,
+                settings.resolved_service_tier,
+                settings.service_tier_name,
+                settings.service_tier_source,
+                settings.updated_at,
+            ),
+        )
+        await self._conn.commit()
+
+    async def get_lane_model_settings(self, lane_id: str) -> LaneModelSettings | None:
+        async with self._conn.execute(
+            "SELECT * FROM lane_model_settings WHERE lane = ?", (lane_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return _row_to_lane_model_settings(row) if row is not None else None
+
+    async def get_lane_model_settings_many(
+        self, lane_ids: list[str]
+    ) -> dict[str, LaneModelSettings]:
+        if not lane_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in lane_ids)
+        async with self._conn.execute(
+            f"SELECT * FROM lane_model_settings WHERE lane IN ({placeholders})", tuple(lane_ids)
+        ) as cur:
+            rows = await cur.fetchall()
+        settings = (_row_to_lane_model_settings(row) for row in rows)
+        return {item.lane: item for item in settings}
+
     # --- triggers -------------------------------------------------------------
 
     async def add_trigger(self, trigger: Trigger) -> Trigger:
@@ -718,6 +896,28 @@ def _row_dict(row: aiosqlite.Row) -> dict[str, object]:
     return dict(zip(row.keys(), tuple(row), strict=True))
 
 
+def _bool_or_none(value: bool | None) -> int | None:
+    return None if value is None else int(value)
+
+
+def _json_str_list(value: object) -> list[str]:
+    if not value:
+        return []
+    raw = json.loads(str(value))
+    if not isinstance(raw, list):
+        return []
+    return [str(item) for item in raw if isinstance(item, str)]
+
+
+def _json_service_tiers(value: object) -> list[ServiceTierEntry]:
+    if not value:
+        return []
+    raw = json.loads(str(value))
+    if not isinstance(raw, list):
+        return []
+    return [ServiceTierEntry.model_validate(item) for item in raw if isinstance(item, dict)]
+
+
 _LANE_SYNC_SELECT = """
 SELECT
     src.lane AS lane,
@@ -757,6 +957,20 @@ def _row_to_lane_sync(row: aiosqlite.Row) -> LaneSync:
     data = _row_dict(row)
     data["transcript_partial"] = bool(data["transcript_partial"])
     return LaneSync.model_validate(data)
+
+
+def _row_to_model_catalog_entry(row: aiosqlite.Row) -> ModelCatalogEntry:
+    data = _row_dict(row)
+    data["is_default"] = None if data["is_default"] is None else bool(data["is_default"])
+    data["hidden"] = None if data["hidden"] is None else bool(data["hidden"])
+    data["supported_reasoning_efforts"] = _json_str_list(data["supported_reasoning_efforts"])
+    data["service_tiers"] = _json_service_tiers(data["service_tiers"])
+    data["additional_speed_tiers"] = _json_str_list(data["additional_speed_tiers"])
+    return ModelCatalogEntry.model_validate(data)
+
+
+def _row_to_lane_model_settings(row: aiosqlite.Row) -> LaneModelSettings:
+    return LaneModelSettings.model_validate(_row_dict(row))
 
 
 def _row_to_trigger(row: aiosqlite.Row) -> Trigger:

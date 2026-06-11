@@ -59,7 +59,16 @@ Lifecycle/threads/turns: `thread/start resume fork read list loaded/list archive
   those when they match existing CLI/MCP semantics, then keep dispatch-side
   filters for managed/unmanaged and date predicates.
 - `turn/start` accepts `serviceTier` plus richer context/environment metadata.
-  Dispatch projects `service_tier` through configured `new` turns.
+  Dispatch resolves explicit `service_tier` values before projecting them
+  through configured `new` turns.
+- `model/list` is the authoritative catalog for model ids, reasoning-effort
+  support, and service tiers. Prefer `serviceTiers` over the deprecated
+  `additionalSpeedTiers`; user-facing labels such as `fast` can map to a
+  server-facing tier id such as `priority` when the catalog advertises a tier
+  named `Fast`.
+- `config/read` reports the current Codex defaults (model/provider,
+  reasoning effort, service tier). Dispatch records those defaults for output
+  truth but does not send omitted model/tier values just to mirror config.
 - `thread/resume` accepts `excludeTurns` / `initialTurnsPage`, useful for future
   live observation without heavy initial history hydration.
 

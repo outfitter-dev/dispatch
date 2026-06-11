@@ -69,8 +69,7 @@ effort = "low"
 
 Omit `model` unless you intentionally want Codex to use an explicit model.
 When a preset does pin a model, choose it from the live App Server catalog
-(`dispatch model list` once that surface exists) rather than from docs or stale
-examples.
+(`dispatch models`) rather than from docs or stale examples.
 
 Merge order:
 

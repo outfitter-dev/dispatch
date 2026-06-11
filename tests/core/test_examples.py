@@ -24,6 +24,7 @@ async def test_registry_has_the_v1_ops() -> None:
         "roster",
         "discover",
         "search",
+        "models",
         "archive",
         "restore",
         "goal-get",

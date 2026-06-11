@@ -80,6 +80,7 @@ Projections (pure functions over the registry, mirroring Trails' `derive* → cr
 - Thread management/search: `attach <thread-id> [--sync]` ·
   `rename <selector> <new>` · `archive <selector>` · `restore <selector>` ·
   `search <query>` with `--thread`/repo/directory/date/managed filters
+- Model catalog: `models [--no-refresh]`
 - Sending: `send <selector> "…"` with `--mode send|steer|queue|interject|context`
   and equivalent mutually exclusive `--steer`, `--queue`, `--interject`,
   `--context`; `stop <selector>` is cancel-only.
@@ -105,7 +106,7 @@ for collisions. Titles and `@handles` are mutable convenience labels.
 | Op | App Server call | Notes (verified) |
 | --- | --- | --- |
 | `open` | `thread/start` (then register) | `sandbox` is a STRING enum (`read-only`/`workspace-write`/`danger-full-access`); persists by default (`ephemeral:false`) → spawned lanes show in desktop app, matching the `→ @project:name` convention. |
-| `new` | `thread/start` + `thread/name/set` + optional `thread/goal/set` + optional `turn/start` | Applies `.dispatch/config.toml` defaults/presets, name prefixes, verified session/turn options, optional native goal, and optional initial payload. `service_tier` is sent to both thread creation and the initial turn when configured. Output reports request acceptance, not assistant completion. |
+| `new` | `thread/start` + `thread/name/set` + optional `thread/goal/set` + optional `turn/start` | Applies `.dispatch/config.toml` defaults/presets, name prefixes, verified session/turn options, optional native goal, and optional initial payload. Explicit `service_tier` values are resolved through the App Server model catalog before being sent to thread creation and the initial turn; omitted model/tier values preserve Codex defaults. Output reports request acceptance, not assistant completion. |
 | `attach` | `thread/read(includeTurns:false)` (+ register) | Metadata-only by default: verifies the thread id, registers a turn-write locked attached lane, assigns a dispatch ref, and stores sync state without loading turn history. `--sync` runs a quick local index refresh after registration. |
 | `sync` | `thread/read(includeTurns:false)` + bounded local JSONL parsing | Refreshes dispatch's index/cache for a managed thread: source file identity, sync state, latest event timestamp, latest turn id, preview, and selected metadata. Does not copy transcripts wholesale or grant attached-lane write authority. |
 | `send` (`mode=send`) | `turn/start` | Delivers a message the lane processes + answers. The DM/`send_message_to_thread` equivalent. `sandboxPolicy` here is an OBJECT (`{type:"readOnly"}`) — different encoding than `thread/start.sandbox`. |
@@ -120,6 +121,7 @@ for collisions. Titles and `@handles` are mutable convenience labels.
 | `search` (`search`) | experimental `thread/search` for broad search; `thread/read(includeTurns:true)` for one-thread search | Broad search uses App Server search plus dispatch-side managed/unmanaged, repo/directory, and date filters. Thread-focused search reads one transcript and scans locally because App Server search has no thread-id filter. |
 | `roster` (`list`) | `thread/list` + registry + status | List results are under `result.data` (NOT `result.threads`); `useStateDbOnly:true` reads the persisted store. Current App Server also supports native `archived`, `cwd`, `searchTerm`, `sourceKinds`, and sort filters. |
 | `discover` (`list --unmanaged`) | `thread/list` state DB only | Lists persisted active Codex sessions that could be attached; asks for recently updated rows and does not resume or register them. |
+| `models` | `config/read` + optional `model/list` | Reports current Codex model defaults and the App Server model catalog, including service-tier aliases such as user-facing `fast` to server-facing ids like `priority`. `--no-refresh` reads the registry cache plus current config defaults. |
 | `show` (`get`) | registry + optional `thread/read(includeTurns:true)` | Compact managed-thread summary with sync state and latest observed turn runtime/error state; optional transcript convenience. |
 | `transcript` (`tail`) | `thread/read(includeTurns:true)` | Persisted turn/item snapshot, not a full execution log. |
 | `watch` (`watch`) | raw app-server event stream, bounded by limit/timeout | Request/response bounded sample; a true infinite tail needs a subscription control-socket extension. |
@@ -164,6 +166,8 @@ The client supports the full responder loop. v1 surfaces `waiting_on_approval` a
 - `lanes`: id, ref, ref_source/ref_payload/ref_mixer, handle (`@name` / `→ @project:name`), role, cwd, source (`own`|`attached`), status, pinned, created_at, updated_at, last_event_at.
 - `lane_sync_sources`: lane, sync state, source path/file identity, source size/mtime, parsed offsets, line count, last synced timestamp, error.
 - `lane_snapshots`: lane, display name, preview, cwd, source/model/session facts, latest event timestamp, latest turn id, transcript-partial flag.
+- `model_catalog`: provider/model rows refreshed from App Server `model/list`, including reasoning efforts, service tiers, aliases, and first/last seen timestamps.
+- `lane_model_settings`: per-lane model/provider/reasoning/service-tier provenance, distinguishing Dispatch-authored settings from configured defaults and observed metadata.
 - `triggers`: id, name, lane selector, when-spec (json), action-spec (json), guard-spec (json), enabled, last_fired_at.
 - `actions_log`: id, ts, lane, op, trigger_id?, request/decision, outcome — full audit of every send/action.
 

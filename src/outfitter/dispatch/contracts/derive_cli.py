@@ -54,6 +54,7 @@ _SIMPLE_ROUTES: tuple[CliRoute, ...] = (
     CliRoute(("rename",), "lane-rename", ("old", "new")),
     CliRoute(("archive",), "archive", ("target",)),
     CliRoute(("restore",), "restore", ("target",)),
+    CliRoute(("models",), "models"),
     CliRoute(("goal", "status"), "goal-get", ("lane",)),
     CliRoute(("goal", "clear"), "goal-clear", ("lane",)),
     CliRoute(("trigger", "add"), "trigger-add"),

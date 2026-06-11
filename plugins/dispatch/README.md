@@ -9,9 +9,12 @@ This workspace-local plugin exposes:
 
 The MCP server and skills expose the same derived operation registry as the CLI,
 including managed-thread creation/messaging, dispatch refs, persisted `tail`,
-bounded live `watch`, native goals, triggers, schemas, and daemon status/log reads.
+bounded live `watch`, native goals, triggers, schemas, model catalog reads, and
+daemon status/log reads.
 `new --goal` creates native App Server goal state; `/goal ...` in message text is
 plain text and should not be used as a goal substitute.
+Use `dispatch models` or the MCP daemon-read `models` op before pinning explicit
+model/service-tier presets.
 
 Run `dispatch doctor` after installing or upgrading dispatch. It verifies the CLI
 entrypoints, Codex CLI/auth footprint, daemon socket/pidfile state, registry

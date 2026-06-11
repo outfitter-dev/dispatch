@@ -35,6 +35,7 @@ Use this clean-machine smoke after installing or upgrading:
 ```bash
 dispatch doctor
 dispatch schema send
+dispatch models --no-refresh
 dispatch up --json
 dispatch daemon status
 dispatch down --json
@@ -199,11 +200,32 @@ developer_file = ".dispatch/instructions/reviewer.md"
 sandbox = "workspace-write"
 approval_policy = "on-request"
 developer_file = ".dispatch/instructions/builder.md"
+
+[presets.fast]
+service_tier = "fast"
+effort = "low"
 ```
 
 Preset order matters: later presets win, and CLI flags win over presets.
-When `service_tier` is configured, dispatch sends it to both `thread/start` and
-the optional initial `turn/start` request.
+Omit `model` unless you intentionally want Codex to use an explicit model. An
+omitted model or service tier keeps the Codex default call shape; Dispatch still
+records the configured default reported by `config/read` when it is available.
+
+Use `models` before pinning model or service-tier presets:
+
+```bash
+uv run dispatch models
+uv run dispatch models --no-refresh
+uv run dispatch schema models
+```
+
+`models` refreshes from App Server `model/list` by default and reports the
+configured default from `config/read`, each model's reasoning efforts, service
+tiers, and aliases. For example, the user-facing `fast` alias resolves through
+the advertised service tier named `Fast` and may send `serviceTier:"priority"`
+to the App Server. If a requested tier is unavailable for the selected/default
+model, `new` fails before starting the thread and prints the available tiers.
+`--no-refresh` reads the local catalog cache plus current config defaults.
 
 Use `--goal` to create a native App Server goal before the initial message is sent.
 Slash commands in `--text` are not interpreted by dispatch; `--text "/goal ..."`
@@ -473,6 +495,7 @@ uv run dispatch schema send
 uv run dispatch schema "list --unmanaged"
 uv run dispatch schema sync
 uv run dispatch schema watch
+uv run dispatch schema models
 uv run dispatch schema "goal set"
 ```
 
@@ -490,8 +513,10 @@ uv run dispatch mcp
 
 MCP is grouped for agent ergonomics rather than one tool per op. Tools are grouped by
 workflow and safety boundary, for example thread read/write/destroy, trigger
-read/write/destroy, and daemon read tools. Each grouped call chooses an `op` inside the
-tool, and that op's arguments/schema still derive from the same contract registry.
+read/write/destroy, and daemon read tools. The daemon read tool includes the
+`models` op so agents can discover valid model/service-tier choices without
+guessing. Each grouped call chooses an `op` inside the tool, and that op's
+arguments/schema still derive from the same contract registry.
 Structured MCP outputs that identify a managed thread include the dispatch `ref`, full
 Codex id, title/handle, managed/source/status, and cwd when available.
 

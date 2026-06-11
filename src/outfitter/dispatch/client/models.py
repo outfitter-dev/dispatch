@@ -14,9 +14,9 @@ Encodes the verified gotchas (``docs/research/app-server-verification.md``):
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
 ThreadSandbox = Literal["read-only", "workspace-write", "danger-full-access"]
@@ -78,6 +78,65 @@ class InitializeResult(WireModel):
     platform_os: str | None = None
 
 
+# --- config/model catalog ------------------------------------------------------
+
+
+class ConfigInfo(WireModel):
+    """Subset of ``config/read`` used for model/service-tier defaults."""
+
+    model: str | None = None
+    model_provider: str | None = None
+    service_tier: str | None = None
+    model_reasoning_effort: str | None = None
+
+
+class ModelServiceTier(WireModel):
+    id: str
+    name: str
+    description: str
+
+
+class AppModel(WireModel):
+    """Subset of one ``model/list`` row.
+
+    ``additionalSpeedTiers`` is deprecated by the app-server schema, but kept as
+    a fallback for older binaries. ``serviceTiers`` is the canonical source.
+    """
+
+    id: str
+    model: str | None = None
+    display_name: str | None = None
+    name: str | None = None
+    description: str | None = None
+    is_default: bool | None = None
+    hidden: bool | None = None
+    default_reasoning_effort: str | None = None
+    supported_reasoning_efforts: list[str] = Field(default_factory=list)
+    default_service_tier: str | None = None
+    service_tiers: list[ModelServiceTier] = Field(default_factory=list)
+    additional_speed_tiers: list[str] = Field(default_factory=list)
+
+    @field_validator("supported_reasoning_efforts", mode="before")
+    @classmethod
+    def _normalize_supported_reasoning_efforts(cls, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        efforts: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                efforts.append(item)
+            elif isinstance(item, dict):
+                effort = item.get("reasoningEffort") or item.get("effort") or item.get("id")
+                if isinstance(effort, str):
+                    efforts.append(effort)
+        return efforts
+
+
+class ModelListResult(WireModel):
+    data: list[AppModel] = Field(default_factory=list)
+    next_cursor: str | None = None
+
+
 # --- shared shapes ------------------------------------------------------------
 
 
@@ -116,6 +175,9 @@ class ThreadInfo(WireModel):
     source: str | None = None
     thread_source: str | None = None
     model_provider: str | None = None
+    model: str | None = None
+    reasoning_effort: str | None = None
+    service_tier: str | None = None
     created_at: int | None = None
     updated_at: int | None = None
     turns: list[dict[str, object]] = Field(default_factory=list)
