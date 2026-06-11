@@ -34,14 +34,27 @@ from .models import (
 from .refs import BASE58BTC_ALPHABET, CODEX_REF_SOURCE, codex_ref_payload, make_ref
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
+
+_QUEUED_MESSAGES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS queued_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lane TEXT NOT NULL,
+    text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    error TEXT,
+    FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
+);
+"""
 
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-_SCHEMA = """
+_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS lanes (
     id TEXT PRIMARY KEY,
     ref TEXT NOT NULL UNIQUE,
@@ -83,15 +96,7 @@ CREATE TABLE IF NOT EXISTS actions_log (
     detail TEXT,
     outcome TEXT NOT NULL DEFAULT 'ok'
 );
-CREATE TABLE IF NOT EXISTS queued_messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    lane TEXT NOT NULL,
-    text TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    error TEXT
-);
+{_QUEUED_MESSAGES_SCHEMA}
 CREATE TABLE IF NOT EXISTS lane_sync_sources (
     lane TEXT PRIMARY KEY,
     state TEXT NOT NULL,
@@ -166,6 +171,7 @@ class Registry:
     async def open(cls, path: str | Path = ":memory:", now: Clock = _utcnow) -> Registry:
         conn = await aiosqlite.connect(path)
         conn.row_factory = aiosqlite.Row
+        await conn.execute("PRAGMA foreign_keys = ON")
         store = cls(conn, now)
         async with store._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
@@ -211,6 +217,9 @@ class Registry:
             await self._ensure_lane_runtime_columns()
         if user_version < 5:
             await self._ensure_model_registry_tables()
+        if user_version < 6:
+            await self._prune_orphan_lane_children()
+            await self._ensure_queued_messages_foreign_key()
 
     async def _ensure_ref_columns(self) -> None:
         async with self._conn.execute("PRAGMA table_info(lanes)") as cur:
@@ -266,6 +275,55 @@ class Registry:
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
             );
+            """
+        )
+
+    async def _prune_orphan_lane_children(self) -> None:
+        for table in (
+            "lane_sync_sources",
+            "lane_snapshots",
+            "lane_model_settings",
+            "queued_messages",
+        ):
+            await self._conn.execute(
+                f"""
+                DELETE FROM {table}
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM lanes WHERE lanes.id = {table}.lane
+                )
+                """
+            )
+
+    async def _ensure_queued_messages_foreign_key(self) -> None:
+        async with self._conn.execute("PRAGMA foreign_key_list(queued_messages)") as cur:
+            rows = await cur.fetchall()
+        if any(str(row["table"]) == "lanes" and str(row["from"]) == "lane" for row in rows):
+            return
+        await self._conn.executescript(
+            """
+            ALTER TABLE queued_messages RENAME TO queued_messages_old;
+            CREATE TABLE queued_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lane TEXT NOT NULL,
+                text TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                error TEXT,
+                FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
+            );
+            INSERT INTO queued_messages (id, lane, text, status, created_at, updated_at, error)
+            SELECT
+                old.id,
+                old.lane,
+                old.text,
+                old.status,
+                old.created_at,
+                old.updated_at,
+                old.error
+            FROM queued_messages_old old
+            INNER JOIN lanes ON lanes.id = old.lane;
+            DROP TABLE queued_messages_old;
             """
         )
 
@@ -615,7 +673,12 @@ class Registry:
 
     async def upsert_lane_sync(self, sync: LaneSync) -> LaneSync:
         now = sync.last_synced_at or self._now().isoformat()
-        await self._upsert_lane_sync_rows(sync, now)
+        await self._conn.execute("BEGIN")
+        try:
+            await self._upsert_lane_sync_rows(sync, now)
+        except Exception:
+            await self._conn.rollback()
+            raise
         await self._conn.commit()
         got = await self.get_lane_sync(sync.lane)
         if got is None:

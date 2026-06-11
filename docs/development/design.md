@@ -170,6 +170,7 @@ The client supports the full responder loop. v1 surfaces `waiting_on_approval` a
 - `lane_snapshots`: lane, display name, preview, cwd, source/model/session facts, latest event timestamp, latest turn id, transcript-partial flag.
 - `model_catalog`: provider/model rows refreshed from App Server `model/list`, including reasoning efforts, service tiers, aliases, and first/last seen timestamps.
 - `lane_model_settings`: per-lane model/provider/reasoning/service-tier provenance, distinguishing Dispatch-authored settings from configured defaults and observed metadata.
+- `queued_messages`: lane, text, delivery status, timestamps, and error for durable `send --queue` delivery; rows are tied to lanes and cascade with lane deletion.
 - `triggers`: id, name, lane selector, when-spec (json), action-spec (json), guard-spec (json), enabled, last_fired_at.
 - `actions_log`: id, ts, lane, op, trigger_id?, request/decision, outcome — full audit of every send/action.
 
