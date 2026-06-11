@@ -1,0 +1,25 @@
+"""Fast checks for live scenario fixture definitions."""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+
+
+def test_basic_scenario_dry_run_validates() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/run_scenario.py",
+            "--dry-run",
+            "tests/scenarios/basic_coordination.toml",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "scenario=basic_coordination" in result.stdout
+    assert "lane alpha" in result.stdout
+    assert "lane beta" in result.stdout

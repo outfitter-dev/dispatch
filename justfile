@@ -22,6 +22,10 @@ test-int *args:
 pypi-smoke *args:
     uv run python scripts/check_pypi_smoke.py {{args}}
 
+# Run a live agent scenario against an isolated DISPATCH_HOME/CODEX_HOME.
+scenario *args:
+    uv run python scripts/run_scenario.py {{args}}
+
 # Lint with ruff.
 lint:
     uv run ruff check .

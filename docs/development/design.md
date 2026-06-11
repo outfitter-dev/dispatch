@@ -161,6 +161,7 @@ The client supports the full responder loop. v1 surfaces `waiting_on_approval` a
 - MCP: the official Python **`mcp`** SDK (stdio transport first). Scheduling: small custom asyncio scheduler + `croniter` for cron (interval needs no lib). No `dateutil`/RRULE in v1.
 - Tests: **pytest** + **pytest-asyncio**. Hooks: **lefthook** (polyglot; runs ruff/mypy/pytest). Task runner: **just** (justfile) for `test`/`lint`/`typecheck`/`run`. Daemon keep-alive: **launchd** LaunchAgent plist. CI: GitHub Actions + `astral-sh/setup-uv`.
 - Fixture corpus: `tests/fixtures/` stores small named App Server payloads, Codex JSONL sync sources, CLI-smoke notes, and registry builders. Every checked-in fixture should be loaded by a test. Prefer builders over binary SQLite files.
+- Live scenarios: `tests/scenarios/` plus `scripts/run_scenario.py` exercise agent-level workflows through the public CLI with isolated `DISPATCH_HOME`/`CODEX_HOME`. They use real model calls and are run intentionally via `just scenario -- <scenario>`, not as part of the default gate.
 
 ## Data model (registry, SQLite)
 
@@ -187,6 +188,7 @@ The client supports the full responder loop. v1 surfaces `waiting_on_approval` a
 - `test_examples(registry)` runs op examples as assertions.
 - Unit: message router (canned JSONL), trigger/guard evaluation, registry, error projections.
 - Release smoke: `just pypi-smoke -- --package-spec outfitter-dispatch==<version>` installs the published package with `uvx`, uses a temporary `DISPATCH_HOME`, verifies daemon/model/list paths, and shuts down cleanly.
+- Agent workflow smoke: `just scenario -- tests/scenarios/basic_coordination.toml` starts a real isolated daemon, creates live Codex lanes, waits for completion, and verifies list/get/tail state.
 
 ## Rough build slices (detailed by the implementation plan)
 

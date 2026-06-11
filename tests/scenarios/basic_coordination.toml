@@ -1,0 +1,21 @@
+name = "basic_coordination"
+description = "Create two live Dispatch-managed Codex lanes and verify list/get/tail state."
+timeout_seconds = 120
+poll_seconds = 1
+preferred_model = "gpt-5.3-codex-spark"
+allow_model_fallback = true
+effort = "low"
+parallel = true
+
+[[lanes]]
+alias = "alpha"
+name = "scenario-alpha"
+prompt = "Reply with exactly one word: alpha"
+expect_contains = "alpha"
+
+[[lanes]]
+alias = "beta"
+name = "scenario-beta"
+prompt = "Reply with exactly one word: beta"
+expect_contains = "beta"
+
