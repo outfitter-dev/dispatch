@@ -1,0 +1,6 @@
+{"type":"session_meta","timestamp":"2026-06-11T12:00:00.000Z","payload":{"id":"019f0000-0000-7000-9000-000000000010","cwd":"/fixture/long","source":"cli","thread_source":"user","model_provider":"openai"}}
+{"type":"turn_context","timestamp":"2026-06-11T12:00:01.000Z","payload":{"cwd":"/fixture/long","model":"gpt-5.4","effort":"medium"}}
+{"type":"event_msg","timestamp":"2026-06-11T12:00:02.000Z","payload":{"type":"token_count","total":100}}
+{"type":"event_msg","timestamp":"2026-06-11T12:00:03.000Z","payload":{"type":"token_count","total":200}}
+{"type":"event_msg","timestamp":"2026-06-11T12:00:04.000Z","payload":{"type":"token_count","total":300}}
+{"type":"event_msg","timestamp":"2026-06-11T12:00:05.000Z","payload":{"type":"task_complete","turn_id":"turn-9"}}

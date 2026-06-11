@@ -41,6 +41,18 @@ dispatch daemon status
 dispatch down --json
 ```
 
+Maintainers can run the same release smoke from the repository against the
+published package:
+
+```bash
+just pypi-smoke -- --package-spec outfitter-dispatch==0.5.0
+```
+
+The smoke installs with `uvx`, uses a temporary `DISPATCH_HOME`, verifies the
+derived `models` schema, starts the daemon, reads the live App Server model
+catalog, verifies the cached registry read, checks the empty first-run lane list,
+and shuts the daemon down.
+
 If `dispatch doctor` fails before the app-server smoke because the Codex CLI is
 not installed or authenticated, fix that first and rerun the doctor. Use
 `dispatch doctor --no-app-server` when you only need to inspect package, PATH,
@@ -140,6 +152,9 @@ release, bump `project.version` in `pyproject.toml`, run:
 ```bash
 just check
 ```
+
+After the GitHub Release publishes to PyPI, run `just pypi-smoke -- --package-spec
+outfitter-dispatch==<version>` to verify the public install path.
 
 Then create and publish a GitHub Release for the same tag, for example
 `v0.1.0`. Do not upload with a long-lived PyPI token unless the trusted

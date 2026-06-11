@@ -9,6 +9,7 @@ import pytest
 from outfitter.dispatch.client.client import AppServerClient
 from outfitter.dispatch.client.errors import AppServerError, ProtocolError, TransportError
 from outfitter.dispatch.client.events import TurnCompleted
+from tests.fixtures import load_json
 
 from .conftest import FakeTransport, Responder
 
@@ -220,45 +221,18 @@ async def test_config_read_and_model_list_parse_current_catalog_shape(
     client: tuple[AppServerClient, FakeTransport],
 ) -> None:
     c, fake = client
-    fake.auto = _result_for(
-        "config/read",
-        {
-            "config": {
-                "model": "gpt-5.5",
-                "modelProvider": "openai",
-                "serviceTier": "priority",
-                "modelReasoningEffort": "xhigh",
-            }
-        },
-    )
+    fake.auto = _result_for("config/read", load_json("app_server", "config_read", "current.json"))
     config = await c.config_read()
     assert config.model == "gpt-5.5"
     assert config.model_provider == "openai"
-    assert config.service_tier == "priority"
+    assert config.service_tier == "fast"
     assert config.model_reasoning_effort == "xhigh"
     assert fake.sent[-1] == {"id": 1, "method": "config/read", "params": {}}
 
-    fake.auto = _result_for(
-        "model/list",
-        {
-            "data": [
-                {
-                    "id": "gpt-5.5",
-                    "defaultReasoningEffort": "xhigh",
-                    "supportedReasoningEfforts": ["low", "xhigh"],
-                    "serviceTiers": [
-                        {
-                            "id": "priority",
-                            "name": "Fast",
-                            "description": "1.5x speed, increased usage",
-                        }
-                    ],
-                }
-            ]
-        },
-    )
+    fake.auto = _result_for("model/list", load_json("app_server", "model_list", "current.json"))
     models = await c.model_list()
     assert models[0].id == "gpt-5.5"
+    assert models[0].supported_reasoning_efforts == ["low", "medium", "high", "xhigh"]
     assert models[0].service_tiers[0].id == "priority"
     assert models[0].service_tiers[0].name == "Fast"
     assert fake.sent[-1] == {"id": 2, "method": "model/list", "params": {}}

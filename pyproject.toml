@@ -52,6 +52,7 @@ exclude = ["/src/**/AGENTS.md"]
 include = [
     "/src",
     "/tests",
+    "/scripts",
     "/skills",
     "/plugins/dispatch",
     "/README.md",

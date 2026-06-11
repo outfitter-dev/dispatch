@@ -1,0 +1,69 @@
+{
+  "data": [
+    {
+      "id": "gpt-5.5",
+      "model": "gpt-5.5",
+      "displayName": "GPT-5.5",
+      "description": "Frontier model for complex coding, research, and real-world work.",
+      "isDefault": true,
+      "hidden": false,
+      "defaultReasoningEffort": "medium",
+      "supportedReasoningEfforts": [
+        {
+          "reasoningEffort": "low",
+          "description": "Fastest responses."
+        },
+        {
+          "reasoningEffort": "medium",
+          "description": "Balanced responses."
+        },
+        {
+          "reasoningEffort": "high",
+          "description": "Deeper reasoning."
+        },
+        {
+          "reasoningEffort": "xhigh",
+          "description": "Maximum reasoning."
+        }
+      ],
+      "defaultServiceTier": null,
+      "serviceTiers": [
+        {
+          "id": "priority",
+          "name": "Fast",
+          "description": "1.5x speed, increased usage"
+        }
+      ]
+    },
+    {
+      "id": "gpt-5.3-codex-spark",
+      "model": "gpt-5.3-codex-spark",
+      "displayName": "GPT-5.3-Codex-Spark",
+      "description": "Ultra-fast coding model.",
+      "isDefault": false,
+      "hidden": false,
+      "defaultReasoningEffort": "high",
+      "supportedReasoningEfforts": [
+        {
+          "reasoningEffort": "low",
+          "description": "Fastest responses."
+        },
+        {
+          "reasoningEffort": "medium",
+          "description": "Balanced responses."
+        },
+        {
+          "reasoningEffort": "high",
+          "description": "Deeper reasoning."
+        },
+        {
+          "reasoningEffort": "xhigh",
+          "description": "Maximum reasoning."
+        }
+      ],
+      "defaultServiceTier": null,
+      "serviceTiers": []
+    }
+  ]
+}
+

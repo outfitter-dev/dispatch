@@ -1,0 +1,18 @@
+{
+  "data": [
+    {
+      "id": "legacy-fast-model",
+      "displayName": "Legacy Fast Model",
+      "defaultReasoningEffort": "medium",
+      "supportedReasoningEfforts": [
+        "low",
+        "medium"
+      ],
+      "serviceTiers": [],
+      "additionalSpeedTiers": [
+        "fast"
+      ]
+    }
+  ]
+}
+

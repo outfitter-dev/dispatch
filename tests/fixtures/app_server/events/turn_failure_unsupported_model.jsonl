@@ -1,0 +1,4 @@
+{"method":"turn/started","params":{"threadId":"019f0000-0000-7000-9000-000000000001","turnId":"turn-1"}}
+{"method":"turn/failed","params":{"threadId":"019f0000-0000-7000-9000-000000000001","turnId":"turn-1","message":"unsupported model: gpt-5.5-codex"}}
+{"method":"thread/status/changed","params":{"threadId":"019f0000-0000-7000-9000-000000000001","status":{"activeFlags":[]}}}
+

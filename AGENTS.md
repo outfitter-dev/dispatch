@@ -33,6 +33,7 @@ dispatch owns one `codex app-server` subprocess (stdio JSONL, shared `~/.codex`)
 - `docs/usage/` — operator docs for the CLI, MCP, triggers, and plugin setup.
 - `.agents/plans/v0/` — phased plan (`PLAN.md`) + references (`REFS.md`); tracked.
 - `spikes/` — App Server probe scripts; seed of the integration suite.
+- `tests/fixtures/` — small named App Server, JSONL, CLI-smoke, and registry fixtures.
 - `.agents/notes/` — working notes, session recaps, learnings; **gitignored, local only**.
 - `skills/` — first-party Codex skills for operating dispatch (`dispatch`) and dispatch-backed direct messages (`dm`).
 - `plugins/dispatch/` — workspace-local Codex plugin bundle exposing the skills and MCP server.
@@ -64,6 +65,7 @@ Use the project language consistently:
 - **App Server access only via `client/`.** Never spawn or speak to `codex app-server` outside the client layer. See [client rules](.claude/rules/client.md).
 - **Async core, sync CLI.** The daemon is asyncio end-to-end; the CLI is a thin sync client over the control socket. No blocking calls in the loop (use `aiosqlite`, asyncio subprocess, `run_in_executor`). See [python-conventions](.claude/rules/python-conventions.md).
 - **Never touch the user's live state in tests.** Integration tests use a real ephemeral app-server with an isolated `CODEX_HOME` and `ephemeral:true` lanes.
+- **Fixtures should be exercised.** Add checked-in cases under `tests/fixtures/` only when a test loads them; prefer Python builders over binary SQLite fixtures.
 
 ## Source control
 
