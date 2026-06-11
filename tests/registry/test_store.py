@@ -43,6 +43,19 @@ async def test_add_and_get_lane(store: Registry) -> None:
     assert await store.find_lane_by_ref(lane.ref) == got
 
 
+async def test_registry_enforces_foreign_keys(store: Registry) -> None:
+    async with store._conn.execute("PRAGMA foreign_keys") as cur:
+        row = await cur.fetchone()
+    assert row is not None
+    assert int(row[0]) == 1
+
+    with pytest.raises(aiosqlite.IntegrityError):
+        await store.upsert_lane_sync(LaneSync(lane="missing", state="metadata"))
+
+    with pytest.raises(aiosqlite.IntegrityError):
+        await store.enqueue_message(lane="missing", text="lost")
+
+
 async def test_refs_allocated_for_owned_attached_and_forked_lanes(store: Registry) -> None:
     owned = await store.add_lane(id="owned", handle="@owned", source="own")
     attached = await store.add_lane(id="attached", handle="@attached", source="attached")
@@ -341,6 +354,7 @@ async def test_add_lane_with_sync_rolls_back_if_sync_write_fails(
 
 
 async def test_queued_messages_are_claimed_and_recovered(store: Registry) -> None:
+    await store.add_lane(id="L1", handle="@a", source="own")
     first = await store.enqueue_message(lane="L1", text="one")
     second = await store.enqueue_message(lane="L1", text="two")
 
@@ -410,3 +424,141 @@ async def test_lane_sync_roundtrip_and_many_lookup(store: Registry) -> None:
     many = await store.get_lane_sync_many(["L1", "L2"])
     assert set(many) == {"L1"}
     assert many["L1"].preview == "hello"
+
+
+async def test_lane_sync_upsert_rolls_back_source_row_if_snapshot_write_fails(
+    store: Registry,
+) -> None:
+    await store.add_lane(id="L1", handle="@a", source="attached")
+    await store._conn.execute(
+        """
+        CREATE TRIGGER fail_lane_snapshot_insert
+        BEFORE INSERT ON lane_snapshots
+        BEGIN
+            SELECT RAISE(FAIL, 'snapshot failed');
+        END;
+        """
+    )
+    await store._conn.commit()
+
+    with pytest.raises(aiosqlite.IntegrityError, match="snapshot failed"):
+        await store.upsert_lane_sync(LaneSync(lane="L1", state="metadata"))
+
+    assert await store.get_lane_sync("L1") is None
+
+
+async def test_v5_migration_adds_queue_foreign_key_and_drops_orphans(tmp_path: Path) -> None:
+    db = tmp_path / "registry-v5.db"
+    conn = await aiosqlite.connect(db)
+    await conn.executescript(
+        """
+        CREATE TABLE lanes (
+            id TEXT PRIMARY KEY,
+            ref TEXT NOT NULL UNIQUE,
+            ref_source TEXT NOT NULL,
+            ref_payload TEXT NOT NULL,
+            ref_mixer TEXT NOT NULL,
+            handle TEXT NOT NULL,
+            role TEXT,
+            cwd TEXT,
+            source TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'unknown',
+            pinned INTEGER NOT NULL DEFAULT 0,
+            active_turn_id TEXT,
+            latest_turn_id TEXT,
+            latest_turn_status TEXT,
+            latest_error TEXT,
+            latest_error_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_event_at TEXT
+        );
+        INSERT INTO lanes (
+            id, ref, ref_source, ref_payload, ref_mixer, handle, source, status,
+            pinned, created_at, updated_at
+        ) VALUES (
+            'L1', '0abc1', '0', 'abc', '1', '@a', 'own', 'idle', 0,
+            '2026-06-03T12:00:01+00:00', '2026-06-03T12:00:01+00:00'
+        );
+        CREATE TABLE queued_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            lane TEXT NOT NULL,
+            text TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            error TEXT
+        );
+        INSERT INTO queued_messages (lane, text, status, created_at, updated_at) VALUES
+            ('L1', 'keep', 'pending', '2026-06-03T12:00:01+00:00', '2026-06-03T12:00:01+00:00'),
+            (
+                'missing',
+                'drop',
+                'pending',
+                '2026-06-03T12:00:02+00:00',
+                '2026-06-03T12:00:02+00:00'
+            );
+        PRAGMA user_version = 5;
+        """
+    )
+    await conn.commit()
+    await conn.close()
+
+    migrated = await Registry.open(db, now=_clock)
+    try:
+        async with migrated._conn.execute("PRAGMA foreign_key_list(queued_messages)") as cur:
+            fks = await cur.fetchall()
+        assert any(row["table"] == "lanes" and row["from"] == "lane" for row in fks)
+        assert await migrated.pending_message_count("L1") == 1
+        with pytest.raises(aiosqlite.IntegrityError):
+            await migrated.enqueue_message(lane="missing", text="nope")
+        async with migrated._conn.execute("PRAGMA user_version") as cur:
+            row = await cur.fetchone()
+        assert row is not None
+        assert int(row[0]) == SCHEMA_VERSION
+    finally:
+        await migrated.close()
+
+
+async def test_v5_migration_prunes_existing_orphan_lane_children(tmp_path: Path) -> None:
+    db = tmp_path / "registry-v5-orphans.db"
+    seeded = await Registry.open(db, now=_clock)
+    await seeded.close()
+
+    conn = await aiosqlite.connect(db)
+    await conn.executescript(
+        """
+        PRAGMA foreign_keys = OFF;
+        INSERT INTO lane_sync_sources (lane, state, last_synced_at)
+        VALUES ('missing-sync', 'metadata', '2026-06-03T12:00:01+00:00');
+        INSERT INTO lane_snapshots (lane, display_name, transcript_partial)
+        VALUES ('missing-snapshot', 'Orphan', 1);
+        INSERT INTO lane_model_settings (lane, model, service_tier_source, updated_at)
+        VALUES ('missing-model', 'gpt-5.5', 'observed', '2026-06-03T12:00:01+00:00');
+        INSERT INTO queued_messages (lane, text, status, created_at, updated_at)
+        VALUES (
+            'missing-queue',
+            'lost',
+            'pending',
+            '2026-06-03T12:00:01+00:00',
+            '2026-06-03T12:00:01+00:00'
+        );
+        PRAGMA user_version = 5;
+        """
+    )
+    await conn.commit()
+    await conn.close()
+
+    migrated = await Registry.open(db, now=_clock)
+    try:
+        assert await migrated.get_lane_sync("missing-sync") is None
+        assert await migrated.get_lane_model_settings("missing-model") is None
+        async with migrated._conn.execute("SELECT COUNT(*) AS count FROM queued_messages") as cur:
+            row = await cur.fetchone()
+        assert row is not None
+        assert int(row["count"]) == 0
+        async with migrated._conn.execute("PRAGMA foreign_key_check") as cur:
+            rows = await cur.fetchall()
+        assert rows == []
+    finally:
+        await migrated.close()
