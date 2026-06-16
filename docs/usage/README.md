@@ -48,10 +48,10 @@ published package:
 just pypi-smoke -- --package-spec outfitter-dispatch==0.5.0
 ```
 
-The smoke installs with `uvx`, uses a temporary `DISPATCH_HOME`, verifies the
-derived `models` schema, starts the daemon, reads the live App Server model
-catalog, verifies the cached registry read, checks the empty first-run lane list,
-and shuts the daemon down.
+The smoke installs with `uvx --refresh-package outfitter-dispatch`, uses a
+temporary `DISPATCH_HOME`, verifies the derived `models` schema, starts the
+daemon, reads the live App Server model catalog, verifies the cached registry
+read, checks the empty first-run lane list, and shuts the daemon down.
 
 For an agent-level live scenario against the in-tree CLI, run:
 
@@ -178,7 +178,9 @@ just check
 ```
 
 After the GitHub Release publishes to PyPI, run `just pypi-smoke -- --package-spec
-outfitter-dispatch==<version>` to verify the public install path.
+outfitter-dispatch==<version>` to verify the public install path. The smoke
+refreshes the package under test in uv's cache, so an immediate post-publish
+check does not reuse an early "version not found" resolver result.
 
 Then create and publish a GitHub Release for the same tag, for example
 `v0.1.0`. Do not upload with a long-lived PyPI token unless the trusted
