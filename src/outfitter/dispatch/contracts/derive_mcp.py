@@ -49,6 +49,7 @@ _GROUPS: tuple[_ToolGroup, ...] = (
         actions=(
             ("roster", "roster"),
             ("discover", "discover"),
+            ("new_plan", "new-plan"),
             ("show", "show"),
             ("transcript", "transcript"),
             ("watch", "watch"),

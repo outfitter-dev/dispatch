@@ -80,6 +80,30 @@ class NewInput(BaseModel):
         default=None, description="Developer instructions text."
     )
     developer_file: str | None = Field(default=None, description="Developer instructions file.")
+    packet: str | None = Field(
+        default=None,
+        description="Launch packet directory (goal.md/prompt.md/output.schema.json/...).",
+    )
+    input_file: str | None = Field(
+        default=None, description="Initial message text file (use - for stdin)."
+    )
+    goal_file: str | None = Field(
+        default=None, description="Native goal objective file (use - for stdin)."
+    )
+    output_schema_file: str | None = Field(
+        default=None, description="JSON Schema file for structured turn output."
+    )
+    stage: str | None = Field(
+        default=None,
+        description=(
+            "Stage packet parts to .agents/sessions/<ref>/: 'all' or a comma list "
+            "(config,goal,prompt,output_schema,base,developer,hooks,codex_config)."
+        ),
+    )
+    inline: str | None = Field(
+        default=None,
+        description="Packet parts to keep inline only (not staged): 'all' or a comma list.",
+    )
 
 
 class AttachInput(BaseModel):
@@ -249,6 +273,23 @@ class ModelsInput(BaseModel):
 # --- outputs ------------------------------------------------------------------
 
 
+class LaneCapabilities(BaseModel):
+    read: bool = True
+    sync: bool = True
+    tail: bool = True
+    send: bool
+    context: bool
+    steer: bool
+    queue: bool
+    interject: bool
+    goal_set: bool
+    goal_clear: bool
+    stop: bool
+    fork: bool
+    rollback: bool
+    compact: bool
+
+
 class LaneRef(BaseModel):
     ref: str
     id: str
@@ -256,6 +297,11 @@ class LaneRef(BaseModel):
     source: LaneSource
     status: LaneStatus
     cwd: str | None = None
+    writable: bool = Field(description="Whether turn-writing commands are allowed.")
+    capabilities: LaneCapabilities = Field(description="Current authority capabilities.")
+    write_locked_reason: str | None = Field(
+        default=None, description="Why turn-writing commands are blocked, if blocked."
+    )
 
 
 class ThreadActionRef(BaseModel):
@@ -284,6 +330,11 @@ class ManagedThreadIdentity(BaseModel):
     source: LaneSource
     status: LaneStatus
     cwd: str | None = None
+    writable: bool = Field(description="Whether turn-writing commands are allowed.")
+    capabilities: LaneCapabilities = Field(description="Current authority capabilities.")
+    write_locked_reason: str | None = Field(
+        default=None, description="Why turn-writing commands are blocked, if blocked."
+    )
 
 
 class LaneSyncView(BaseModel):
@@ -326,6 +377,32 @@ class LaneListItem(LaneRef):
     model: ThreadModelView = Field(default_factory=ThreadModelView)
 
 
+StagePart = Literal[
+    "config", "goal", "prompt", "output_schema", "base", "developer", "hooks", "codex_config"
+]
+
+
+class StagedFile(BaseModel):
+    part: StagePart = Field(description="Which packet part this entry stages.")
+    path: str = Field(description="Path written, relative to the session directory.")
+    bytes: int | None = Field(default=None, description="Byte length for file parts.")
+    sha256: str | None = Field(default=None, description="SHA-256 hex digest for file parts.")
+
+
+class StageView(BaseModel):
+    """What a launch staged (or, in a plan, would stage) under .agents/sessions/<ref>/."""
+
+    parts: list[StagePart] = Field(
+        default_factory=list, description="Packet parts staged to disk, in canonical order."
+    )
+    session_dir: str | None = Field(
+        default=None, description="Absolute session directory (known only after launch)."
+    )
+    files: list[StagedFile] = Field(
+        default_factory=list, description="Files/dirs written under the session directory."
+    )
+
+
 class NewLane(LaneRef):
     message_accepted: bool = Field(
         description="Whether the App Server accepted the initial message request."
@@ -333,8 +410,68 @@ class NewLane(LaneRef):
     goal_set: bool = Field(
         default=False, description="Whether a native App Server goal was set before launch."
     )
+    staged: StageView = Field(
+        default_factory=StageView, description="Packet parts staged to the session directory."
+    )
     latest_turn: LatestTurnView = Field(default_factory=LatestTurnView)
     model: ThreadModelView = Field(default_factory=ThreadModelView)
+
+
+LaunchSlot = Literal["goal", "prompt", "output_schema", "base", "developer"]
+# stdin is read CLI-side and inlined before the daemon resolves a launch, so the
+# daemon reports it as "inline"; no separate "stdin" origin reaches resolution.
+LaunchOrigin = Literal["inline", "file", "packet", "config"]
+
+
+class LaunchInputSource(BaseModel):
+    slot: LaunchSlot = Field(description="Which launch input this source fills.")
+    origin: LaunchOrigin = Field(description="Where the resolved content came from.")
+    path: str | None = Field(default=None, description="Absolute source file path, if any.")
+    bytes: int = Field(description="UTF-8 byte length of the resolved content.")
+    sha256: str = Field(description="SHA-256 hex digest of the resolved content.")
+
+
+class LaunchSettingsView(BaseModel):
+    """Effective lane settings a launch would use (no secrets, no mutation)."""
+
+    sandbox: str | None = None
+    approval_policy: str | None = None
+    approvals_reviewer: str | None = None
+    model: str | None = None
+    model_provider: str | None = None
+    effort: str | None = None
+    summary: str | None = None
+    personality: str | None = None
+    service_tier: str | None = None
+    ephemeral: bool = False
+
+
+class LaunchPlan(BaseModel):
+    """A mutation-free preview of what ``dispatch new`` would launch (``--dry-run``)."""
+
+    name: str = Field(description="Resolved display name (after prefix/presets).")
+    handle: str = Field(description="Resolved @handle the lane would receive.")
+    cwd: str = Field(description="Resolved working directory.")
+    packet: str | None = Field(default=None, description="Resolved packet directory, if any.")
+    settings: LaunchSettingsView = Field(description="Effective lane settings.")
+    sources: list[LaunchInputSource] = Field(
+        default_factory=list, description="Resolved launch input sources."
+    )
+    goal_set: bool = Field(description="Whether a native goal would be created.")
+    would_send: bool = Field(description="Whether an initial turn would start.")
+    output_schema_present: bool = Field(
+        description="Whether a structured output schema would be applied."
+    )
+    stage: StageView = Field(
+        default_factory=StageView, description="Packet parts that would be staged to disk."
+    )
+    unknown_packet_files: list[str] = Field(
+        default_factory=list, description="Packet files with no defined launch meaning."
+    )
+    aux_packet_dirs: list[str] = Field(
+        default_factory=list,
+        description="Packet directories staged-but-not-executed by dispatch (hooks/, codex/).",
+    )
 
 
 class LaneDetail(LaneRef):
@@ -469,6 +606,8 @@ class ModelConfigView(BaseModel):
 class ModelCatalogOutput(BaseModel):
     refreshed_at: str | None = None
     source: str
+    catalog_state: Literal["ready", "empty"] = "ready"
+    hint: str | None = None
     configured_default: ModelConfigView
     models: list[ModelCatalogItem]
 

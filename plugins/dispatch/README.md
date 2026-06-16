@@ -12,7 +12,10 @@ including managed-thread creation/messaging, dispatch refs, persisted `tail`,
 bounded live `watch`, native goals, triggers, schemas, model catalog reads, and
 daemon status/log reads.
 `new --goal` creates native App Server goal state; `/goal ...` in message text is
-plain text and should not be used as a goal substitute.
+plain text and should not be used as a goal substitute. `new` also accepts launch
+packets (`--packet DIR`), file/stdin inputs (`--goal-file`/`--input-file`/
+`--output-schema-file`, `-` for stdin), a mutation-free `--dry-run`, and durable
+staging (`--stage all|<parts>` → `.agents/sessions/<ref>/`).
 Use `dispatch models` or the MCP daemon-read `models` op before pinning explicit
 model/service-tier presets.
 

@@ -90,6 +90,27 @@ Use `--goal` for a native App Server goal before the initial turn. Do not put
 `/goal ...` in `--text`; dispatch treats slash commands as plain text and rejects
 that shape so agents do not create a thread that only looks goal-driven.
 
+For durable or parallel launches, drive `new` from a **launch packet** directory
+(`goal.md`, `prompt.md`, `output.schema.json`, `base.md`, `developer.md`,
+`dispatch.toml`, plus staged-only `hooks/` and `codex/`) or from explicit files:
+
+```bash
+uv run dispatch new --name lane-a --cwd /repo --packet ./packet
+uv run dispatch new --name lane-a --cwd /repo --goal-file goal.md --input-file prompt.md
+printf 'goal text' | uv run dispatch new --name lane-a --goal-file - --input-file prompt.md
+uv run dispatch new --name lane-a --cwd /repo --packet ./packet --dry-run --json
+uv run dispatch new --name lane-a --cwd /repo --packet ./packet --stage all
+```
+
+Use `--input-file` for the prompt file (the file form of `--text`). Precedence
+per slot is inline flag > explicit file > packet > repo config. Only one input may
+read stdin (`-`).
+`--dry-run` resolves and prints the plan (sources with byte/SHA-256, effective
+settings, staged parts) without mutating any state. `--stage all|<parts>` writes
+durable twins to `.agents/sessions/<ref>/` (with `--inline <parts>` to exclude
+some); dispatch stages `hooks/`/`codex/` but never executes hooks. There is no
+`--worktree`: the current App Server exposes no native worktree request.
+
 `new` returns `message_accepted`, not proof of assistant completion. After launch,
 use `get` to check `latest_turn`, `tail` for persisted history, or `watch` for a
 bounded live sample.
@@ -115,14 +136,24 @@ uv run dispatch attach <codex-thread-id>
 uv run dispatch attach <codex-thread-id> --sync
 ```
 
-Attached lanes are managed by dispatch but are not turn-writable in v0. Do not
-try turn-writing or history-mutating commands such as `send`, `stop`,
-`goal set`, `goal clear`, `lane fork`, `lane rollback`, or `lane compact` on
-attached lanes. Explicit metadata/lifecycle commands (`rename`, `archive`,
-`restore`) are allowed because they do not start turns or mutate turn history.
-ADR-0005 and ADR-0018 keep this boundary locked because desktop Codex and
-dispatch run separate app-server processes and there is no cross-process write
-interlock.
+Attached lanes are managed by dispatch but turn-writing/history-mutating
+commands such as `send`, `stop`, `goal set`, `goal clear`, `lane fork`,
+`lane rollback`, or `lane compact` are blocked by default. ADR-0005 and
+ADR-0018 keep this boundary locked because desktop Codex and dispatch run
+separate app-server processes and there is no cross-process write interlock.
+Local operators can opt in with `[policy] allow_attached_writes = true` in
+`~/.dispatch/config.toml`; when that policy is enabled, Dispatch may send,
+inject context, and set goals on attached lanes. Check `writable`,
+`capabilities`, and `write_locked_reason` in `list --json` or `get --json`
+before deciding whether to write:
+
+```bash
+uv run dispatch list --json | jq '.lanes[] | select(.writable)'
+uv run dispatch list --json | jq '.lanes[] | select(.capabilities.context)'
+```
+
+Explicit metadata/lifecycle commands (`rename`, `archive`, `restore`) are
+allowed regardless because they do not start turns or mutate turn history.
 
 Attach is compact by default: it verifies the thread with
 `thread/read(includeTurns:false)`, registers metadata, and does not resume turn
@@ -136,8 +167,7 @@ uv run dispatch sync <dispatch-ref-or-thread-id> --full
 
 Sync indexes source identity, sync state, latest event time, latest turn id, and
 bounded top+tail JSONL facts when Codex exposes a rollout path. It does not copy
-the full transcript by default and it does not grant write authority to attached
-lanes.
+the full transcript by default.
 
 ## Discover Sessions
 

@@ -19,10 +19,12 @@ from outfitter.dispatch.client.models import (
     ThreadSearchResult,
     ThreadStatus,
 )
+from outfitter.dispatch.config import RuntimePolicy
 from outfitter.dispatch.contracts.errors import (
     AppServerError,
     AuthorityError,
     NotFoundError,
+    StagingError,
     ValidationError,
 )
 from outfitter.dispatch.core import handlers
@@ -214,6 +216,22 @@ async def test_models_refreshes_catalog_and_reports_fast_alias(store: Registry) 
     cached_by_id = {model.id: model for model in cached.models}
     assert cached_by_id["gpt-5.5"].aliases == {"fast": "priority"}
     assert [name for name, _ in client.calls].count("model_list") == 1
+
+
+async def test_models_no_refresh_empty_catalog_reports_hint(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.models(ModelsInput(refresh=False), ctx)
+
+    assert out.source == "registry"
+    assert out.catalog_state == "empty"
+    assert out.models == []
+    assert (
+        out.hint
+        == "run dispatch models without --no-refresh to refresh the App Server model catalog"
+    )
+    assert "model_list" not in [name for name, _ in client.calls]
 
 
 async def test_new_lane_no_send_registers_without_turn(store: Registry, tmp_path: Path) -> None:
@@ -745,8 +763,77 @@ async def test_history_control_ops_on_attached_lane_raise_authority(store: Regis
 async def test_send_to_attached_lane_raises_authority(store: Registry) -> None:
     ctx = make_ctx(store)
     await store.add_lane(id="D1", handle="@desktop", source="attached", status="idle")
-    with pytest.raises(AuthorityError):
+    with pytest.raises(AuthorityError) as exc:
         await handlers.send(LaneTextInput(lane="D1", text="nope"), ctx)
+    assert "source=attached" in str(exc.value)
+    assert "allow_attached_writes" in str(exc.value)
+
+
+async def test_attached_lane_policy_allows_send_and_context_injection(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client, policy=RuntimePolicy(allow_attached_writes=True))
+    lane = await store.add_lane(id="D1", handle="@desktop", source="attached", status="idle")
+
+    sent = await handlers.send(LaneTextInput(lane=lane.ref, text="hello"), ctx)
+    assert sent.accepted is True
+    assert sent.writable is True
+    assert sent.capabilities.send is True
+    assert sent.capabilities.context is True
+    assert sent.write_locked_reason is None
+    assert client.calls[0][0] == "thread_resume"
+    assert any(name == "turn_start" and kw["thread_id"] == "D1" for name, kw in client.calls)
+
+    injected = await handlers.brief(LaneTextInput(lane=lane.ref, text="context"), ctx)
+    assert injected.op == "brief"
+    assert [name for name, _ in client.calls].count("thread_resume") == 2
+    assert any(name == "inject_items" and kw["thread_id"] == "D1" for name, kw in client.calls)
+
+
+async def test_attached_lane_policy_allows_goal_set(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client, policy=RuntimePolicy(allow_attached_writes=True))
+    lane = await store.add_lane(id="D1", handle="@desktop", source="attached", status="idle")
+
+    out = await handlers.goal_set(GoalSetInput(lane=lane.ref, objective="check back in"), ctx)
+
+    assert out.writable is True
+    assert out.goal is not None
+    assert out.goal.objective == "check back in"
+    assert client.calls[0][0] == "thread_resume"
+    assert any(name == "thread_goal_set" and kw["thread_id"] == "D1" for name, kw in client.calls)
+
+
+async def test_roster_and_show_report_attached_write_capabilities(store: Registry) -> None:
+    ctx = make_ctx(store)
+    lane = await store.add_lane(id="D1", handle="@desktop", source="attached", status="idle")
+
+    roster = await handlers.roster(RosterInput(), ctx)
+    item = roster.lanes[0]
+    assert item.ref == lane.ref
+    assert item.writable is False
+    assert item.capabilities.read is True
+    assert item.capabilities.send is False
+    assert item.capabilities.context is False
+    assert item.capabilities.goal_set is False
+    assert item.write_locked_reason is not None
+
+    detail = await handlers.show(ShowInput(lane=lane.ref), ctx)
+    assert detail.writable is False
+    assert detail.capabilities.send is False
+    assert detail.write_locked_reason == item.write_locked_reason
+
+
+async def test_roster_reports_attached_writable_when_policy_allows(store: Registry) -> None:
+    ctx = make_ctx(store, policy=RuntimePolicy(allow_attached_writes=True))
+    await store.add_lane(id="D1", handle="@desktop", source="attached", status="idle")
+
+    item = (await handlers.roster(RosterInput(), ctx)).lanes[0]
+
+    assert item.writable is True
+    assert item.capabilities.send is True
+    assert item.capabilities.context is True
+    assert item.capabilities.goal_set is True
+    assert item.write_locked_reason is None
 
 
 async def test_archive_attached_lane_updates_thread_and_registry(store: Registry) -> None:
@@ -1242,3 +1329,137 @@ async def test_search_rejects_conflicting_managed_filters(store: Registry) -> No
     ctx = make_ctx(store)
     with pytest.raises(ValidationError):
         await handlers.search(SearchInput(query="needle", managed=True, unmanaged=True), ctx)
+
+
+def _write_packet(root: Path) -> Path:
+    pkt = root / "packet"
+    pkt.mkdir()
+    (pkt / "goal.md").write_text("Packet goal.")
+    (pkt / "prompt.md").write_text("Packet prompt.")
+    (pkt / "output.schema.json").write_text('{"type": "object"}')
+    return pkt
+
+
+async def test_plan_new_lane_makes_no_mutation(store: Registry, tmp_path: Path) -> None:
+    pkt = _write_packet(tmp_path)
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    plan = await handlers.plan_new_lane(
+        NewInput(name="preview", cwd=str(tmp_path), packet=str(pkt)), ctx
+    )
+
+    assert plan.goal_set is True
+    assert plan.would_send is True
+    assert plan.output_schema_present is True
+    assert client.calls == []  # no thread_start / goal_set / turn_start
+    assert (await store.find_lane("lane-1")) is None
+    slots = {src.slot for src in plan.sources}
+    assert {"goal", "prompt", "output_schema"} <= slots
+
+
+async def test_new_lane_launches_from_packet(store: Registry, tmp_path: Path) -> None:
+    pkt = _write_packet(tmp_path)
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.new_lane(NewInput(name="worker", cwd=str(tmp_path), packet=str(pkt)), ctx)
+
+    assert out.goal_set is True
+    assert out.message_accepted is True
+    assert any(
+        name == "thread_goal_set" and kw["objective"] == "Packet goal." for name, kw in client.calls
+    )
+    assert any(
+        name == "turn_start"
+        and kw["text"] == "Packet prompt."
+        and kw["output_schema"] == {"type": "object"}
+        for name, kw in client.calls
+    )
+
+
+async def test_new_lane_rejects_invalid_schema_file_before_thread_start(
+    store: Registry, tmp_path: Path
+) -> None:
+    schema_file = tmp_path / "bad.json"
+    schema_file.write_text("{not valid json")
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    with pytest.raises(ValidationError):
+        await handlers.new_lane(
+            NewInput(
+                name="worker",
+                cwd=str(tmp_path),
+                text="hi",
+                output_schema_file=str(schema_file),
+            ),
+            ctx,
+        )
+
+    assert client.calls == []
+    assert (await store.find_lane("lane-1")) is None
+
+
+def _stage_packet(root: Path) -> Path:
+    pkt = root / "packet"
+    pkt.mkdir()
+    (pkt / "goal.md").write_text("Stage goal.")
+    (pkt / "prompt.md").write_text("Stage prompt.")
+    return pkt
+
+
+async def test_new_lane_stages_packet_parts(store: Registry, tmp_path: Path) -> None:
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    pkt = _stage_packet(tmp_path)
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.new_lane(
+        NewInput(name="worker", cwd=str(cwd), packet=str(pkt), stage="all"), ctx
+    )
+
+    assert set(out.staged.parts) == {"goal", "prompt"}
+    assert out.staged.session_dir is not None
+    session = Path(out.staged.session_dir)
+    assert session == cwd / ".agents" / "sessions" / out.ref
+    assert (session / "packet" / "goal.md").read_text() == "Stage goal."
+    assert (session / "state.json").is_file()
+    # Staging happens before the first turn, which still runs.
+    assert any(name == "turn_start" for name, _ in client.calls)
+
+
+async def test_new_lane_staging_failure_prevents_turn(store: Registry, tmp_path: Path) -> None:
+    cwd = tmp_path / "repo"
+    (cwd / ".agents").mkdir(parents=True)
+    (cwd / ".agents" / "sessions").write_text("not a directory")  # makes staging fail
+    pkt = _stage_packet(tmp_path)
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    with pytest.raises(StagingError):
+        await handlers.new_lane(
+            NewInput(name="worker", cwd=str(cwd), packet=str(pkt), stage="goal", text="hi"), ctx
+        )
+
+    # Lane stays registered, marked error; the first turn never started.
+    lane = await store.find_lane("lane-1")
+    assert lane is not None
+    assert lane.status == "error"
+    assert not any(name == "turn_start" for name, _ in client.calls)
+
+
+async def test_plan_new_lane_reports_stage_without_writing(store: Registry, tmp_path: Path) -> None:
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    pkt = _stage_packet(tmp_path)
+    ctx = make_ctx(store)
+
+    plan = await handlers.plan_new_lane(
+        NewInput(name="worker", cwd=str(cwd), packet=str(pkt), stage="all"), ctx
+    )
+
+    assert set(plan.stage.parts) == {"goal", "prompt"}
+    assert plan.stage.session_dir is None  # dry-run: ref unknown, nothing written
+    assert not (cwd / ".agents").exists()

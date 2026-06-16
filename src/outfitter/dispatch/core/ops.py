@@ -27,6 +27,7 @@ from .models import (
     LaneRenameInput,
     LaneSyncInput,
     LaneSyncResult,
+    LaunchPlan,
     LogInput,
     LogOutput,
     ModelCatalogOutput,
@@ -76,6 +77,24 @@ OPEN = define_op(
                 "source": "own",
                 "status": "idle",
                 "cwd": ".",
+                "writable": True,
+                "capabilities": {
+                    "read": True,
+                    "sync": True,
+                    "tail": True,
+                    "send": True,
+                    "context": True,
+                    "steer": True,
+                    "queue": True,
+                    "interject": True,
+                    "goal_set": True,
+                    "goal_clear": True,
+                    "stop": True,
+                    "fork": True,
+                    "rollback": True,
+                    "compact": True,
+                },
+                "write_locked_reason": None,
             },
         )
     ],
@@ -100,8 +119,27 @@ NEW = define_op(
                 "source": "own",
                 "status": "idle",
                 "cwd": "/work",
+                "writable": True,
+                "capabilities": {
+                    "read": True,
+                    "sync": True,
+                    "tail": True,
+                    "send": True,
+                    "context": True,
+                    "steer": True,
+                    "queue": True,
+                    "interject": True,
+                    "goal_set": True,
+                    "goal_clear": True,
+                    "stop": True,
+                    "fork": True,
+                    "rollback": True,
+                    "compact": True,
+                },
+                "write_locked_reason": None,
                 "message_accepted": False,
                 "goal_set": False,
+                "staged": {"parts": [], "session_dir": None, "files": []},
                 "latest_turn": {
                     "id": None,
                     "status": None,
@@ -119,6 +157,47 @@ NEW = define_op(
                         "source": "unknown",
                     },
                 },
+            },
+        )
+    ],
+)
+
+NEW_PLAN = define_op(
+    id="new-plan",
+    summary="Preview what `new` would launch (packet/files/settings) without mutating state.",
+    input=NewInput,
+    output=LaunchPlan,
+    intent="read",
+    idempotent=True,
+    handler=handlers.plan_new_lane,
+    examples=[
+        Example(
+            "preview",
+            input={"name": "preview", "cwd": "/work", "prefix": "[demo]", "send": False},
+            output={
+                "name": "[demo] preview",
+                "handle": "@[demo] preview",
+                "cwd": "/work",
+                "packet": None,
+                "settings": {
+                    "sandbox": "read-only",
+                    "approval_policy": "never",
+                    "approvals_reviewer": None,
+                    "model": None,
+                    "model_provider": None,
+                    "effort": None,
+                    "summary": None,
+                    "personality": None,
+                    "service_tier": None,
+                    "ephemeral": False,
+                },
+                "sources": [],
+                "goal_set": False,
+                "would_send": False,
+                "output_schema_present": False,
+                "stage": {"parts": [], "session_dir": None, "files": []},
+                "unknown_packet_files": [],
+                "aux_packet_dirs": [],
             },
         )
     ],
@@ -143,6 +222,27 @@ ATTACH = define_op(
                 "source": "attached",
                 "status": "idle",
                 "cwd": None,
+                "writable": False,
+                "capabilities": {
+                    "read": True,
+                    "sync": True,
+                    "tail": True,
+                    "send": False,
+                    "context": False,
+                    "steer": False,
+                    "queue": False,
+                    "interject": False,
+                    "goal_set": False,
+                    "goal_clear": False,
+                    "stop": False,
+                    "fork": False,
+                    "rollback": False,
+                    "compact": False,
+                },
+                "write_locked_reason": (
+                    "attached thread; Dispatch does not own this App Server thread "
+                    "(enable policy.allow_attached_writes to override)"
+                ),
             },
         )
     ],
@@ -301,6 +401,11 @@ MODELS = define_op(
             output={
                 "refreshed_at": None,
                 "source": "registry",
+                "catalog_state": "empty",
+                "hint": (
+                    "run dispatch models without --no-refresh to refresh the App Server "
+                    "model catalog"
+                ),
                 "configured_default": {
                     "model": "gpt-5.5",
                     "model_provider": "openai",
@@ -523,6 +628,7 @@ LOG = define_op(
 _ALL = (
     OPEN,
     NEW,
+    NEW_PLAN,
     ATTACH,
     SEND,
     STOP,

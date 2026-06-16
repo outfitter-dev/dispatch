@@ -64,6 +64,7 @@ class NewConfigFile(BaseModel):
 
     defaults: NewSettings = Field(default_factory=NewSettings)
     presets: dict[str, NewSettings] = Field(default_factory=dict)
+    policy: dict[str, object] = Field(default_factory=dict, exclude=True)
 
 
 class ResolvedNew:
@@ -90,8 +91,13 @@ def resolve_new(
     name: str,
     presets: list[str],
     cli: NewSettings,
+    packet: NewSettings | None = None,
 ) -> ResolvedNew:
-    """Resolve built-ins, repo config, presets, and CLI overrides for ``new``."""
+    """Resolve built-ins, repo config, presets, packet, and CLI overrides for ``new``.
+
+    Precedence (lowest to highest): built-ins < repo ``.dispatch`` defaults <
+    presets < ``packet`` (durable launch packet) < CLI flags.
+    """
 
     start_cwd = _absolute(Path(cli.cwd or "."))
     config_path = _find_config(start_cwd)
@@ -112,6 +118,8 @@ def resolve_new(
             raise ValidationError(f"unknown preset {preset!r}")
         settings = settings.merged(preset_settings)
 
+    if packet is not None:
+        settings = settings.merged(packet)
     settings = settings.merged(cli)
     cwd = _resolve_path(settings.cwd or str(start_cwd), base=config_dir or start_cwd)
     settings = settings.model_copy(update={"cwd": str(cwd)})

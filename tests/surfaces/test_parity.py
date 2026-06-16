@@ -45,6 +45,7 @@ _EXPECTED_CLI_SCHEMA_ROUTES = {
     "send": "send",
     "stop": "stop",
     "new": "new",
+    "new --dry-run": "new-plan",
     "attach": "attach",
     "list": "roster",
     "list --unmanaged": "discover",
@@ -148,7 +149,20 @@ def _registered_paths(app: typer.Typer) -> set[tuple[str, ...]]:
 
 def test_managed_thread_outputs_include_stable_identity_fields() -> None:
     app = derive_cli(REGISTRY, _stub_invoke)
-    required = {"lane", "ref", "id", "title", "handle", "managed", "source", "status", "cwd"}
+    required = {
+        "lane",
+        "ref",
+        "id",
+        "title",
+        "handle",
+        "managed",
+        "source",
+        "status",
+        "cwd",
+        "writable",
+        "capabilities",
+        "write_locked_reason",
+    }
 
     for command in ("send", "goal status", "sync", "tail", "watch"):
         result = runner.invoke(app, ["schema", command])

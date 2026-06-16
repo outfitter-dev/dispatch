@@ -30,6 +30,8 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
     if not await ctx.registry.claim_queued_message(message.id):
         return False
     try:
+        if lane.source == "attached" and ctx.policy.allow_attached_writes:
+            await ctx.client.thread_resume(lane.id, exclude_turns=True)
         await ctx.client.turn_start(
             lane.id, message.text, cwd=lane.cwd or ".", sandbox_policy=_READ_ONLY
         )

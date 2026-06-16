@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 import typer
@@ -405,3 +407,125 @@ def test_error_exit_code_propagates() -> None:
     app = derive_cli(REGISTRY, invoke)
     result = runner.invoke(app, ["get", "ghost"])
     assert result.exit_code == 4
+
+
+def _capture_invoke(
+    captured: dict[str, object],
+) -> Callable[[str, dict[str, object]], dict[str, object]]:
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        captured["op"] = op_id
+        captured["params"] = params
+        return {}
+
+    return invoke
+
+
+def test_new_routes_to_new_op_by_default() -> None:
+    captured: dict[str, object] = {}
+    app = derive_cli(REGISTRY, _capture_invoke(captured))
+    result = runner.invoke(app, ["new", "--name", "worker", "--cwd", "/work"])
+    assert result.exit_code == 0, result.output
+    assert captured["op"] == "new"
+    params = captured["params"]
+    assert isinstance(params, dict)
+    assert params["name"] == "worker"
+
+
+def test_new_dry_run_routes_to_new_plan_op() -> None:
+    captured: dict[str, object] = {}
+    app = derive_cli(REGISTRY, _capture_invoke(captured))
+    result = runner.invoke(app, ["new", "--name", "worker", "--cwd", "/work", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert captured["op"] == "new-plan"
+    params = captured["params"]
+    assert isinstance(params, dict)
+    assert "dry_run" not in params  # routing flag, not an op field
+
+
+def test_new_goal_file_dash_reads_stdin_into_inline_goal() -> None:
+    captured: dict[str, object] = {}
+    app = derive_cli(REGISTRY, _capture_invoke(captured))
+    result = runner.invoke(
+        app, ["new", "--name", "worker", "--goal-file", "-"], input="stdin goal text"
+    )
+    assert result.exit_code == 0, result.output
+    params = captured["params"]
+    assert isinstance(params, dict)
+    assert params["goal"] == "stdin goal text"
+    assert params["goal_file"] is None
+
+
+def test_new_rejects_two_stdin_consumers() -> None:
+    captured: dict[str, object] = {}
+    app = derive_cli(REGISTRY, _capture_invoke(captured))
+    result = runner.invoke(
+        app, ["new", "--name", "worker", "--goal-file", "-", "--input-file", "-"], input="x"
+    )
+    assert result.exit_code == 2
+    assert "stdin" in result.output
+    assert "op" not in captured  # never reached the daemon
+
+
+def test_new_rejects_stdin_conflicting_with_inline() -> None:
+    captured: dict[str, object] = {}
+    app = derive_cli(REGISTRY, _capture_invoke(captured))
+    result = runner.invoke(
+        app, ["new", "--name", "worker", "--goal", "inline", "--goal-file", "-"], input="x"
+    )
+    assert result.exit_code == 2
+    assert "op" not in captured
+
+
+def test_new_absolutizes_packet_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+    app = derive_cli(REGISTRY, _capture_invoke(captured))
+    (tmp_path / "pkt").mkdir()
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["new", "--name", "worker", "--packet", "pkt"])
+    assert result.exit_code == 0, result.output
+    params = captured["params"]
+    assert isinstance(params, dict)
+    assert params["packet"] == str((tmp_path / "pkt").resolve())
+
+
+def test_new_stage_and_inline_pass_through() -> None:
+    captured: dict[str, object] = {}
+    app = derive_cli(REGISTRY, _capture_invoke(captured))
+    result = runner.invoke(
+        app, ["new", "--name", "w", "--cwd", "/work", "--stage", "all", "--inline", "prompt"]
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["op"] == "new"
+    params = captured["params"]
+    assert isinstance(params, dict)
+    assert params["stage"] == "all"
+    assert params["inline"] == "prompt"
+
+
+def test_new_json_output_includes_staged_summary() -> None:
+    staged_payload = {
+        "id": "L1",
+        "ref": "0AB12x",
+        "handle": "@x",
+        "source": "own",
+        "status": "idle",
+        "cwd": "/work",
+        "message_accepted": True,
+        "goal_set": False,
+        "staged": {
+            "parts": ["goal", "prompt"],
+            "session_dir": "/work/.agents/sessions/0AB12x",
+            "files": [],
+        },
+        "latest_turn": {"id": None, "status": None, "error": None, "error_at": None},
+    }
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        return staged_payload
+
+    app = derive_cli(REGISTRY, invoke)
+    result = runner.invoke(app, ["new", "--name", "x", "--cwd", "/work", "--json"])
+    assert result.exit_code == 0, result.output
+    rendered = json.loads(result.output)
+    assert rendered["staged"]["parts"] == ["goal", "prompt"]
+    assert rendered["staged"]["session_dir"] == "/work/.agents/sessions/0AB12x"

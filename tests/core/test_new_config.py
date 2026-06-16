@@ -53,6 +53,20 @@ model = "fast-model"
     assert resolved.settings.model == "cli-model"
 
 
+def test_resolve_new_ignores_runtime_policy_table(tmp_path: Path) -> None:
+    (tmp_path / ".dispatch").mkdir()
+    (tmp_path / ".dispatch" / "config.toml").write_text(
+        """
+[policy]
+allow_attached_writes = true
+"""
+    )
+
+    resolved = resolve_new(name="work", presets=[], cli=NewSettings(cwd=str(tmp_path)))
+
+    assert resolved.settings.cwd == str(tmp_path)
+
+
 def test_resolve_new_rejects_missing_preset(tmp_path: Path) -> None:
     (tmp_path / ".dispatch").mkdir()
     (tmp_path / ".dispatch" / "config.toml").write_text("[presets.ok]\neffort = 'low'\n")

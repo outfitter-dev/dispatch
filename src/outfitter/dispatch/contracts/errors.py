@@ -76,6 +76,14 @@ class AppServerError(DispatchError):
     rpc_code = 1008
 
 
+class StagingError(DispatchError):
+    """A launch packet could not be staged to disk (after the lane was registered)."""
+
+    code = "staging"
+    exit_code = 9
+    rpc_code = 1009
+
+
 @dataclass(frozen=True)
 class ErrorProjection:
     """The transport-independent shape every surface renders."""

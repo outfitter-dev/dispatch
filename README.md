@@ -42,10 +42,20 @@ uv run dispatch daemon log --limit 10
 uv run dispatch down --json
 ```
 
+For durable or parallel launches, point `new` at a launch packet directory and
+preview it without side effects: `dispatch new --name lane-a --cwd /repo --packet
+./packet --dry-run --json`, then `--stage all` to write durable session files under
+`.agents/sessions/<ref>/`. See [`docs/usage/README.md`](docs/usage/README.md) for
+packet layout, file/stdin inputs, and staging.
+
 Use owned managed threads for turn-writing work. Existing desktop Codex threads can be attached as
-managed threads, but ADR-0005 still blocks turn-writing and history-mutating commands such
-as `send`, `stop`, `goal set`, and `goal clear` on attached lanes. Every managed
-thread has a dispatch-local `ref`; full Codex thread UUIDs remain accepted everywhere.
+managed threads, but ADR-0005 blocks turn-writing and history-mutating commands such
+as `send`, `stop`, `goal set`, and `goal clear` on attached lanes by default. A
+local operator can explicitly opt in with `[policy] allow_attached_writes = true`
+in `~/.dispatch/config.toml`; `list --json` and `get --json` expose
+`writable`, `capabilities`, and `write_locked_reason` so scripts can tell which
+lanes can receive writes. Every managed thread has a dispatch-local `ref`; full
+Codex thread UUIDs remain accepted everywhere.
 Titles and `@handles` are mutable convenience labels, not stable identity. Metadata
 lifecycle actions (`rename`, `archive`, `restore`) can target managed refs or raw
 unmanaged Codex thread ids, and `search` can span both. Attach is metadata-only by
