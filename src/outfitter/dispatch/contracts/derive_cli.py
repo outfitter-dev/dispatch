@@ -11,8 +11,10 @@ import inspect
 import json
 import os
 import shlex
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated, Literal
 
 import typer
@@ -36,6 +38,7 @@ class CliRoute:
 
 
 _CUSTOM_ROUTES: tuple[CliRoute, ...] = (
+    CliRoute(("new",), "new"),
     CliRoute(("send",), "send", ("lane", "text")),
     CliRoute(("stop",), "stop", ("lane",)),
     CliRoute(("search",), "search", ("query",)),
@@ -45,7 +48,6 @@ _CUSTOM_ROUTES: tuple[CliRoute, ...] = (
 )
 
 _SIMPLE_ROUTES: tuple[CliRoute, ...] = (
-    CliRoute(("new",), "new"),
     CliRoute(("attach",), "attach", ("thread",)),
     CliRoute(("get",), "show", ("lane",)),
     CliRoute(("tail",), "transcript", ("lane",)),
@@ -66,7 +68,10 @@ _SIMPLE_ROUTES: tuple[CliRoute, ...] = (
 )
 
 CLI_PROJECTION_CONTROL_PATHS: tuple[tuple[str, ...], ...] = (("schema",),)
-_COMPOSED_SCHEMA_ROUTES: dict[str, str] = {"list --unmanaged": "discover"}
+_COMPOSED_SCHEMA_ROUTES: dict[str, str] = {
+    "list --unmanaged": "discover",
+    "new --dry-run": "new-plan",
+}
 
 
 def cli_public_routes() -> tuple[CliRoute, ...]:
@@ -94,6 +99,7 @@ def derive_cli(
     renderer = render if render is not None else _default_render
     groups: dict[str, typer.Typer] = {}
 
+    _register_command(app, ("new",), _new_command(registry, invoke, renderer))
     _register_command(app, ("send",), _send_command(registry.get("send"), invoke, renderer))
     _register_command(app, ("stop",), _stop_command(registry.get("stop"), invoke, renderer))
     _register_command(app, ("search",), _search_command(registry.get("search"), invoke, renderer))
@@ -227,6 +233,73 @@ def _parameters(op: Op, *, positionals: tuple[str, ...] = ()) -> list[inspect.Pa
         )
     )
     return parameters
+
+
+_STDIN_FIELDS: dict[str, str] = {"goal_file": "goal", "input_file": "text"}
+_PATH_FIELDS: tuple[str, ...] = ("packet", "input_file", "goal_file", "output_schema_file")
+
+
+def _new_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Callable[..., None]:
+    new_op = registry.get("new")
+    plan_op = registry.get("new-plan")
+    parameters = _parameters(new_op)
+    parameters.insert(
+        len(parameters) - 1,  # before the trailing --json option
+        inspect.Parameter(
+            "dry_run",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=typer.Option(
+                False, "--dry-run", help="Resolve and print the launch plan without mutating state."
+            ),
+            annotation=bool,
+        ),
+    )
+
+    def command(**kwargs: object) -> None:
+        json_requested = bool(kwargs.pop("json", False))
+        dry_run = bool(kwargs.pop("dry_run", False))
+        _resolve_new_stdin(kwargs)
+        _absolutize_new_paths(kwargs)
+        op = plan_op if dry_run else new_op
+        result = invoke(op.id, kwargs)
+        render(op, result)
+        _ignore_json(json_requested)
+
+    command.__signature__ = inspect.Signature(parameters)  # type: ignore[attr-defined]
+    command.__name__ = "new"
+    command.__doc__ = new_op.summary
+    return command
+
+
+def _resolve_new_stdin(kwargs: dict[str, object]) -> None:
+    """Read one launch input from stdin (``--goal-file -`` / ``--input-file -``).
+
+    The daemon has no terminal stdin, so the CLI inlines it here. At most one
+    consumer; the inline twin (``--goal``/``--text``) must not also be set."""
+    consumers = [field for field in _STDIN_FIELDS if kwargs.get(field) == "-"]
+    if len(consumers) > 1:
+        typer.secho("dispatch: read at most one launch input from stdin (-)", fg="red", err=True)
+        raise typer.Exit(code=2)
+    for field in consumers:
+        inline = _STDIN_FIELDS[field]
+        if kwargs.get(inline) is not None:
+            flag = field.replace("_", "-")
+            typer.secho(
+                f"dispatch: --{flag} - conflicts with an inline value for --{inline}",
+                fg="red",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        kwargs[inline] = sys.stdin.read()
+        kwargs[field] = None
+
+
+def _absolutize_new_paths(kwargs: dict[str, object]) -> None:
+    """Resolve packet/file paths against the caller's cwd before the daemon reads them."""
+    for field in _PATH_FIELDS:
+        value = kwargs.get(field)
+        if isinstance(value, str) and value not in ("", "-"):
+            kwargs[field] = str(Path(value).expanduser().resolve())
 
 
 def _send_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., None]:

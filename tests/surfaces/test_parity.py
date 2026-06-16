@@ -45,6 +45,7 @@ _EXPECTED_CLI_SCHEMA_ROUTES = {
     "send": "send",
     "stop": "stop",
     "new": "new",
+    "new --dry-run": "new-plan",
     "attach": "attach",
     "list": "roster",
     "list --unmanaged": "discover",

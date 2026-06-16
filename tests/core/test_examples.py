@@ -13,6 +13,7 @@ async def test_registry_has_the_v1_ops() -> None:
     assert REGISTRY.ids() == [
         "open",
         "new",
+        "new-plan",
         "attach",
         "send",
         "stop",

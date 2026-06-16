@@ -27,6 +27,7 @@ from .models import (
     LaneRenameInput,
     LaneSyncInput,
     LaneSyncResult,
+    LaunchPlan,
     LogInput,
     LogOutput,
     ModelCatalogOutput,
@@ -119,6 +120,46 @@ NEW = define_op(
                         "source": "unknown",
                     },
                 },
+            },
+        )
+    ],
+)
+
+NEW_PLAN = define_op(
+    id="new-plan",
+    summary="Preview what `new` would launch (packet/files/settings) without mutating state.",
+    input=NewInput,
+    output=LaunchPlan,
+    intent="read",
+    idempotent=True,
+    handler=handlers.plan_new_lane,
+    examples=[
+        Example(
+            "preview",
+            input={"name": "preview", "cwd": "/work", "prefix": "[demo]", "send": False},
+            output={
+                "name": "[demo] preview",
+                "handle": "@[demo] preview",
+                "cwd": "/work",
+                "packet": None,
+                "settings": {
+                    "sandbox": "read-only",
+                    "approval_policy": "never",
+                    "approvals_reviewer": None,
+                    "model": None,
+                    "model_provider": None,
+                    "effort": None,
+                    "summary": None,
+                    "personality": None,
+                    "service_tier": None,
+                    "ephemeral": False,
+                },
+                "sources": [],
+                "goal_set": False,
+                "would_send": False,
+                "output_schema_present": False,
+                "unknown_packet_files": [],
+                "aux_packet_dirs": [],
             },
         )
     ],
@@ -523,6 +564,7 @@ LOG = define_op(
 _ALL = (
     OPEN,
     NEW,
+    NEW_PLAN,
     ATTACH,
     SEND,
     STOP,

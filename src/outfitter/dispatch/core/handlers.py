@@ -46,6 +46,7 @@ from outfitter.dispatch.registry.models import (
 )
 
 from . import queue
+from .launch import ResolvedLaunch, resolve_launch
 from .model_registry import refresh_model_catalog, resolve_model_settings
 from .models import (
     ActionAck,
@@ -71,6 +72,9 @@ from .models import (
     LaneSyncView,
     LaneTextInput,
     LatestTurnView,
+    LaunchInputSource,
+    LaunchPlan,
+    LaunchSettingsView,
     LogInput,
     LogOutput,
     ModelCatalogItem,
@@ -102,7 +106,6 @@ from .models import (
     WatchInput,
     WatchOutput,
 )
-from .new_config import NewSettings, resolve_new
 from .selectors import resolve_managed_selector, resolve_thread_selector
 from .sync import scan_codex_jsonl
 
@@ -333,38 +336,67 @@ async def open_lane(inp: OpenInput, ctx: Ctx) -> LaneRef:
     return _ref(lane)
 
 
-async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
-    resolved = resolve_new(
-        name=inp.name,
-        presets=inp.preset,
-        cli=NewSettings(
-            cwd=inp.cwd,
-            sandbox=inp.sandbox,
-            approval_policy=inp.approval_policy,
-            approvals_reviewer=inp.approvals_reviewer,
-            model=inp.model,
-            model_provider=inp.model_provider,
-            effort=inp.effort,
-            summary=inp.summary,
-            personality=inp.personality,
-            service_tier=inp.service_tier,
-            ephemeral=inp.ephemeral,
-            prefix=inp.prefix,
-            text=inp.text,
-            base_instructions=inp.base_instructions,
-            base_file=inp.base_file,
-            developer_instructions=inp.developer_instructions,
-            developer_file=inp.developer_file,
-        ),
-    )
-    settings = resolved.settings
-    if inp.text is not None and inp.text.lstrip().startswith("/goal") and inp.goal is None:
+def _validate_launch(launch: ResolvedLaunch) -> None:
+    """Reject launches the App Server would not honor, before any thread is created.
+
+    Shared by ``new`` (real launch) and ``new-plan`` (dry-run preview) so a preview
+    surfaces the same failure the launch would hit."""
+    text = launch.text
+    if text is not None and text.lstrip().startswith("/goal") and launch.goal is None:
         raise ValidationError(
-            "`dispatch new --text` sends plain message text; slash commands are not "
-            "interpreted. Use `--goal` for a native dispatch/App Server goal."
+            "`dispatch new` initial text sends plain message text; slash commands are not "
+            "interpreted. Use `--goal`/`--goal-file` for a native dispatch/App Server goal."
         )
-    if inp.goal is not None and settings.ephemeral:
+    if launch.goal is not None and launch.resolved.settings.ephemeral:
         raise ValidationError("native goals require non-ephemeral threads")
+
+
+async def plan_new_lane(inp: NewInput, ctx: Ctx) -> LaunchPlan:
+    """Resolve a launch and report what it would do — no daemon/thread mutation."""
+    launch = resolve_launch(inp)
+    _validate_launch(launch)
+    s = launch.resolved.settings
+    return LaunchPlan(
+        name=launch.resolved.display_name,
+        handle=launch.resolved.handle,
+        cwd=str(launch.resolved.cwd),
+        packet=str(launch.packet_path) if launch.packet_path is not None else None,
+        settings=LaunchSettingsView(
+            sandbox=s.sandbox,
+            approval_policy=s.approval_policy,
+            approvals_reviewer=s.approvals_reviewer,
+            model=s.model,
+            model_provider=s.model_provider,
+            effort=s.effort,
+            summary=s.summary,
+            personality=s.personality,
+            service_tier=s.service_tier,
+            ephemeral=bool(s.ephemeral),
+        ),
+        sources=[
+            LaunchInputSource(
+                slot=src.slot,
+                origin=src.origin,
+                path=src.path,
+                bytes=src.bytes,
+                sha256=src.sha256,
+            )
+            for src in launch.sources
+        ],
+        goal_set=launch.goal is not None,
+        would_send=launch.would_send,
+        output_schema_present=launch.output_schema is not None,
+        unknown_packet_files=launch.unknown_files,
+        aux_packet_dirs=launch.aux_dirs,
+    )
+
+
+async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
+    launch = resolve_launch(inp)
+    _validate_launch(launch)
+    resolved = launch.resolved
+    settings = resolved.settings
+    goal = launch.goal
     sandbox = settings.sandbox or "read-only"
     approval_policy = settings.approval_policy or "never"
     resolved_model = await resolve_model_settings(
@@ -400,18 +432,18 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         ctx.log.warning("lane.name_set_failed", lane=lane.id, error=str(exc))
 
     goal_set = False
-    if inp.goal is not None:
+    if goal is not None:
         try:
-            await ctx.client.thread_goal_set(thread.id, objective=inp.goal)
+            await ctx.client.thread_goal_set(thread.id, objective=goal)
         except (DispatchError, ClientError) as exc:
             await ctx.registry.log_action(
                 "goal-set",
                 lane=lane.id,
-                detail=inp.goal[:120],
+                detail=goal[:120],
                 outcome=project_error(exc).code,
             )
             raise
-        await ctx.registry.log_action("goal-set", lane=lane.id, detail=inp.goal[:120])
+        await ctx.registry.log_action("goal-set", lane=lane.id, detail=goal[:120])
         goal_set = True
 
     message_accepted = False

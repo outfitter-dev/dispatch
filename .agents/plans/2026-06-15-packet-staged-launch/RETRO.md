@@ -49,9 +49,53 @@ Durable execution ledger for packet-based Dispatch launch work.
 
 ## Execution Log
 
-- Not started.
+### Phase 1 — packet + file input sources + dry-run (branch `phase-1-packet-inputs`)
+
+Implemented the generic packet/file/inline launch substrate with no staging or
+worktree behavior.
+
+- `NewInput` gained `packet`, `input_file`, `goal_file`, `output_schema_file`.
+- New `core/packet.py`: `load_packet()` reads `goal.md`/`prompt.md`/`base.md`/
+  `developer.md`/`output.schema.json`/`dispatch.toml`; records `hooks/`+`codex/`
+  as aux dirs and any other entry as unknown (never fatal). `dispatch.toml` parses
+  into a curated `_PacketConfig` (extra=forbid) → `NewSettings` (no `cwd`/content;
+  packets stay portable).
+- New `core/launch.py`: pure `resolve_launch(NewInput) -> ResolvedLaunch`. Slot
+  ownership model — each of goal/prompt/output_schema/base/developer is owned
+  wholesale by exactly one layer with precedence `inline > file > packet > config`,
+  so a CLI `--base-file` is never shadowed by packet `base.md`. Emits per-slot
+  `LaunchSource` (origin/path/bytes/sha256). `resolve_new()` gained a `packet`
+  settings layer between presets and CLI.
+- Dry-run is a separate **mutation-free op** `new-plan` (intent=read, output
+  `LaunchPlan`), reached via CLI compose route `new --dry-run → new-plan` (mirrors
+  `list --unmanaged → discover`). This makes "no mutation" structural, not a guard,
+  and keeps each op a single honest output.
+- `new_lane` now launches from the resolved bundle (packet goal/prompt/schema/
+  instructions honored); shared `_validate_launch` runs in both `new` and
+  `new-plan` so dry-run previews the same failures.
+- CLI `new` is a custom command: derives all `NewInput` options, adds `--dry-run`,
+  reads one stdin consumer (`--goal-file -`/`--input-file -`, single-consumer +
+  inline-conflict guards, exit 2), and absolutizes packet/file paths against the
+  caller cwd (the daemon's cwd differs). stdin must be CLI-side; the daemon has no
+  terminal.
+- MCP: `new-plan` added to the `dispatch_thread_read` group (parity-reachable).
+
+Not yet done in Phase 1 (later phases): staged session directory (`--stage`/
+`--inline`), hook/config staging, worktree spike.
 
 ## Verification Log
+
+### Phase 1
+
+- `just check` → EXIT=0 (ruff check + ruff format --check + mypy --strict +
+  pytest 258 passed/9 deselected + build + package-contents check).
+- Focused: `tests/core/test_packet.py` (15), `tests/core/test_handlers.py` (incl.
+  packet launch, dry-run no-mutation, invalid-schema-before-thread-start),
+  `tests/surfaces/test_derive_cli.py` (new routing/stdin/conflict/absolutize),
+  `tests/surfaces/test_parity.py`, `tests/core/test_examples.py` — all green.
+- Manual: `dispatch schema "new --dry-run"` → op `new-plan`; `dispatch schema new`
+  exposes `packet`/`input_file`/`goal_file`/`output_schema_file`.
+- No live daemon/app-server/user-state touched (pure resolution + fakes only).
 
 - Planning verification:
   - Read repo `AGENTS.md` supplied in prompt.

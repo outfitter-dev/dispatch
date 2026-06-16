@@ -80,6 +80,19 @@ class NewInput(BaseModel):
         default=None, description="Developer instructions text."
     )
     developer_file: str | None = Field(default=None, description="Developer instructions file.")
+    packet: str | None = Field(
+        default=None,
+        description="Launch packet directory (goal.md/prompt.md/output.schema.json/...).",
+    )
+    input_file: str | None = Field(
+        default=None, description="Initial message text file (use - for stdin)."
+    )
+    goal_file: str | None = Field(
+        default=None, description="Native goal objective file (use - for stdin)."
+    )
+    output_schema_file: str | None = Field(
+        default=None, description="JSON Schema file for structured turn output."
+    )
 
 
 class AttachInput(BaseModel):
@@ -335,6 +348,58 @@ class NewLane(LaneRef):
     )
     latest_turn: LatestTurnView = Field(default_factory=LatestTurnView)
     model: ThreadModelView = Field(default_factory=ThreadModelView)
+
+
+LaunchSlot = Literal["goal", "prompt", "output_schema", "base", "developer"]
+LaunchOrigin = Literal["inline", "stdin", "file", "packet", "config"]
+
+
+class LaunchInputSource(BaseModel):
+    slot: LaunchSlot = Field(description="Which launch input this source fills.")
+    origin: LaunchOrigin = Field(description="Where the resolved content came from.")
+    path: str | None = Field(default=None, description="Absolute source file path, if any.")
+    bytes: int = Field(description="UTF-8 byte length of the resolved content.")
+    sha256: str = Field(description="SHA-256 hex digest of the resolved content.")
+
+
+class LaunchSettingsView(BaseModel):
+    """Effective lane settings a launch would use (no secrets, no mutation)."""
+
+    sandbox: str | None = None
+    approval_policy: str | None = None
+    approvals_reviewer: str | None = None
+    model: str | None = None
+    model_provider: str | None = None
+    effort: str | None = None
+    summary: str | None = None
+    personality: str | None = None
+    service_tier: str | None = None
+    ephemeral: bool = False
+
+
+class LaunchPlan(BaseModel):
+    """A mutation-free preview of what ``dispatch new`` would launch (``--dry-run``)."""
+
+    name: str = Field(description="Resolved display name (after prefix/presets).")
+    handle: str = Field(description="Resolved @handle the lane would receive.")
+    cwd: str = Field(description="Resolved working directory.")
+    packet: str | None = Field(default=None, description="Resolved packet directory, if any.")
+    settings: LaunchSettingsView = Field(description="Effective lane settings.")
+    sources: list[LaunchInputSource] = Field(
+        default_factory=list, description="Resolved launch input sources."
+    )
+    goal_set: bool = Field(description="Whether a native goal would be created.")
+    would_send: bool = Field(description="Whether an initial turn would start.")
+    output_schema_present: bool = Field(
+        description="Whether a structured output schema would be applied."
+    )
+    unknown_packet_files: list[str] = Field(
+        default_factory=list, description="Packet files with no defined launch meaning."
+    )
+    aux_packet_dirs: list[str] = Field(
+        default_factory=list,
+        description="Packet directories staged-but-not-executed by dispatch (hooks/, codex/).",
+    )
 
 
 class LaneDetail(LaneRef):

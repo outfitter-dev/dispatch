@@ -1242,3 +1242,73 @@ async def test_search_rejects_conflicting_managed_filters(store: Registry) -> No
     ctx = make_ctx(store)
     with pytest.raises(ValidationError):
         await handlers.search(SearchInput(query="needle", managed=True, unmanaged=True), ctx)
+
+
+def _write_packet(root: Path) -> Path:
+    pkt = root / "packet"
+    pkt.mkdir()
+    (pkt / "goal.md").write_text("Packet goal.")
+    (pkt / "prompt.md").write_text("Packet prompt.")
+    (pkt / "output.schema.json").write_text('{"type": "object"}')
+    return pkt
+
+
+async def test_plan_new_lane_makes_no_mutation(store: Registry, tmp_path: Path) -> None:
+    pkt = _write_packet(tmp_path)
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    plan = await handlers.plan_new_lane(
+        NewInput(name="preview", cwd=str(tmp_path), packet=str(pkt)), ctx
+    )
+
+    assert plan.goal_set is True
+    assert plan.would_send is True
+    assert plan.output_schema_present is True
+    assert client.calls == []  # no thread_start / goal_set / turn_start
+    assert (await store.find_lane("lane-1")) is None
+    slots = {src.slot for src in plan.sources}
+    assert {"goal", "prompt", "output_schema"} <= slots
+
+
+async def test_new_lane_launches_from_packet(store: Registry, tmp_path: Path) -> None:
+    pkt = _write_packet(tmp_path)
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.new_lane(NewInput(name="worker", cwd=str(tmp_path), packet=str(pkt)), ctx)
+
+    assert out.goal_set is True
+    assert out.message_accepted is True
+    assert any(
+        name == "thread_goal_set" and kw["objective"] == "Packet goal." for name, kw in client.calls
+    )
+    assert any(
+        name == "turn_start"
+        and kw["text"] == "Packet prompt."
+        and kw["output_schema"] == {"type": "object"}
+        for name, kw in client.calls
+    )
+
+
+async def test_new_lane_rejects_invalid_schema_file_before_thread_start(
+    store: Registry, tmp_path: Path
+) -> None:
+    schema_file = tmp_path / "bad.json"
+    schema_file.write_text("{not valid json")
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    with pytest.raises(ValidationError):
+        await handlers.new_lane(
+            NewInput(
+                name="worker",
+                cwd=str(tmp_path),
+                text="hi",
+                output_schema_file=str(schema_file),
+            ),
+            ctx,
+        )
+
+    assert client.calls == []
+    assert (await store.find_lane("lane-1")) is None
