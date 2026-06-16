@@ -43,7 +43,7 @@ def summarize_history(
     sync: LaneSync | None,
     worktree: HistoryWorktree | None = None,
 ) -> tuple[HistoryThreadSummary, list[HistoryItem], list[HistoryToolStat], list[HistoryFileStat]]:
-    items = _all_history_items(result, raw=False)
+    items = _all_history_items(result, raw=True)
     thread = result.get("thread")
     turns = _turns(thread if isinstance(thread, dict) else {})
     transcript_bytes = (
@@ -114,6 +114,7 @@ def _detect_worktree_sync(cwd: str) -> HistoryWorktree:
     branch = _git(cwd, "branch", "--show-current")
     head = _git(cwd, "rev-parse", "--short", "HEAD")
     common_dir = _git(cwd, "rev-parse", "--git-common-dir")
+    changed_files = _changed_files(cwd)
     detected = bool(repo and common_dir and Path(common_dir).name == "worktrees")
     return HistoryWorktree(
         detected=detected,
@@ -121,6 +122,9 @@ def _detect_worktree_sync(cwd: str) -> HistoryWorktree:
         repo=repo,
         branch=branch,
         head=head,
+        dirty=bool(changed_files),
+        changed_files_count=len(changed_files),
+        changed_files=changed_files[:50],
         is_codex_worktree=_looks_like_codex_worktree(path),
     )
 
@@ -140,6 +144,22 @@ def _git(cwd: str, *args: str) -> str | None:
         return None
     value = proc.stdout.strip()
     return value or None
+
+
+def _changed_files(cwd: str) -> list[str]:
+    raw = _git(cwd, "status", "--porcelain=v1", "-uno")
+    if raw is None:
+        return []
+    files: list[str] = []
+    for line in raw.splitlines():
+        if not line:
+            continue
+        path = line[2:].strip()
+        if " -> " in path:
+            _old, _arrow, path = path.partition(" -> ")
+        if path:
+            files.append(path)
+    return sorted(set(files))
 
 
 def _looks_like_codex_worktree(path: Path) -> bool:

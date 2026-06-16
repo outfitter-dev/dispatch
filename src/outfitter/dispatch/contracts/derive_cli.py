@@ -96,7 +96,7 @@ def derive_cli(
         name="dispatch",
         help="Local control plane for orchestrating Codex agent lanes.",
         no_args_is_help=True,
-        add_completion=False,
+        add_completion=True,
     )
     renderer = render if render is not None else _default_render
     groups: dict[str, typer.Typer] = {}
@@ -513,6 +513,29 @@ def _history_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[...,
         grep: Annotated[
             str | None, typer.Option("--grep", help="Only include items containing text.")
         ] = None,
+        cwd: Annotated[
+            str | None, typer.Option("--cwd", help="Only include threads whose cwd contains text.")
+        ] = None,
+        source: Annotated[
+            str | None, typer.Option("--source", help="Only include threads by source.")
+        ] = None,
+        status: Annotated[
+            str | None, typer.Option("--status", help="Only include threads by status.")
+        ] = None,
+        has_tool: Annotated[
+            str | None, typer.Option("--has-tool", help="Only include summaries using this tool.")
+        ] = None,
+        changed: Annotated[
+            bool | None,
+            typer.Option(
+                "--changed/--clean",
+                help="Only include summaries with changed or clean workspace files.",
+            ),
+        ] = None,
+        min_bytes: Annotated[
+            int | None,
+            typer.Option("--min-bytes", help="Only include transcripts at least this large."),
+        ] = None,
         raw: Annotated[bool, typer.Option("--raw", help="Include raw item payloads.")] = False,
         limit: Annotated[int, typer.Option("--limit", help="Max rows/items to return.")] = 50,
         json: Annotated[
@@ -527,6 +550,12 @@ def _history_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[...,
                 "item_type": item_type,
                 "tool": tool,
                 "grep": grep,
+                "cwd": cwd,
+                "source": source,
+                "status": status,
+                "has_tool": has_tool,
+                "changed": changed,
+                "min_bytes": min_bytes,
                 "raw": raw,
                 "limit": limit,
             },

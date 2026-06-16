@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -17,7 +18,9 @@ from outfitter.dispatch.client.models import (
     ThreadInfo,
     ThreadListResult,
 )
+from outfitter.dispatch.core.history import summarize_history
 from outfitter.dispatch.core.sync import SyncLimits, scan_codex_jsonl
+from outfitter.dispatch.registry.models import Lane
 
 from . import copy_fixture, load_json, load_jsonl
 
@@ -43,6 +46,42 @@ def test_app_server_protocol_fixtures_validate_against_wire_models() -> None:
     assert thread_list.data[0].model == "gpt-5.5"
     assert thread_list.next_cursor == "cursor-1"
     assert thread.turns[0]["id"] == "turn-1"
+
+
+def test_history_v2_fixture_summarizes_tools_files_and_subagents() -> None:
+    payload = load_json("app_server", "thread_read", "history_v2.json")
+    lane = Lane(
+        id="019f0000-0000-7000-9000-000000000042",
+        ref="0Hist1",
+        ref_source="fixture",
+        ref_payload="history",
+        ref_mixer="fixture",
+        handle="@history",
+        source="own",
+        status="idle",
+        cwd="/fixture/history",
+        created_at=datetime(2026, 6, 16, tzinfo=UTC),
+        updated_at=datetime(2026, 6, 16, tzinfo=UTC),
+    )
+
+    summary, items, tools, files = summarize_history(payload, lane=lane, sync=None)
+
+    assert summary.turns == 1
+    assert summary.messages == 2
+    assert summary.tool_calls == 1
+    assert summary.unique_tools == ["bash"]
+    assert summary.subagent_thread_ids == ["019f0000-0000-7000-9000-000000000099"]
+    assert [item.type for item in items] == [
+        "userMessage",
+        "toolCall",
+        "changes",
+        "agentMessage",
+    ]
+    assert [tool.tool for tool in tools] == ["bash"]
+    assert [file.path for file in files] == [
+        "README.md",
+        "src/outfitter/dispatch/core/history.py",
+    ]
 
 
 def test_app_server_event_fixture_projects_to_normalized_events() -> None:

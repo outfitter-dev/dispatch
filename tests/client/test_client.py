@@ -71,8 +71,6 @@ async def test_thread_start_parses_thread_info(
     sent = fake.sent[-1]
     assert sent["params"] == {
         "cwd": "/work",
-        "sandbox": "read-only",
-        "approvalPolicy": "never",
         "ephemeral": True,
     }
 
@@ -279,8 +277,6 @@ async def test_turn_start_sends_service_tier_when_set(
         "threadId": "L1",
         "input": [{"type": "text", "text": "go"}],
         "cwd": "/work",
-        "approvalPolicy": "never",
-        "sandboxPolicy": {"type": "readOnly"},
         "serviceTier": "priority",
     }
 

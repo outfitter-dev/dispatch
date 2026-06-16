@@ -9,9 +9,12 @@ import socket
 import sqlite3
 from functools import partial
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal, cast
 
 import typer
+from click.core import Command
+from click.shell_completion import get_completion_class
+from typer.main import get_command
 
 from outfitter.dispatch import config
 from outfitter.dispatch.contracts.derive_cli import derive_cli
@@ -20,6 +23,7 @@ from outfitter.dispatch.version import package_version
 CLI_SURFACE_CONTROL_PATHS: tuple[tuple[str, ...], ...] = (
     ("doctor",),
     ("mcp",),
+    ("completion",),
     ("up",),
     ("down",),
     ("registry", "migrate"),
@@ -107,6 +111,26 @@ def build_cli(socket_path: Path | None = None) -> typer.Typer:
         from outfitter.dispatch.surfaces.mcp import run_mcp
 
         run_mcp(path)
+
+    @app.command(name="completion", help="Print a shell completion script.")
+    def _completion(
+        shell: Annotated[
+            Literal["bash", "zsh", "fish"],
+            typer.Argument(help="Shell to generate completions for."),
+        ],
+    ) -> None:
+        completion_cls = get_completion_class(shell)
+        if completion_cls is None:
+            typer.secho(f"dispatch: unsupported shell {shell!r}", fg="red", err=True)
+            raise typer.Exit(code=2)
+        click_command = cast(Command, get_command(app))
+        complete = completion_cls(
+            click_command,
+            {},
+            "dispatch",
+            "_DISPATCH_COMPLETE",
+        )
+        typer.echo(complete.source())
 
     @app.command(name="doctor", help="Diagnose install, daemon, registry, and app-server health.")
     def _doctor(

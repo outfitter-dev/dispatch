@@ -61,8 +61,8 @@ class LaneModelSettings(BaseModel):
 
 class LaneRuntimeSettings(BaseModel):
     lane: str
-    sandbox: ThreadSandbox = "read-only"
-    approval_policy: ApprovalPolicy = "never"
+    sandbox: ThreadSandbox | None = None
+    approval_policy: ApprovalPolicy | None = None
     approvals_reviewer: ApprovalsReviewer | None = None
     effort: Effort | None = None
     summary: ReasoningSummary | None = None

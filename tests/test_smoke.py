@@ -26,6 +26,13 @@ def test_cli_version_renders() -> None:
     assert result.output.startswith("dispatch ")
 
 
+def test_cli_completion_command_prints_script() -> None:
+    result = runner.invoke(cli_app, ["completion", "bash"])
+    assert result.exit_code == 0, result.output
+    assert "_DISPATCH_COMPLETE" in result.output
+    assert "dispatch" in result.output
+
+
 def test_daemon_help_renders() -> None:
     result = runner.invoke(daemon_app, ["--help"])
     assert result.exit_code == 0

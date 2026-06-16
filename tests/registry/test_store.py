@@ -11,7 +11,7 @@ import pytest
 import pytest_asyncio
 
 from outfitter.dispatch.contracts.errors import NotFoundError
-from outfitter.dispatch.registry.models import LaneSync
+from outfitter.dispatch.registry.models import LaneRuntimeSettings, LaneSync
 from outfitter.dispatch.registry.refs import BASE58BTC_ALPHABET, codex_ref_payload
 from outfitter.dispatch.registry.store import SCHEMA_VERSION, Registry
 from tests.fixtures.registry.builders import (
@@ -274,6 +274,69 @@ async def test_lane_runtime_settings_roundtrip(store: Registry) -> None:
 
     assert await store.get_lane_runtime_settings(lane.id) == settings
     assert await store.get_lane_runtime_settings("missing") is None
+
+
+async def test_migration_allows_inherited_runtime_policy(tmp_path: Path) -> None:
+    db = tmp_path / "registry.db"
+    async with aiosqlite.connect(db) as conn:
+        await conn.executescript(
+            """
+            CREATE TABLE lanes (
+                id TEXT PRIMARY KEY,
+                ref TEXT NOT NULL UNIQUE,
+                ref_source TEXT NOT NULL,
+                ref_payload TEXT NOT NULL,
+                ref_mixer TEXT NOT NULL,
+                handle TEXT NOT NULL,
+                role TEXT,
+                cwd TEXT,
+                source TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'unknown',
+                pinned INTEGER NOT NULL DEFAULT 0,
+                active_turn_id TEXT,
+                latest_turn_id TEXT,
+                latest_turn_status TEXT,
+                latest_error TEXT,
+                latest_error_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_event_at TEXT
+            );
+            CREATE TABLE lane_runtime_settings (
+                lane TEXT PRIMARY KEY,
+                sandbox TEXT NOT NULL DEFAULT 'read-only',
+                approval_policy TEXT NOT NULL DEFAULT 'never',
+                approvals_reviewer TEXT,
+                effort TEXT,
+                summary TEXT,
+                model TEXT,
+                service_tier TEXT,
+                output_schema TEXT,
+                personality TEXT,
+                updated_at TEXT NOT NULL
+            );
+            PRAGMA user_version = 7;
+            """
+        )
+        await conn.execute(
+            "INSERT INTO lanes (id, ref, ref_source, ref_payload, ref_mixer, handle, "
+            "source, status, created_at, updated_at) "
+            "VALUES ('L1', '0BGeK1', '0', 'payload', '00', '@a', 'own', 'idle', ?, ?)",
+            (_clock().isoformat(), _clock().isoformat()),
+        )
+        await conn.commit()
+
+    migrated = await Registry.open(db, now=_clock)
+    inherited = LaneRuntimeSettings(
+        lane="L1",
+        sandbox=None,
+        approval_policy=None,
+        updated_at=migrated.now_iso(),
+    )
+    await migrated.upsert_lane_runtime_settings(inherited)
+
+    assert await migrated.get_lane_runtime_settings("L1") == inherited
+    await migrated.close()
 
 
 async def test_get_missing_lane_raises_not_found(store: Registry) -> None:

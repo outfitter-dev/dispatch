@@ -134,8 +134,6 @@ def resolve_new(
 
     settings = NewSettings(
         cwd=str(start_cwd),
-        sandbox="read-only",
-        approval_policy="never",
         ephemeral=False,
         prefix="[${DISPATCH.CWD.REPO}]",
     ).merged(config.defaults)

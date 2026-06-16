@@ -31,8 +31,14 @@ def test_thread_start_sandbox_is_string_enum() -> None:
     params = ThreadStartParams(cwd="/work", sandbox="workspace-write", ephemeral=True)
     dumped = params.model_dump(by_alias=True, exclude_none=True)
     assert dumped["sandbox"] == "workspace-write"  # STRING, not an object
-    assert dumped["approvalPolicy"] == "never"
+    assert "approvalPolicy" not in dumped
     assert dumped["ephemeral"] is True
+
+
+def test_thread_start_omits_policy_fields_when_inheriting_codex_config() -> None:
+    params = ThreadStartParams(cwd="/work")
+    dumped = params.model_dump(by_alias=True, exclude_none=True)
+    assert dumped == {"cwd": "/work", "ephemeral": False}
 
 
 def test_thread_start_includes_rich_session_options() -> None:
@@ -71,6 +77,13 @@ def test_turn_start_sandbox_policy_is_object_and_camelcased() -> None:
     assert dumped["sandboxPolicy"] == {"type": "readOnly"}  # OBJECT, not a string
     assert dumped["input"] == [{"type": "text", "text": "hi"}]
     assert "effort" not in dumped  # None excluded
+
+
+def test_turn_start_omits_policy_fields_when_inheriting_codex_config() -> None:
+    params = TurnStartParams(thread_id="t1", input=[TextInput(text="hi")], cwd="/work")
+    dumped = params.model_dump(by_alias=True, exclude_none=True)
+    assert "approvalPolicy" not in dumped
+    assert "sandboxPolicy" not in dumped
 
 
 def test_turn_start_includes_effort_when_set() -> None:

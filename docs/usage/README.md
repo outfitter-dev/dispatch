@@ -105,6 +105,19 @@ DISPATCH_HOME=/tmp/dispatch-dev uv run dispatch up
 
 The lower-level overrides are `DISPATCH_SOCKET`, `DISPATCH_DB`, and `DISPATCH_PIDFILE`.
 
+## Shell Completions
+
+Dispatch exposes completion scripts from the derived CLI surface:
+
+```bash
+uv run dispatch completion bash
+uv run dispatch completion zsh
+uv run dispatch completion fish
+```
+
+For ad hoc use, evaluate the generated script in your shell. For durable installs,
+write it to your shell's completion directory.
+
 ## Doctor And Recovery
 
 `dispatch doctor` is the first diagnostic command for users and agents. It returns JSON
@@ -233,9 +246,11 @@ effort = "low"
 ```
 
 Preset order matters: later presets win, and CLI flags win over presets.
-Omit `model` unless you intentionally want Codex to use an explicit model. An
-omitted model or service tier keeps the Codex default call shape; Dispatch still
-records the configured default reported by `config/read` when it is available.
+Omit sandbox, approval, model, and service-tier fields unless you intentionally
+want Dispatch to send explicit overrides. When these fields are omitted, Dispatch
+omits them from `thread/start` and the initial `turn/start` so Codex/App Server can
+apply its global, profile, and project-local configuration. Dispatch still records
+the configured model defaults reported by `config/read` when available.
 
 Use `models` before pinning model or service-tier presets:
 
@@ -500,9 +515,12 @@ uv run dispatch tail <dispatch-ref> --limit 50
 
 Use `history` when you want transcript inspection and rollups rather than only recent
 items. Bare `history` summarizes managed lanes; passing a selector drills into one
-thread and can show summary, items, tools, or files. `--type`, `--tool`, and `--grep`
-filter item views; `--raw` includes raw App Server item payloads for jq-heavy
-inspection.
+thread and can show summary, items, tools, or files. Overview rows include transcript
+size, estimated tokens, active dates, deduped tool names, subagent thread ids when
+visible, best-effort git worktree identity, and dirty changed-file names from the
+lane cwd. `--type`, `--tool`, and `--grep` filter item views; `--cwd`, `--source`,
+`--status`, `--has-tool`, `--changed/--clean`, and `--min-bytes` filter overview
+rows; `--raw` includes raw App Server item payloads for jq-heavy inspection.
 
 ```bash
 uv run dispatch history
@@ -510,6 +528,7 @@ uv run dispatch history <dispatch-ref>
 uv run dispatch history <dispatch-ref> --view tools
 uv run dispatch history <dispatch-ref> --view files
 uv run dispatch history <dispatch-ref> --view items --tool bash --grep "git status" --raw
+uv run dispatch history --has-tool bash --changed --min-bytes 100000
 ```
 
 Use `watch` for a bounded live event sample from dispatch's app-server stream.

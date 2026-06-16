@@ -244,6 +244,23 @@ class HistoryInput(BaseModel):
     item_type: str | None = Field(default=None, description="Only include matching item types.")
     tool: str | None = Field(default=None, description="Only include matching tool names.")
     grep: str | None = Field(default=None, description="Only include items containing text.")
+    cwd: str | None = Field(
+        default=None, description="Only include threads whose cwd contains text."
+    )
+    source: LaneSource | None = Field(default=None, description="Only include threads by source.")
+    status: LaneStatus | None = Field(default=None, description="Only include threads by status.")
+    has_tool: str | None = Field(
+        default=None, description="Only include summaries using this tool."
+    )
+    changed: bool | None = Field(
+        default=None,
+        description=(
+            "Only include summaries with changed workspace files when true, clean when false."
+        ),
+    )
+    min_bytes: int | None = Field(
+        default=None, ge=0, description="Only include summaries with at least this transcript size."
+    )
     raw: bool = Field(default=False, description="Include raw App Server item payloads.")
     limit: int = Field(default=50, ge=1, description="Max rows/items to return.")
 
@@ -584,6 +601,9 @@ class HistoryWorktree(BaseModel):
     repo: str | None = None
     branch: str | None = None
     head: str | None = None
+    dirty: bool = False
+    changed_files_count: int = 0
+    changed_files: list[str] = Field(default_factory=list)
     is_codex_worktree: bool = False
 
 

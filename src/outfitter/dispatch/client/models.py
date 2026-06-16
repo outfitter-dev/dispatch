@@ -188,8 +188,8 @@ class ThreadInfo(WireModel):
 
 class ThreadStartParams(WireModel):
     cwd: str | None = None
-    sandbox: ThreadSandbox = "read-only"
-    approval_policy: ApprovalPolicy = "never"
+    sandbox: ThreadSandbox | None = None
+    approval_policy: ApprovalPolicy | None = None
     approvals_reviewer: ApprovalsReviewer | None = None
     base_instructions: str | None = None
     developer_instructions: str | None = None
@@ -334,9 +334,9 @@ class TurnStartParams(WireModel):
     thread_id: str
     input: list[TextInput]
     cwd: str
-    approval_policy: ApprovalPolicy = "never"
+    approval_policy: ApprovalPolicy | None = None
     approvals_reviewer: ApprovalsReviewer | None = None
-    sandbox_policy: SandboxPolicy = SandboxPolicy()
+    sandbox_policy: SandboxPolicy | None = None
     effort: Effort | None = None
     summary: ReasoningSummary | None = None
     model: str | None = None

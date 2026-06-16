@@ -136,6 +136,32 @@ async def test_new_lane_sets_name_and_sends_initial_turn(store: Registry, tmp_pa
     )
 
 
+async def test_new_lane_omits_policy_fields_to_inherit_codex_config(
+    store: Registry, tmp_path: Path
+) -> None:
+    repo = tmp_path / "dispatch"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.new_lane(NewInput(name="builder", cwd=str(repo), text="start"), ctx)
+
+    assert out.message_accepted is True
+    assert any(
+        name == "thread_start" and kw["sandbox"] is None and kw["approval_policy"] is None
+        for name, kw in client.calls
+    )
+    assert any(
+        name == "turn_start" and kw["sandbox_policy"] is None and kw["approval_policy"] is None
+        for name, kw in client.calls
+    )
+    settings = await store.get_lane_runtime_settings(out.id)
+    assert settings is not None
+    assert settings.sandbox is None
+    assert settings.approval_policy is None
+
+
 async def test_new_lane_resolves_fast_service_tier_alias_and_records_provenance(
     store: Registry, tmp_path: Path
 ) -> None:
@@ -401,7 +427,7 @@ class _CompletingBeforeReturnClient(FakeLaneClient):
         thread_id: str,
         text: str,
         cwd: str,
-        approval_policy: ApprovalPolicy = "never",
+        approval_policy: ApprovalPolicy | None = None,
         approvals_reviewer: ApprovalsReviewer | None = None,
         sandbox_policy: SandboxPolicy | None = None,
         effort: Effort | None = None,
@@ -1260,6 +1286,86 @@ async def test_status_and_log_reflect_activity(store: Registry) -> None:
     ops = [a.op for a in log.actions]
     assert "open" in ops
     assert "send" in ops
+
+
+class _HistoryReadClient(FakeLaneClient):
+    def __init__(self, results: dict[str, dict[str, object]]) -> None:
+        super().__init__()
+        self.results = results
+
+    async def thread_read(self, thread_id: str, include_turns: bool = False) -> dict[str, object]:
+        self._record("thread_read", thread_id=thread_id, include_turns=include_turns)
+        return self.results[thread_id]
+
+
+def _thread_history(*, tool: str, path: str = "src/app.py") -> dict[str, object]:
+    return {
+        "thread": {
+            "id": "thread",
+            "turns": [
+                {
+                    "id": "turn-1",
+                    "createdAt": "2026-06-16T10:00:00Z",
+                    "items": [
+                        {"id": "msg-1", "type": "message", "role": "user", "text": "do it"},
+                        {
+                            "id": "tool-1",
+                            "type": "tool_call",
+                            "toolName": tool,
+                            "text": f"{tool} touched {path}",
+                            "path": path,
+                        },
+                    ],
+                }
+            ],
+        }
+    }
+
+
+async def test_history_overview_filters_by_tool_and_changed_worktree(
+    store: Registry, tmp_path: Path
+) -> None:
+    dirty_repo = _git_repo_for_worktree(tmp_path / "dirty")
+    (dirty_repo / "README.md").write_text("changed\n")
+    clean_repo = _git_repo_for_worktree(tmp_path / "clean")
+    dirty = await store.add_lane(
+        id="dirty-lane", handle="@dirty", source="own", cwd=str(dirty_repo)
+    )
+    clean = await store.add_lane(
+        id="clean-lane", handle="@clean", source="own", cwd=str(clean_repo)
+    )
+    client = _HistoryReadClient(
+        {
+            dirty.id: _thread_history(tool="bash", path="README.md"),
+            clean.id: _thread_history(tool="python", path="src/app.py"),
+        }
+    )
+    ctx = make_ctx(store, client)
+
+    out = await handlers.history(HistoryInput(has_tool="bash", changed=True), ctx)
+
+    assert out.mode == "overview"
+    assert [thread.id for thread in out.threads] == ["dirty-lane"]
+    assert out.threads[0].worktree.dirty is True
+    assert out.threads[0].worktree.changed_files == ["README.md"]
+    assert out.threads[0].unique_tools == ["bash"]
+
+
+async def test_history_summary_reports_worktree_changed_files(
+    store: Registry, tmp_path: Path
+) -> None:
+    repo = _git_repo_for_worktree(tmp_path / "repo")
+    (repo / "README.md").write_text("changed\n")
+    lane = await store.add_lane(id="lane-1", handle="@lane", source="own", cwd=str(repo))
+    ctx = make_ctx(store, _HistoryReadClient({lane.id: _thread_history(tool="bash")}))
+
+    out = await handlers.history(HistoryInput(lane="@lane"), ctx)
+
+    assert out.thread is not None
+    assert out.thread.worktree.repo == str(repo)
+    assert out.thread.worktree.dirty is True
+    assert out.thread.worktree.changed_files_count == 1
+    assert out.thread.worktree.changed_files == ["README.md"]
 
 
 async def test_attach_is_idempotent(store: Registry) -> None:
