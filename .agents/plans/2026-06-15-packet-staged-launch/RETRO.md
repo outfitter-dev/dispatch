@@ -111,6 +111,54 @@ Durable staging of packet parts under `<launch-cwd>/.agents/sessions/<ref>/`.
   + per-file byte/sha provenance.
 - `.gitignore`: added `.agents/sessions/` (runtime artifacts).
 
+## Phase 3 — protocol spike (branch `phase-3-protocol-spike`)
+
+Investigation only — **no speculative code**, per the plan's stop rules. Regenerated
+the current App Server protocol schema with an isolated `CODEX_HOME` (never the
+user's live `~/.codex`/daemon):
+
+```bash
+CODEX_HOME=<tmp> codex app-server generate-json-schema --out <tmp/std>
+CODEX_HOME=<tmp> codex app-server generate-json-schema --experimental --out <tmp/exp>
+```
+
+Binary pinned: **codex-cli 0.140.0-alpha.2** (protocol v2).
+
+Findings (evidence: regenerated schema):
+
+- **Worktree: NOT supported.** `worktree` appears nowhere in the standard OR
+  experimental schema. `v2/ThreadStartParams.json` properties are: approvalPolicy,
+  approvalsReviewer, baseInstructions, **config**, cwd, developerInstructions,
+  ephemeral, model, modelProvider, personality, sandbox, serviceName, serviceTier,
+  sessionStartSource, threadSource — no worktree request field.
+  → **Stop rule fired: did NOT add `--worktree`.** Do not guess Codex worktree paths.
+- **Returned thread fields:** `ThreadStartResponse` returns `cwd` (top-level) and a
+  `thread` whose props include `cwd`, `path`, and **`gitInfo`** (there is a `GitInfo`
+  definition). So when/if Codex adds native worktree creation, Dispatch can report
+  the *actual* returned cwd rather than guessing. No wire-model change made now
+  (YAGNI — no worktree request to pair it with; Dispatch's `ThreadInfo` already
+  carries `cwd`/`path`).
+- **`thread/start.config`:** present as a raw passthrough object
+  (`type: [object, null], additionalProperties: true`). Dispatch deliberately does
+  **NOT** wire packet→raw-config passthrough: that is an unverified trust/injection
+  surface. The packet `codex/` dir is **staged-only** (Phase 2 `codex_config` part),
+  which is the safe, verified behavior. → **Stop rule respected.**
+- **Hooks:** the protocol has a hook system (`HookStartedNotification`,
+  `HookPromptFragment`), but execution and trust are Codex's authority. Dispatch
+  stages hook files (Phase 2 `hooks` part) and never executes them. A
+  `--trust-staged-hooks` execution bypass would require explicit operator/trusted
+  authority Dispatch does not model, and Dispatch has no hook-execution path at all.
+  → **Stop rule fired: did NOT add `--trust-staged-hooks`.**
+- **Hook/config reload semantics** (does Codex load project `.codex` hooks staged
+  after `thread/start` but before `turn/start`?) is a Codex-side, experimental,
+  version-specific behavior. Dispatch's contract is stage-not-execute, so the
+  feature does not depend on it; recorded as not-relied-upon rather than proven via
+  a heavy live probe.
+
+Net: the worktree and hook/config questions are resolved — worktree is **not
+supported** (recorded with evidence), and the safe hook/config posture is
+**stage-only** with no trust bypass. No code changed in Phase 3.
+
 ## Verification Log
 
 ### Phase 1
