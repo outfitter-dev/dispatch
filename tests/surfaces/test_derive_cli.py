@@ -500,3 +500,32 @@ def test_new_stage_and_inline_pass_through() -> None:
     assert isinstance(params, dict)
     assert params["stage"] == "all"
     assert params["inline"] == "prompt"
+
+
+def test_new_json_output_includes_staged_summary() -> None:
+    staged_payload = {
+        "id": "L1",
+        "ref": "0AB12x",
+        "handle": "@x",
+        "source": "own",
+        "status": "idle",
+        "cwd": "/work",
+        "message_accepted": True,
+        "goal_set": False,
+        "staged": {
+            "parts": ["goal", "prompt"],
+            "session_dir": "/work/.agents/sessions/0AB12x",
+            "files": [],
+        },
+        "latest_turn": {"id": None, "status": None, "error": None, "error_at": None},
+    }
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        return staged_payload
+
+    app = derive_cli(REGISTRY, invoke)
+    result = runner.invoke(app, ["new", "--name", "x", "--cwd", "/work", "--json"])
+    assert result.exit_code == 0, result.output
+    rendered = json.loads(result.output)
+    assert rendered["staged"]["parts"] == ["goal", "prompt"]
+    assert rendered["staged"]["session_dir"] == "/work/.agents/sessions/0AB12x"

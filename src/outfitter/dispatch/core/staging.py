@@ -55,13 +55,19 @@ class StagePlan:
 
 @dataclass(frozen=True)
 class StageContent:
-    """Resolved content + packet location a staging run needs to write files."""
+    """Resolved content + packet location a staging run needs to write files.
+
+    Content parts (config/goal/prompt/output_schema/base/developer) are the
+    already-resolved bytes the launch committed to, so staged files match the
+    inlined launch and nothing is re-read from disk mid-stage. Dir parts
+    (hooks/codex) are copied from ``packet_path`` since they are never inlined."""
 
     goal: str | None = None
     prompt: str | None = None
     output_schema: dict[str, object] | None = None
     base: str | None = None
     developer: str | None = None
+    config_text: str | None = None
     packet_path: Path | None = None
 
 
@@ -128,6 +134,9 @@ def stage_session(
     if target.exists():
         raise StagingError(f"session directory already exists: {target} (refusing to overwrite)")
 
+    # ``ref`` is registry-assigned and unique per lane, so the temp dir and target
+    # never collide across launches; ``os.replace`` into a non-existent target is an
+    # atomic same-filesystem rename. OSError below covers any rename/IO failure.
     tmp = sessions / f".staging-{ref}"
     try:
         if tmp.exists():
@@ -176,10 +185,7 @@ def _write_file_part(packet_dir: Path, part: StagePart, content: StageContent) -
 def _file_part_text(part: StagePart, content: StageContent) -> str | None:
     match part:
         case "config":
-            if content.packet_path is None:
-                return None
-            src = content.packet_path / "dispatch.toml"
-            return src.read_text(encoding="utf-8") if src.is_file() else None
+            return content.config_text
         case "goal":
             return content.goal
         case "prompt":

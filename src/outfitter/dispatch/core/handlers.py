@@ -366,6 +366,7 @@ def _stage_content(launch: ResolvedLaunch) -> StageContent:
         output_schema=launch.output_schema,
         base=launch.resolved.base_instructions,
         developer=launch.resolved.developer_instructions,
+        config_text=launch.packet.config_text if launch.packet is not None else None,
         packet_path=launch.packet.path if launch.packet is not None else None,
     )
 
@@ -478,8 +479,9 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
                 content=_stage_content(launch),
             )
         except StagingError as exc:
-            # Lane stays registered; the first turn never starts (ADR: staging is a
-            # pre-turn durability step). Surface the typed error for the caller.
+            # Lane stays registered but is marked error; the first turn never starts
+            # (staging is a pre-turn durability step). Surface the typed error.
+            await ctx.registry.update_lane_status(lane.id, "error")
             await ctx.registry.log_action(
                 "stage",
                 lane=lane.id,

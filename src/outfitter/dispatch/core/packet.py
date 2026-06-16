@@ -83,9 +83,13 @@ class PacketContent:
     base: str | None = None
     developer: str | None = None
     output_schema: dict[str, object] | None = None
-    has_config: bool = False
+    config_text: str | None = None
     unknown_files: list[str] = field(default_factory=list)
     aux_dirs: list[str] = field(default_factory=list)
+
+    @property
+    def has_config(self) -> bool:
+        return self.config_text is not None
 
 
 def load_packet(path: Path) -> PacketContent:
@@ -95,7 +99,9 @@ def load_packet(path: Path) -> PacketContent:
     if not path.is_dir():
         raise ValidationError(f"packet {str(path)!r} is not a directory")
 
-    settings = _load_config(path / _CONFIG_FILE)
+    config_path = path / _CONFIG_FILE
+    config_text = _read_text(config_path)
+    settings = _parse_config(config_text, config_path)
     output_schema = _load_output_schema(path / _OUTPUT_SCHEMA_FILE)
 
     unknown_files: list[str] = []
@@ -115,7 +121,7 @@ def load_packet(path: Path) -> PacketContent:
         base=_read_text(path / _BASE_FILE),
         developer=_read_text(path / _DEVELOPER_FILE),
         output_schema=output_schema,
-        has_config=(path / _CONFIG_FILE).is_file(),
+        config_text=config_text,
         unknown_files=unknown_files,
         aux_dirs=aux_dirs,
     )
@@ -132,13 +138,11 @@ def _read_text(path: Path) -> str | None:
         raise ValidationError(f"packet file {path} is not valid UTF-8: {exc}") from exc
 
 
-def _load_config(path: Path) -> NewSettings:
-    if not path.is_file():
+def _parse_config(text: str | None, path: Path) -> NewSettings:
+    if text is None:
         return NewSettings()
     try:
-        raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise ValidationError(f"cannot read packet {_CONFIG_FILE}: {exc}") from exc
+        raw = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
         raise ValidationError(f"invalid packet {_CONFIG_FILE} {path}: {exc}") from exc
     try:

@@ -188,6 +188,26 @@ Known non-blocking item (recorded, out of Phase 1 scope): `--cwd` itself is stil
 resolved daemon-side for relative values (pre-existing `new` behavior). Changing
 it touches the whole `new`/cwd contract; deferred rather than rewritten here.
 
+### Phase 2 — round 1 (local reviewer subagent)
+
+- Score: 3/5. Summary: sound core; a few correctness/quality items.
+- P0 (os.replace race on same ref) — **assessed overstated**: refs are unique
+  per registry-assigned lane, so temp+target paths never collide and the rename
+  into a non-existent target is atomic; OSError is already caught with cleanup.
+  Added a clarifying comment instead of file-locking (YAGNI for a non-occurring
+  failure mode).
+- P1 (config part re-read dispatch.toml inside the writer) — **Fixed**: pre-read
+  the raw `dispatch.toml` into `PacketContent.config_text` → `StageContent`; the
+  writer no longer re-reads disk, so config matches goal/prompt handling.
+- P1 (lane left `idle` after staging failure) — **Fixed**: mark the lane `error`
+  on `StagingError` (mirrors the turn-failure path); test asserts it.
+- P1 (`state.json` missing `source`) — **declined**: `source_packet` (None ⇒
+  inline) already discriminates; no consumer needs a separate field. Recorded.
+- P2 (status assertion; surface JSON staged test) — **Fixed**: added both
+  (`test_new_lane_staging_failure_prevents_turn` asserts error status;
+  `test_new_json_output_includes_staged_summary` checks rendered JSON).
+- Re-verified: `just check` EXIT=0 (278 passed). No open P0/P1/P2.
+
 ## Remote Review / CI Log
 
 - Not started.

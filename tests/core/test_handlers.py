@@ -1357,8 +1357,10 @@ async def test_new_lane_staging_failure_prevents_turn(store: Registry, tmp_path:
             NewInput(name="worker", cwd=str(cwd), packet=str(pkt), stage="goal", text="hi"), ctx
         )
 
-    # Lane stays registered; the first turn never started.
-    assert (await store.find_lane("lane-1")) is not None
+    # Lane stays registered, marked error; the first turn never started.
+    lane = await store.find_lane("lane-1")
+    assert lane is not None
+    assert lane.status == "error"
     assert not any(name == "turn_start" for name, _ in client.calls)
 
 

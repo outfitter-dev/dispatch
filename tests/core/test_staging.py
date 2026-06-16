@@ -108,6 +108,18 @@ def test_stage_session_copies_packet_dirs(tmp_path: Path) -> None:
     assert hooks_entry.bytes is None  # directories report no byte count
 
 
+def test_stage_session_writes_config_from_pre_read_text(tmp_path: Path) -> None:
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    content = StageContent(config_text='sandbox = "workspace-write"\n')
+    plan = StagePlan(parts=("config",))
+
+    result = stage_session(cwd=cwd, ref="R1", lane_id="L1", plan=plan, content=content)
+
+    staged = result.session_dir / "packet" / "dispatch.toml"
+    assert staged.read_text() == 'sandbox = "workspace-write"\n'
+
+
 def test_stage_session_refuses_overwrite(tmp_path: Path) -> None:
     cwd = tmp_path / "repo"
     existing = cwd / ".agents" / "sessions" / "R1"
