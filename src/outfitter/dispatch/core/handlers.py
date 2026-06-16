@@ -520,8 +520,6 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         policy=ctx.policy,
     )
     effective_cwd = workspace.effective_cwd
-    sandbox = settings.sandbox or "read-only"
-    approval_policy = settings.approval_policy or "never"
     resolved_model = await resolve_model_settings(
         ctx,
         model=settings.model,
@@ -532,8 +530,8 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
     explicit_service_tier = resolved_model.resolved_service_tier if settings.service_tier else None
     thread = await ctx.client.thread_start(
         cwd=str(effective_cwd),
-        sandbox=sandbox,
-        approval_policy=approval_policy,
+        sandbox=settings.sandbox,
+        approval_policy=settings.approval_policy,
         approvals_reviewer=settings.approvals_reviewer,
         base_instructions=resolved.base_instructions,
         developer_instructions=resolved.developer_instructions,
@@ -552,8 +550,8 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         runtime_settings_for_lane(
             lane=lane.id,
             updated_at=ctx.registry.now_iso(),
-            sandbox=sandbox,
-            approval_policy=approval_policy,
+            sandbox=settings.sandbox,
+            approval_policy=settings.approval_policy,
             approvals_reviewer=settings.approvals_reviewer,
             effort=settings.effort,
             summary=settings.summary,
@@ -626,9 +624,13 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
                 lane.id,
                 settings.text,
                 cwd=str(effective_cwd),
-                approval_policy=approval_policy,
+                approval_policy=settings.approval_policy,
                 approvals_reviewer=settings.approvals_reviewer,
-                sandbox_policy=thread_sandbox_to_turn_policy(sandbox),
+                sandbox_policy=(
+                    thread_sandbox_to_turn_policy(settings.sandbox)
+                    if settings.sandbox is not None
+                    else None
+                ),
                 effort=settings.effort,
                 summary=settings.summary,
                 model=settings.model,
@@ -1061,8 +1063,13 @@ async def history(inp: HistoryInput, ctx: Ctx) -> HistoryOutput:
     if mode == "overview":
         if inp.lane is not None:
             raise ValidationError("history overview does not accept a thread selector")
-        lanes = (await ctx.registry.list_lanes())[: inp.limit]
-        summaries = [await _history_summary_for_lane(lane, ctx) for lane in lanes]
+        summaries: list[HistoryThreadSummary] = []
+        for lane in await ctx.registry.list_lanes():
+            summary = await _history_summary_for_lane(lane, ctx)
+            if _history_summary_matches(summary, inp):
+                summaries.append(summary)
+            if len(summaries) >= inp.limit:
+                break
         return HistoryOutput(mode="overview", threads=summaries)
 
     if inp.lane is None:
@@ -1094,6 +1101,25 @@ def _history_mode(inp: HistoryInput) -> Literal["overview", "summary", "items", 
     if inp.view == "auto":
         return "overview" if inp.lane is None else "summary"
     return inp.view
+
+
+def _history_summary_matches(summary: HistoryThreadSummary, inp: HistoryInput) -> bool:
+    if inp.cwd is not None and inp.cwd.casefold() not in (summary.cwd or "").casefold():
+        return False
+    if inp.source is not None and summary.source != inp.source:
+        return False
+    if inp.status is not None and summary.status != inp.status:
+        return False
+    if inp.has_tool is not None and not any(
+        inp.has_tool.casefold() in tool.casefold() for tool in summary.unique_tools
+    ):
+        return False
+    if inp.changed is not None and summary.worktree.dirty != inp.changed:
+        return False
+    return not (
+        inp.min_bytes is not None
+        and (summary.transcript_bytes is None or summary.transcript_bytes < inp.min_bytes)
+    )
 
 
 async def _history_summary_for_lane(lane: Lane, ctx: Ctx) -> HistoryThreadSummary:

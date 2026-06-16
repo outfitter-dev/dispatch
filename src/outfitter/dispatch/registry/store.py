@@ -35,7 +35,7 @@ from .models import (
 from .refs import BASE58BTC_ALPHABET, CODEX_REF_SOURCE, codex_ref_payload, make_ref
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 _QUEUED_MESSAGES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS queued_messages (
@@ -160,8 +160,8 @@ CREATE TABLE IF NOT EXISTS lane_model_settings (
 );
 CREATE TABLE IF NOT EXISTS lane_runtime_settings (
     lane TEXT PRIMARY KEY,
-    sandbox TEXT NOT NULL DEFAULT 'read-only',
-    approval_policy TEXT NOT NULL DEFAULT 'never',
+    sandbox TEXT,
+    approval_policy TEXT,
     approvals_reviewer TEXT,
     effort TEXT,
     summary TEXT,
@@ -237,6 +237,8 @@ class Registry:
             await self._ensure_queued_messages_foreign_key()
         if user_version < 7:
             await self._ensure_lane_runtime_settings_table()
+        if user_version < 8:
+            await self._allow_nullable_lane_runtime_policy()
 
     async def _ensure_ref_columns(self) -> None:
         async with self._conn.execute("PRAGMA table_info(lanes)") as cur:
@@ -300,8 +302,8 @@ class Registry:
             """
             CREATE TABLE IF NOT EXISTS lane_runtime_settings (
                 lane TEXT PRIMARY KEY,
-                sandbox TEXT NOT NULL DEFAULT 'read-only',
-                approval_policy TEXT NOT NULL DEFAULT 'never',
+                sandbox TEXT,
+                approval_policy TEXT,
                 approvals_reviewer TEXT,
                 effort TEXT,
                 summary TEXT,
@@ -312,6 +314,45 @@ class Registry:
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
             );
+            """
+        )
+
+    async def _allow_nullable_lane_runtime_policy(self) -> None:
+        async with self._conn.execute("PRAGMA table_info(lane_runtime_settings)") as cur:
+            rows = await cur.fetchall()
+        policy_columns = {
+            str(row["name"]): int(row["notnull"])
+            for row in rows
+            if str(row["name"]) in {"sandbox", "approval_policy"}
+        }
+        if policy_columns.get("sandbox") == 0 and policy_columns.get("approval_policy") == 0:
+            return
+        await self._conn.executescript(
+            """
+            CREATE TABLE lane_runtime_settings_new (
+                lane TEXT PRIMARY KEY,
+                sandbox TEXT,
+                approval_policy TEXT,
+                approvals_reviewer TEXT,
+                effort TEXT,
+                summary TEXT,
+                model TEXT,
+                service_tier TEXT,
+                output_schema TEXT,
+                personality TEXT,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
+            );
+            INSERT INTO lane_runtime_settings_new (
+                lane, sandbox, approval_policy, approvals_reviewer, effort, summary, model,
+                service_tier, output_schema, personality, updated_at
+            )
+            SELECT
+                lane, sandbox, approval_policy, approvals_reviewer, effort, summary, model,
+                service_tier, output_schema, personality, updated_at
+            FROM lane_runtime_settings;
+            DROP TABLE lane_runtime_settings;
+            ALTER TABLE lane_runtime_settings_new RENAME TO lane_runtime_settings;
             """
         )
 

@@ -69,6 +69,19 @@ Runtime state defaults to `~/.dispatch`. Use `DISPATCH_HOME` for isolation when
 testing. Do not point tests at the user's live `~/.codex`; the repo integration
 suite uses an isolated `CODEX_HOME`.
 
+## Shell Completions
+
+Use the derived completion command when setting up an operator shell:
+
+```bash
+uv run dispatch completion bash
+uv run dispatch completion zsh
+uv run dispatch completion fish
+```
+
+Evaluate the generated script for ad hoc use, or write it to the shell's
+completion directory for durable installs.
+
 ## Thread Selectors And Lane Rules
 
 Every managed thread has a stored dispatch-local `ref`. Prefer refs for command
@@ -85,6 +98,12 @@ uv run dispatch new --name my-lane --cwd /path/to/project --text "Do the bounded
 uv run dispatch new --name my-lane --goal "Loop until green." --text "Start with tests."
 uv run dispatch new --name my-lane --preset reviewer --no-send
 ```
+
+Omit sandbox, approval, model, and service-tier settings when Codex defaults are
+acceptable. `dispatch new` omits unset policy/model fields from `thread/start`
+and initial `turn/start`, allowing Codex/App Server global, profile, and
+project-local configuration to apply. Add explicit values only when the lane
+needs Dispatch-owned overrides.
 
 Use `--goal` for a native App Server goal before the initial turn. Do not put
 `/goal ...` in `--text`; dispatch treats slash commands as plain text and rejects
@@ -346,7 +365,14 @@ uv run dispatch history <dispatch-ref>
 uv run dispatch history <dispatch-ref> --view tools
 uv run dispatch history <dispatch-ref> --view files
 uv run dispatch history <dispatch-ref> --view items --tool bash --grep "git status" --raw
+uv run dispatch history --has-tool bash --changed --min-bytes 100000
 ```
+
+Bare `history` includes transcript size, estimated tokens, active dates, deduped
+tools, visible subagent thread ids, worktree identity, and dirty changed-file
+names from each lane cwd. Overview filters include `--cwd`, `--source`,
+`--status`, `--has-tool`, `--changed/--clean`, and `--min-bytes`. Item views use
+`--type`, `--tool`, `--grep`, and optional `--raw`.
 
 Use `watch` for a bounded live event sample. It returns raw App
 Server method/params until a limit or timeout, and it is not an infinite tail:

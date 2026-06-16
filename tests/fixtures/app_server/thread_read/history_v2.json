@@ -1,0 +1,45 @@
+{
+  "thread": {
+    "id": "019f0000-0000-7000-9000-000000000042",
+    "sessionId": "019f0000-0000-7000-9000-000000000042",
+    "name": "[dispatch] history fixture",
+    "cwd": "/fixture/history",
+    "turns": [
+      {
+        "id": "turn-1",
+        "status": "completed",
+        "createdAt": "2026-06-16T12:00:00.000Z",
+        "items": [
+          {
+            "id": "item-user-1",
+            "type": "userMessage",
+            "text": "Inspect the repo."
+          },
+          {
+            "id": "item-tool-1",
+            "type": "toolCall",
+            "toolName": "bash",
+            "text": "git status --short",
+            "path": "README.md"
+          },
+          {
+            "id": "item-file-1",
+            "type": "changes",
+            "changes": [
+              {
+                "path": "src/outfitter/dispatch/core/history.py",
+                "status": "modified"
+              }
+            ],
+            "text": "Changed history parser."
+          },
+          {
+            "id": "item-agent-1",
+            "type": "agentMessage",
+            "text": "Spawned subagent 019f0000-0000-7000-9000-000000000099 for review."
+          }
+        ]
+      }
+    ]
+  }
+}

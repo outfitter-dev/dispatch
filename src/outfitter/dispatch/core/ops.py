@@ -242,8 +242,8 @@ NEW_PLAN = define_op(
                 },
                 "packet": None,
                 "settings": {
-                    "sandbox": "read-only",
-                    "approval_policy": "never",
+                    "sandbox": None,
+                    "approval_policy": None,
                     "approvals_reviewer": None,
                     "model": None,
                     "model_provider": None,

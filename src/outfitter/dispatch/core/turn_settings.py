@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from outfitter.dispatch.client.models import (
     ApprovalPolicy,
@@ -19,8 +19,8 @@ from outfitter.dispatch.registry.store import Registry
 
 @dataclass(frozen=True)
 class TurnStartSettings:
-    sandbox_policy: SandboxPolicy = field(default_factory=lambda: SandboxPolicy(type="readOnly"))
-    approval_policy: ApprovalPolicy = "never"
+    sandbox_policy: SandboxPolicy | None = None
+    approval_policy: ApprovalPolicy | None = None
     approvals_reviewer: ApprovalsReviewer | None = None
     effort: Effort | None = None
     summary: ReasoningSummary | None = None
@@ -44,8 +44,8 @@ def runtime_settings_for_lane(
     *,
     lane: str,
     updated_at: str,
-    sandbox: ThreadSandbox = "read-only",
-    approval_policy: ApprovalPolicy = "never",
+    sandbox: ThreadSandbox | None = None,
+    approval_policy: ApprovalPolicy | None = None,
     approvals_reviewer: ApprovalsReviewer | None = None,
     effort: Effort | None = None,
     summary: ReasoningSummary | None = None,
@@ -74,7 +74,9 @@ async def load_turn_start_settings(registry: Registry, lane_id: str) -> TurnStar
     if stored is None:
         return TurnStartSettings()
     return TurnStartSettings(
-        sandbox_policy=thread_sandbox_to_turn_policy(stored.sandbox),
+        sandbox_policy=(
+            thread_sandbox_to_turn_policy(stored.sandbox) if stored.sandbox is not None else None
+        ),
         approval_policy=stored.approval_policy,
         approvals_reviewer=stored.approvals_reviewer,
         effort=stored.effort,
