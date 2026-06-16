@@ -14,6 +14,7 @@ import structlog
 
 from outfitter.dispatch.client.client import AppServerClient
 from outfitter.dispatch.client.transport import StdioTransport
+from outfitter.dispatch.config import runtime_policy
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.core.ops import REGISTRY
 from outfitter.dispatch.core.reactor import Reactor
@@ -45,7 +46,13 @@ async def run_daemon(socket_path: Path, db_path: Path) -> None:
     log = structlog.get_logger()
     first_client = await _spawn_client()
     # mypy verifies AppServerClient satisfies the LaneClient protocol here.
-    ctx = Ctx(client=first_client, registry=store, log=log, abort=asyncio.Event())
+    ctx = Ctx(
+        client=first_client,
+        registry=store,
+        log=log,
+        abort=asyncio.Event(),
+        policy=runtime_policy(),
+    )
     runner = TriggerRunner(ctx, _utcnow)
     scheduler = Scheduler(ctx, runner, _utcnow)
     server = ControlServer(REGISTRY, ctx)

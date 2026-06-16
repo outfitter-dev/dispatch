@@ -273,6 +273,23 @@ class ModelsInput(BaseModel):
 # --- outputs ------------------------------------------------------------------
 
 
+class LaneCapabilities(BaseModel):
+    read: bool = True
+    sync: bool = True
+    tail: bool = True
+    send: bool
+    context: bool
+    steer: bool
+    queue: bool
+    interject: bool
+    goal_set: bool
+    goal_clear: bool
+    stop: bool
+    fork: bool
+    rollback: bool
+    compact: bool
+
+
 class LaneRef(BaseModel):
     ref: str
     id: str
@@ -280,6 +297,11 @@ class LaneRef(BaseModel):
     source: LaneSource
     status: LaneStatus
     cwd: str | None = None
+    writable: bool = Field(description="Whether turn-writing commands are allowed.")
+    capabilities: LaneCapabilities = Field(description="Current authority capabilities.")
+    write_locked_reason: str | None = Field(
+        default=None, description="Why turn-writing commands are blocked, if blocked."
+    )
 
 
 class ThreadActionRef(BaseModel):
@@ -308,6 +330,11 @@ class ManagedThreadIdentity(BaseModel):
     source: LaneSource
     status: LaneStatus
     cwd: str | None = None
+    writable: bool = Field(description="Whether turn-writing commands are allowed.")
+    capabilities: LaneCapabilities = Field(description="Current authority capabilities.")
+    write_locked_reason: str | None = Field(
+        default=None, description="Why turn-writing commands are blocked, if blocked."
+    )
 
 
 class LaneSyncView(BaseModel):
@@ -579,6 +606,8 @@ class ModelConfigView(BaseModel):
 class ModelCatalogOutput(BaseModel):
     refreshed_at: str | None = None
     source: str
+    catalog_state: Literal["ready", "empty"] = "ready"
+    hint: str | None = None
     configured_default: ModelConfigView
     models: list[ModelCatalogItem]
 

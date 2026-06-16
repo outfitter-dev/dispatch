@@ -64,6 +64,7 @@ class NewConfigFile(BaseModel):
 
     defaults: NewSettings = Field(default_factory=NewSettings)
     presets: dict[str, NewSettings] = Field(default_factory=dict)
+    policy: dict[str, object] = Field(default_factory=dict, exclude=True)
 
 
 class ResolvedNew:

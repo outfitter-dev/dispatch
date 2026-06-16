@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
 import structlog
@@ -41,6 +41,7 @@ from outfitter.dispatch.client.models import (
     ThreadSortKey,
     ThreadSourceKind,
 )
+from outfitter.dispatch.config import RuntimePolicy
 
 if TYPE_CHECKING:
     from outfitter.dispatch.registry.store import Registry
@@ -184,3 +185,4 @@ class Ctx:
     registry: Registry
     log: structlog.stdlib.BoundLogger
     abort: asyncio.Event
+    policy: RuntimePolicy = field(default_factory=RuntimePolicy)

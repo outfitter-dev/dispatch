@@ -251,7 +251,9 @@ tiers, and aliases. For example, the user-facing `fast` alias resolves through
 the advertised service tier named `Fast` and may send `serviceTier:"priority"`
 to the App Server. If a requested tier is unavailable for the selected/default
 model, `new` fails before starting the thread and prints the available tiers.
-`--no-refresh` reads the local catalog cache plus current config defaults.
+`--no-refresh` reads the local catalog cache plus current config defaults. On a
+first run, an empty cache reports `catalog_state: "empty"` plus a hint to run
+`dispatch models` without `--no-refresh`.
 
 Use `--goal` to create a native App Server goal before the initial message is sent.
 Slash commands in `--text` are not interpreted by dispatch; `--text "/goal ..."`
@@ -340,7 +342,7 @@ Use `send --context` for silent context injection. It adds model-visible context
 starting a turn:
 
 ```bash
-uv run dispatch send @docs-review "Context: attached lanes are not turn-writable in v0." --context
+uv run dispatch send @docs-review "Context: check lane capabilities before writing." --context
 ```
 
 Use `send --steer` only while the lane has an active turn:
@@ -489,11 +491,32 @@ uv run dispatch sync <dispatch-ref-or-thread-id>
 ```
 
 Attached lanes allow observation, sync, and explicit metadata/lifecycle actions such as
-`rename`, `archive`, and `restore`. Dispatch still must not write turns or mutate history on
-attached lanes because the desktop app uses a separate app-server process and there is no
-cross-process write interlock. ADR-0005 and ADR-0018 are the authoritative decisions:
+`rename`, `archive`, and `restore`. Dispatch does not write turns or mutate history on
+attached lanes by default because the desktop app uses a separate app-server process and
+there is no cross-process write interlock. ADR-0005 and ADR-0018 are the authoritative decisions:
 [`docs/adrs/0005-lane-authority-capability-ladder.md`](../adrs/0005-lane-authority-capability-ladder.md)
 and [`docs/adrs/0018-top-level-thread-actions-and-search.md`](../adrs/0018-top-level-thread-actions-and-search.md).
+
+Local operators can explicitly opt in to attached-lane writes:
+
+```toml
+# ~/.dispatch/config.toml
+[policy]
+allow_attached_writes = true
+```
+
+With that policy enabled, `send`, `send --context`, `goal set`, and other
+turn-writing/history-mutating commands may target attached lanes through
+Dispatch's daemon. This is a local trust override, not a cross-process interlock:
+the desktop app still cannot be gated by Dispatch's advisory lock.
+
+Managed lane JSON exposes authority for filtering:
+
+```bash
+uv run dispatch list --json | jq '.lanes[] | select(.writable)'
+uv run dispatch list --json | jq '.lanes[] | select(.capabilities.context)'
+uv run dispatch get <ref> --json | jq '{ref, source, writable, capabilities, write_locked_reason}'
+```
 
 Attach is compact by default: it verifies the thread with App Server
 `thread/read(includeTurns:false)`, registers the lane, and stores metadata sync state. It

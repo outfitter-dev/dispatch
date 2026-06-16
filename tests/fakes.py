@@ -35,6 +35,7 @@ from outfitter.dispatch.client.models import (
     ThreadSortKey,
     ThreadSourceKind,
 )
+from outfitter.dispatch.config import RuntimePolicy
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.registry.store import Registry
 
@@ -346,13 +347,16 @@ class FakeLaneClient:
         return _aiter(self.raw_log)
 
 
-def make_ctx(store: Registry, client: FakeLaneClient | None = None) -> Ctx:
+def make_ctx(
+    store: Registry, client: FakeLaneClient | None = None, policy: RuntimePolicy | None = None
+) -> Ctx:
     """Build a handler Ctx with a fake client + the given store (ADR-0006)."""
     return Ctx(
         client=client if client is not None else FakeLaneClient(),
         registry=store,
         log=structlog.get_logger(),
         abort=asyncio.Event(),
+        policy=policy or RuntimePolicy(),
     )
 
 

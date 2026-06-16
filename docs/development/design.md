@@ -11,7 +11,7 @@ Status: approved design, implemented through v0 and updated for dispatch-local r
 
 ## Goals / non-goals
 
-Goals (v1): a single daemon that owns one Codex app-server and drives many lanes; a typed CLI and an MCP server, both derived from one contract set; time + event triggers; durable registry of lanes and triggers; full read/write on self-spawned owned lanes. Existing desktop lanes can be attached as managed lanes. They remain blocked for turn-writing and history-mutating ops per ADR-0005, while explicit metadata/lifecycle actions and search can target managed or unmanaged Codex threads per ADR-0018.
+Goals (v1): a single daemon that owns one Codex app-server and drives many lanes; a typed CLI and an MCP server, both derived from one contract set; time + event triggers; durable registry of lanes and triggers; full read/write on self-spawned owned lanes. Existing desktop lanes can be attached as managed lanes. They remain blocked for turn-writing and history-mutating ops by default per ADR-0005, while explicit metadata/lifecycle actions and search can target managed or unmanaged Codex threads per ADR-0018. A local operator policy may explicitly opt in to attached-lane writes for trusted setups.
 
 Non-goals (v1): Claude/crew backend; conditional triggers (seam only); dashboard/TUI; full approval policy engine; multi-user; remote-control surface (planned v2).
 
@@ -152,7 +152,7 @@ The scheduler is **our own** (asyncio): a time wheel for time triggers + the rea
 
 The daemon drives threads it spawns (`new`, backed by the lower-level `open` op) with full read/write. Existing desktop threads can be registered with `attach`, becoming **managed attached lanes**. The Phase-1 cross-process spike confirmed that a second app-server process can discover and read persisted history, but live event fan-out does not cross processes and concurrent turns are uncoordinated. Dispatch's advisory lock is dispatch-local; it cannot gate the desktop app.
 
-ADR-0005 keeps turn-writing and history-mutating ops locked on attached lanes until there is a real cross-process interlock and an explicit user opt-in. ADR-0018 carves out explicit metadata/lifecycle actions (`rename`, `archive`, `restore`) and search because they do not start turns, steer turns, or mutate turn history. **Unmanaged** means a persisted Codex thread visible to App Server but not registered in dispatch; sync remains a separate managed-lane index refresh.
+ADR-0005 keeps turn-writing and history-mutating ops locked on attached lanes by default until there is a real cross-process interlock. The local daemon policy `[policy] allow_attached_writes = true` is an explicit operator override for trusted setups; it enables Dispatch to call the same App Server write primitives against attached lanes, but it does not create a cross-process interlock with the desktop app. `list`/`get` expose `writable`, `capabilities`, and `write_locked_reason` so operators and scripts can inspect the effective policy. ADR-0018 carves out explicit metadata/lifecycle actions (`rename`, `archive`, `restore`) and search because they do not start turns, steer turns, or mutate turn history. **Unmanaged** means a persisted Codex thread visible to App Server but not registered in dispatch; sync remains a separate managed-lane index refresh.
 
 ## Approvals (v1 minimal)
 

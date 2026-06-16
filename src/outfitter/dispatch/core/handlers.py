@@ -2,8 +2,9 @@
 import CLI/MCP/socket types; side effects go through ``ctx`` (ADR-0006).
 
 Authority guard (ADR-0005/0018): owned lanes are read/write; attached lanes can
-be observed and have explicit metadata/lifecycle actions, but turn-writing and
-history-mutating ops still raise ``AuthorityError``.
+be observed and have explicit metadata/lifecycle actions. Turn-writing and
+history-mutating ops require an owned lane unless local policy explicitly allows
+attached writes.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import asyncio
 import os
 from datetime import datetime, time
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import Literal, TypedDict, cast
 
 from pydantic import ValidationError as PydanticValidationError
 
@@ -63,6 +64,7 @@ from .models import (
     GoalGetInput,
     GoalSetInput,
     GoalView,
+    LaneCapabilities,
     LaneDetail,
     LaneInput,
     LaneListItem,
@@ -133,9 +135,47 @@ class _ManagedIdentityPayload(TypedDict):
     source: LaneSource
     status: LaneStatus
     cwd: str | None
+    writable: bool
+    capabilities: LaneCapabilities
+    write_locked_reason: str | None
 
 
-def _ref(lane: Lane) -> LaneRef:
+_ATTACHED_WRITE_LOCK_REASON = (
+    "attached thread; Dispatch does not own this App Server thread "
+    "(enable policy.allow_attached_writes to override)"
+)
+
+
+def _can_write(lane: Lane, ctx: Ctx) -> bool:
+    return lane.source == "own" or ctx.policy.allow_attached_writes
+
+
+def _capabilities(lane: Lane, ctx: Ctx) -> LaneCapabilities:
+    writable = _can_write(lane, ctx)
+    return LaneCapabilities(
+        send=writable,
+        context=writable,
+        steer=writable,
+        queue=writable,
+        interject=writable,
+        goal_set=writable,
+        goal_clear=writable,
+        stop=writable,
+        fork=writable,
+        rollback=writable,
+        compact=writable,
+    )
+
+
+def _write_locked_reason(lane: Lane, ctx: Ctx) -> str | None:
+    if _can_write(lane, ctx):
+        return None
+    if lane.source == "attached":
+        return _ATTACHED_WRITE_LOCK_REASON
+    return "thread is not writable"
+
+
+def _ref(lane: Lane, ctx: Ctx) -> LaneRef:
     return LaneRef(
         ref=lane.ref,
         id=lane.id,
@@ -143,6 +183,9 @@ def _ref(lane: Lane) -> LaneRef:
         source=lane.source,
         status=lane.status,
         cwd=lane.cwd,
+        writable=_can_write(lane, ctx),
+        capabilities=_capabilities(lane, ctx),
+        write_locked_reason=_write_locked_reason(lane, ctx),
     )
 
 
@@ -165,7 +208,7 @@ def _action_ref(
     )
 
 
-def _managed_identity(lane: Lane) -> _ManagedIdentityPayload:
+def _managed_identity(lane: Lane, ctx: Ctx) -> _ManagedIdentityPayload:
     return {
         "lane": lane.id,
         "ref": lane.ref,
@@ -176,6 +219,9 @@ def _managed_identity(lane: Lane) -> _ManagedIdentityPayload:
         "source": lane.source,
         "status": lane.status,
         "cwd": lane.cwd,
+        "writable": _can_write(lane, ctx),
+        "capabilities": _capabilities(lane, ctx),
+        "write_locked_reason": _write_locked_reason(lane, ctx),
     }
 
 
@@ -285,9 +331,11 @@ def _model_view_from_thread(thread: ThreadInfo) -> ThreadModelView:
     )
 
 
-def _list_item(lane: Lane, sync: LaneSync | None, model: LaneModelSettings | None) -> LaneListItem:
+def _list_item(
+    lane: Lane, sync: LaneSync | None, model: LaneModelSettings | None, ctx: Ctx
+) -> LaneListItem:
     return LaneListItem(
-        **_ref(lane).model_dump(),
+        **_ref(lane, ctx).model_dump(),
         sync=_sync_view(sync),
         latest_turn=_latest_turn_view(lane),
         model=_model_view(model, sync),
@@ -317,9 +365,24 @@ async def _resolve_thread_target(ctx: Ctx, ref: str) -> tuple[str, Lane | None]:
     return resolved.thread_id, resolved.lane
 
 
-def _require_writable(lane: Lane) -> None:
+def _require_writable(lane: Lane, ctx: Ctx) -> None:
+    if _can_write(lane, ctx):
+        return
     if lane.source == "attached":
-        raise AuthorityError(f"lane {lane.handle} is attached (turn-write locked; ADR-0005/0018)")
+        raise AuthorityError(
+            f"lane {lane.handle} ({lane.ref}) has source=attached and is read-only by "
+            "local policy; attached lanes can be read, synced, and tailed, but turn-writing "
+            "commands require an owned lane unless policy.allow_attached_writes is enabled. "
+            "Use `dispatch new ...` for a writable owned lane, respond manually in Codex "
+            "desktop, or set `[policy] allow_attached_writes = true` in the local Dispatch "
+            "config to opt in."
+        )
+    raise AuthorityError(f"lane {lane.handle} ({lane.ref}) is not writable")
+
+
+async def _prepare_attached_write(lane: Lane, ctx: Ctx) -> None:
+    if lane.source == "attached":
+        await ctx.client.thread_resume(lane.id, exclude_turns=True)
 
 
 def _require_active_turn(lane: Lane, action: str) -> str:
@@ -337,7 +400,7 @@ async def open_lane(inp: OpenInput, ctx: Ctx) -> LaneRef:
     )
     await ctx.registry.log_action("open", lane=lane.id, detail=handle)
     ctx.log.info("lane.open", lane=lane.id, handle=handle)
-    return _ref(lane)
+    return _ref(lane, ctx)
 
 
 def _validate_launch(launch: ResolvedLaunch) -> None:
@@ -530,7 +593,7 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         await ctx.registry.log_action("send", lane=lane.id, detail=settings.text[:120])
         message_accepted = True
     ctx.log.info("lane.new", lane=lane.id, handle=lane.handle, message_accepted=message_accepted)
-    ref = _ref(lane)
+    ref = _ref(lane, ctx)
     return NewLane(
         **ref.model_dump(),
         message_accepted=message_accepted,
@@ -556,7 +619,7 @@ async def attach_lane(inp: AttachInput, ctx: Ctx) -> LaneRef:
     if existing is not None:
         if inp.sync:
             await _sync_lane(existing, ctx, full=False)
-        return _ref(existing)  # idempotent re-attach
+        return _ref(existing, ctx)  # idempotent re-attach
     try:
         thread = await asyncio.wait_for(
             _read_thread_metadata(ctx, inp.thread), _ATTACH_METADATA_TIMEOUT_S
@@ -585,7 +648,7 @@ async def attach_lane(inp: AttachInput, ctx: Ctx) -> LaneRef:
     )
     await _record_observed_model(lane, thread, sync, ctx)
     ctx.log.info("lane.attach", lane=lane.id, handle=handle)
-    return _ref(lane)
+    return _ref(lane, ctx)
 
 
 async def _read_thread_metadata(ctx: Ctx, thread_id: str) -> ThreadInfo:
@@ -719,8 +782,9 @@ def _metadata_sync(
 
 async def send(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
     lane = await _resolve(ctx, inp.lane)
-    _require_writable(lane)
+    _require_writable(lane, ctx)
     try:
+        await _prepare_attached_write(lane, ctx)
         await ctx.client.turn_start(
             lane.id, inp.text, cwd=lane.cwd or ".", sandbox_policy=_READ_ONLY
         )
@@ -732,7 +796,7 @@ async def send(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
         raise
     await ctx.registry.update_lane_status(lane.id, "busy")
     await ctx.registry.log_action("send", lane=lane.id, detail=inp.text[:120])
-    return ActionAck(**_managed_identity(lane), op="send")
+    return ActionAck(**_managed_identity(lane, ctx), op="send")
 
 
 async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
@@ -746,11 +810,12 @@ async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
             return await brief(LaneTextInput(lane=inp.lane, text=text), ctx)
         case "interject":
             lane = await _resolve(ctx, inp.lane)
-            _require_writable(lane)
+            _require_writable(lane, ctx)
             turn_id = _require_active_turn(lane, "interject")
-            await ctx.client.turn_interrupt(lane.id, turn_id)
-            await ctx.registry.log_action("interrupt", lane=lane.id, detail="interject")
             try:
+                await _prepare_attached_write(lane, ctx)
+                await ctx.client.turn_interrupt(lane.id, turn_id)
+                await ctx.registry.log_action("interrupt", lane=lane.id, detail="interject")
                 await ctx.client.turn_start(
                     lane.id, text, cwd=lane.cwd or ".", sandbox_policy=_READ_ONLY
                 )
@@ -762,17 +827,17 @@ async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
                 raise
             await ctx.registry.update_lane_status(lane.id, "busy")
             await ctx.registry.log_action("send", lane=lane.id, detail=text[:120])
-            return ActionAck(**_managed_identity(lane), op="interject")
+            return ActionAck(**_managed_identity(lane, ctx), op="interject")
         case "queue":
             lane = await _resolve(ctx, inp.lane)
-            _require_writable(lane)
+            _require_writable(lane, ctx)
             message = await ctx.registry.enqueue_message(lane=lane.id, text=text)
             await ctx.registry.log_action("queue", lane=lane.id, detail=text[:120])
             if lane.status == "idle":
                 await queue.drain_next_queued_message(ctx, lane.id)
             pending = await ctx.registry.pending_message_count(lane.id)
             return ActionAck(
-                **_managed_identity(lane),
+                **_managed_identity(lane, ctx),
                 op="queue",
                 detail=f"queued message {message.id}; pending={pending}",
             )
@@ -780,42 +845,46 @@ async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
 
 async def steer(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
     lane = await _resolve(ctx, inp.lane)
-    _require_writable(lane)
+    _require_writable(lane, ctx)
     turn_id = _require_active_turn(lane, "steer")
+    await _prepare_attached_write(lane, ctx)
     await ctx.client.turn_steer(lane.id, turn_id, inp.text)
     await ctx.registry.log_action("steer", lane=lane.id, detail=inp.text[:120])
-    return ActionAck(**_managed_identity(lane), op="steer")
+    return ActionAck(**_managed_identity(lane, ctx), op="steer")
 
 
 async def brief(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
     lane = await _resolve(ctx, inp.lane)
-    _require_writable(lane)
+    _require_writable(lane, ctx)
     item: dict[str, object] = {
         "type": "message",
         "role": "user",
         "content": [{"type": "input_text", "text": inp.text}],
     }
+    await _prepare_attached_write(lane, ctx)
     await ctx.client.inject_items(lane.id, [item])
     await ctx.registry.log_action("brief", lane=lane.id, detail=inp.text[:120])
-    return ActionAck(**_managed_identity(lane), op="brief")
+    return ActionAck(**_managed_identity(lane, ctx), op="brief")
 
 
 async def interrupt(inp: LaneInput, ctx: Ctx) -> ActionAck:
     lane = await _resolve(ctx, inp.lane)
-    _require_writable(lane)
+    _require_writable(lane, ctx)
     turn_id = _require_active_turn(lane, "interrupt")
+    await _prepare_attached_write(lane, ctx)
     await ctx.client.turn_interrupt(lane.id, turn_id)
     await ctx.registry.log_action("interrupt", lane=lane.id)
-    return ActionAck(**_managed_identity(lane), op="interrupt")
+    return ActionAck(**_managed_identity(lane, ctx), op="interrupt")
 
 
 async def stop(inp: LaneInput, ctx: Ctx) -> ActionAck:
     lane = await _resolve(ctx, inp.lane)
-    _require_writable(lane)
+    _require_writable(lane, ctx)
     turn_id = _require_active_turn(lane, "stop")
+    await _prepare_attached_write(lane, ctx)
     await ctx.client.turn_interrupt(lane.id, turn_id)
     await ctx.registry.log_action("stop", lane=lane.id)
-    return ActionAck(**_managed_identity(lane), op="stop")
+    return ActionAck(**_managed_identity(lane, ctx), op="stop")
 
 
 async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
@@ -830,12 +899,7 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
         result = await ctx.client.thread_read(lane.id, include_turns=True)
         transcript = _transcript_from_thread(result, limit=inp.max_items)
     return LaneDetail(
-        id=lane.id,
-        ref=lane.ref,
-        handle=lane.handle,
-        source=lane.source,
-        status=lane.status,
-        cwd=lane.cwd,
+        **_ref(lane, ctx).model_dump(),
         active_turn_id=lane.active_turn_id,
         latest_turn=_latest_turn_view(lane),
         sync=_sync_view(sync),
@@ -852,7 +916,7 @@ async def sync_lane(inp: LaneSyncInput, ctx: Ctx) -> LaneSyncResult:
         "sync", lane=lane.id, detail=f"state={sync.state}; full={inp.full}"
     )
     return LaneSyncResult(
-        **_managed_identity(lane),
+        **_managed_identity(lane, ctx),
         sync=_sync_view(sync),
         model=_model_view(model_settings, sync),
     )
@@ -881,7 +945,7 @@ async def watch(inp: WatchInput, ctx: Ctx) -> WatchOutput:
         raise NotFoundError(f"no managed thread {inp.lane!r}")
     lane = resolved.lane
     if inp.timeout == 0:
-        return WatchOutput(**_managed_identity(lane), events=[], timed_out=True)
+        return WatchOutput(**_managed_identity(lane, ctx), events=[], timed_out=True)
     stream = ctx.client.raw_events(lane.id)
     events: list[WatchEvent] = []
     timed_out = False
@@ -907,7 +971,7 @@ async def watch(inp: WatchInput, ctx: Ctx) -> WatchOutput:
         aclose = getattr(stream, "aclose", None)
         if aclose is not None:
             await aclose()
-    return WatchOutput(**_managed_identity(lane), events=events, timed_out=timed_out)
+    return WatchOutput(**_managed_identity(lane, ctx), events=events, timed_out=timed_out)
 
 
 async def transcript(inp: TranscriptInput, ctx: Ctx) -> TranscriptOutput:
@@ -917,7 +981,7 @@ async def transcript(inp: TranscriptInput, ctx: Ctx) -> TranscriptOutput:
     lane = resolved.lane
     result = await ctx.client.thread_read(lane.id, include_turns=True)
     return TranscriptOutput(
-        **_managed_identity(lane),
+        **_managed_identity(lane, ctx),
         items=_transcript_from_thread(result, limit=inp.limit),
     )
 
@@ -1237,12 +1301,13 @@ async def goal_get(inp: GoalGetInput, ctx: Ctx) -> GoalView:
         raise NotFoundError(f"no managed thread {inp.lane!r}")
     lane = resolved.lane
     goal = await ctx.client.thread_goal_get(lane.id)
-    return GoalView(**_managed_identity(lane), goal=_goal(goal) if goal is not None else None)
+    return GoalView(**_managed_identity(lane, ctx), goal=_goal(goal) if goal is not None else None)
 
 
 async def goal_set(inp: GoalSetInput, ctx: Ctx) -> GoalView:
     lane = await _resolve(ctx, inp.lane)
-    _require_writable(lane)
+    _require_writable(lane, ctx)
+    await _prepare_attached_write(lane, ctx)
     if inp.objective is None and inp.status is None and inp.token_budget is None:
         raise ValidationError("goal-set requires objective, status, or token_budget")
     if inp.objective is None and await ctx.client.thread_goal_get(lane.id) is None:
@@ -1257,20 +1322,22 @@ async def goal_set(inp: GoalSetInput, ctx: Ctx) -> GoalView:
         token_budget=inp.token_budget,
     )
     await ctx.registry.log_action("goal-set", lane=lane.id, detail=inp.objective)
-    return GoalView(**_managed_identity(lane), goal=_goal(goal))
+    return GoalView(**_managed_identity(lane, ctx), goal=_goal(goal))
 
 
 async def goal_clear(inp: GoalClearInput, ctx: Ctx) -> GoalView:
     lane = await _resolve(ctx, inp.lane)
-    _require_writable(lane)
+    _require_writable(lane, ctx)
+    await _prepare_attached_write(lane, ctx)
     await ctx.client.thread_goal_clear(lane.id)
     await ctx.registry.log_action("goal-clear", lane=lane.id)
-    return GoalView(**_managed_identity(lane), goal=None)
+    return GoalView(**_managed_identity(lane, ctx), goal=None)
 
 
 async def fork(inp: ForkInput, ctx: Ctx) -> LaneRef:
     source = await _resolve(ctx, inp.lane)
-    _require_writable(source)
+    _require_writable(source, ctx)
+    await _prepare_attached_write(source, ctx)
     resolved_model = await resolve_model_settings(
         ctx,
         model=inp.model,
@@ -1308,25 +1375,27 @@ async def fork(inp: ForkInput, ctx: Ctx) -> LaneRef:
         await ctx.client.thread_set_name(thread.id, handle.removeprefix("@"))
     except ClientError as exc:
         ctx.log.warning("lane.name_set_failed", lane=lane.id, error=str(exc))
-    return _ref(lane)
+    return _ref(lane, ctx)
 
 
 async def rollback(inp: RollbackInput, ctx: Ctx) -> LaneRef:
     lane = await _resolve(ctx, inp.lane)
-    _require_writable(lane)
+    _require_writable(lane, ctx)
+    await _prepare_attached_write(lane, ctx)
     await ctx.client.thread_rollback(lane.id, inp.turns)
     await ctx.registry.set_active_turn(lane.id, None)
     await ctx.registry.update_lane_status(lane.id, "idle")
     await ctx.registry.log_action("rollback", lane=lane.id, detail=f"{inp.turns} turn(s)")
-    return _ref(await ctx.registry.get_lane(lane.id))
+    return _ref(await ctx.registry.get_lane(lane.id), ctx)
 
 
 async def compact(inp: CompactInput, ctx: Ctx) -> ActionAck:
     lane = await _resolve(ctx, inp.lane)
-    _require_writable(lane)
+    _require_writable(lane, ctx)
+    await _prepare_attached_write(lane, ctx)
     await ctx.client.thread_compact_start(lane.id)
     await ctx.registry.log_action("compact", lane=lane.id)
-    return ActionAck(**_managed_identity(lane), op="compact")
+    return ActionAck(**_managed_identity(lane, ctx), op="compact")
 
 
 async def roster(inp: RosterInput, ctx: Ctx) -> Roster:
@@ -1334,7 +1403,7 @@ async def roster(inp: RosterInput, ctx: Ctx) -> Roster:
     syncs = await ctx.registry.get_lane_sync_many([lane.id for lane in lanes])
     models = await ctx.registry.get_lane_model_settings_many([lane.id for lane in lanes])
     return Roster(
-        lanes=[_list_item(lane, syncs.get(lane.id), models.get(lane.id)) for lane in lanes]
+        lanes=[_list_item(lane, syncs.get(lane.id), models.get(lane.id), ctx) for lane in lanes]
     )
 
 
@@ -1389,9 +1458,17 @@ async def models(inp: ModelsInput, ctx: Ctx) -> ModelCatalogOutput:
         refreshed_at = max((entry.last_seen_at for entry in entries), default=None)
     if not inp.include_hidden:
         entries = [entry for entry in entries if not entry.hidden]
+    catalog_state: Literal["ready", "empty"] = "empty" if not entries else "ready"
+    hint = (
+        "run dispatch models without --no-refresh to refresh the App Server model catalog"
+        if catalog_state == "empty" and not inp.refresh
+        else None
+    )
     return ModelCatalogOutput(
         refreshed_at=refreshed_at,
         source=source,
+        catalog_state=catalog_state,
+        hint=hint,
         configured_default=ModelConfigView(
             model=config.model,
             model_provider=config.model_provider,
