@@ -23,6 +23,12 @@ from .models import (
     GoalView,
     HistoryInput,
     HistoryOutput,
+    InboxAckInput,
+    InboxAckResult,
+    InboxList,
+    InboxListInput,
+    InboxMessageView,
+    InboxReadInput,
     LaneDetail,
     LaneInput,
     LaneRef,
@@ -46,6 +52,12 @@ from .models import (
     ShowInput,
     StatusInput,
     StatusOutput,
+    SubscribeInput,
+    SubscriptionIdInput,
+    SubscriptionList,
+    SubscriptionListInput,
+    SubscriptionRemoved,
+    SubscriptionView,
     ThreadActionRef,
     ThreadTargetInput,
     TranscriptInput,
@@ -189,6 +201,7 @@ NEW = define_op(
                         "source": "unknown",
                     },
                 },
+                "subscription": None,
             },
         )
     ],
@@ -504,6 +517,78 @@ MODELS = define_op(
     ],
 )
 
+INBOX_LIST = define_op(
+    id="inbox-list",
+    summary="List durable inbox messages for a thread.",
+    input=InboxListInput,
+    output=InboxList,
+    intent="read",
+    idempotent=True,
+    handler=handlers.inbox_list,
+    examples=[Example("empty", input={"limit": 50}, output={"messages": []})],
+)
+
+INBOX_READ = define_op(
+    id="inbox-read",
+    summary="Read one durable inbox message.",
+    input=InboxReadInput,
+    output=InboxMessageView,
+    intent="read",
+    idempotent=True,
+    handler=handlers.inbox_read,
+    examples=[Example("missing", input={"id": 999}, raises=NotFoundError)],
+)
+
+INBOX_ACK = define_op(
+    id="inbox-ack",
+    summary="Acknowledge one inbox message or all pending messages for a thread.",
+    input=InboxAckInput,
+    output=InboxAckResult,
+    intent="write",
+    idempotent=True,
+    handler=handlers.inbox_ack,
+    examples=[Example("needs-target", input={}, raises=ValidationError)],
+)
+
+SUBSCRIBE = define_op(
+    id="subscribe",
+    summary="Subscribe a thread to events from another managed thread.",
+    input=SubscribeInput,
+    output=SubscriptionView,
+    intent="write",
+    idempotent=False,
+    handler=handlers.subscribe,
+    examples=[Example("missing-target", input={"target": "nope"}, raises=NotFoundError)],
+)
+
+SUBSCRIPTION_LIST = define_op(
+    id="subscription-list",
+    summary="List event subscriptions.",
+    input=SubscriptionListInput,
+    output=SubscriptionList,
+    intent="read",
+    idempotent=True,
+    handler=handlers.subscription_list,
+    examples=[Example("empty", input={}, output={"subscriptions": []})],
+)
+
+UNSUBSCRIBE = define_op(
+    id="unsubscribe",
+    summary="Remove an event subscription.",
+    input=SubscriptionIdInput,
+    output=SubscriptionRemoved,
+    intent="destroy",
+    idempotent=True,
+    handler=handlers.unsubscribe,
+    examples=[
+        Example(
+            "missing",
+            input={"id": "sub_missing"},
+            output={"id": "sub_missing", "removed": False},
+        )
+    ],
+)
+
 ARCHIVE = define_op(
     id="archive",
     summary="Archive a managed or unmanaged Codex thread.",
@@ -728,6 +813,12 @@ _ALL = (
     DISCOVER,
     SEARCH,
     MODELS,
+    INBOX_LIST,
+    INBOX_READ,
+    INBOX_ACK,
+    SUBSCRIBE,
+    SUBSCRIPTION_LIST,
+    UNSUBSCRIBE,
     ARCHIVE,
     RESTORE,
     GOAL_GET,

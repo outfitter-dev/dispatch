@@ -34,6 +34,8 @@ The current canonical operator grammar is:
 - thread actions: `rename`, `archive`, `restore`
 - message verbs: `send`, `stop`
 - goals: `goal status`, `goal set`, `goal clear`
+- inbox/subscriptions: `subscribe`, `subscriptions`, `unsubscribe`, `inbox list`,
+  `inbox read`, `inbox ack`
 - triggers: `trigger add`, `trigger list`, `trigger rm`, `trigger pause`,
   `trigger resume`
 - schemas/MCP: `schema <command>`, `mcp`
@@ -322,6 +324,46 @@ Use `stop` to cancel the active turn without replacement text:
 
 ```bash
 uv run dispatch stop <dispatch-ref>
+```
+
+## Inbox And Subscriptions
+
+Use `subscribe` when the current managed Codex thread should hear about another
+lane later. A subscription is an event-to-inbox binding. It creates a durable
+inbox message when the event matches, then optionally starts a new turn in the
+subscriber.
+
+```bash
+uv run dispatch subscribe @worker
+uv run dispatch subscribe @worker when:done,delivery:inbox
+uv run dispatch subscribe @worker --when approval --delivery inbox --repeat
+uv run dispatch new --name worker --cwd /repo --text "Do it." --subscribe when:done,to:self
+```
+
+Default subscription settings are `when:done,to:self,delivery:turn,deliver:idle,
+tail:1,once:true,ack:auto`. `self` is derived from `CODEX_THREAD_ID`, so the
+calling thread must already be managed by dispatch. Use explicit `--to <ref>`
+when one managed lane is subscribing on behalf of another.
+
+Useful `when` buckets:
+
+- `done`: completed or failed turns.
+- `completed` / `failed`: one terminal outcome.
+- `approval` / `needs-attention`: approval requests.
+- `idle`: idle status events.
+- `activity`: any tracked lane event.
+
+Use inbox-only delivery when you want durable collection without waking the
+subscriber:
+
+```bash
+uv run dispatch inbox list
+uv run dispatch inbox list --lane <dispatch-ref> --state pending
+uv run dispatch inbox read <message-id>
+uv run dispatch inbox ack <message-id>
+uv run dispatch inbox ack --all
+uv run dispatch subscriptions
+uv run dispatch unsubscribe <subscription-id> --yes --json
 ```
 
 Destroy-intent commands prompt by default. In scripts, use explicit confirmation:

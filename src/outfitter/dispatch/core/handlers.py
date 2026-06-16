@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import uuid
 from datetime import datetime, time
 from pathlib import Path
 from typing import Literal, TypedDict, cast
@@ -35,6 +36,7 @@ from outfitter.dispatch.contracts.errors import (
     project_error,
 )
 from outfitter.dispatch.registry.models import (
+    InboxMessage,
     Lane,
     LaneModelSettings,
     LaneSource,
@@ -42,6 +44,11 @@ from outfitter.dispatch.registry.models import (
     LaneSync,
     ModelCatalogEntry,
     ServiceTierSource,
+    Subscription,
+    SubscriptionAckPolicy,
+    SubscriptionDeliverPolicy,
+    SubscriptionDelivery,
+    SubscriptionWhen,
     SyncState,
 )
 
@@ -69,6 +76,12 @@ from .models import (
     HistoryOutput,
     HistoryThreadSummary,
     HistoryToolStat,
+    InboxAckInput,
+    InboxAckResult,
+    InboxList,
+    InboxListInput,
+    InboxMessageView,
+    InboxReadInput,
     LaneCapabilities,
     LaneDetail,
     LaneInput,
@@ -106,6 +119,12 @@ from .models import (
     StageView,
     StatusInput,
     StatusOutput,
+    SubscribeInput,
+    SubscriptionIdInput,
+    SubscriptionList,
+    SubscriptionListInput,
+    SubscriptionRemoved,
+    SubscriptionView,
     ThreadActionRef,
     ThreadModelView,
     ThreadTargetInput,
@@ -148,6 +167,16 @@ class _ManagedIdentityPayload(TypedDict):
     writable: bool
     capabilities: LaneCapabilities
     write_locked_reason: str | None
+
+
+class _SubscriptionSettings(TypedDict):
+    when: SubscriptionWhen
+    to: str
+    delivery: SubscriptionDelivery
+    deliver: SubscriptionDeliverPolicy
+    tail: int
+    once: bool
+    ack: SubscriptionAckPolicy
 
 
 _ATTACHED_WRITE_LOCK_REASON = (
@@ -368,6 +397,16 @@ async def _find_lane(ctx: Ctx, ref: str) -> Lane | None:
         return (await resolve_managed_selector(ctx, ref, allow_fuzzy=False)).lane
     except NotFoundError:
         return None
+
+
+async def _resolve_self(ctx: Ctx, caller_thread_id: str | None) -> Lane:
+    thread_id = caller_thread_id or os.environ.get("CODEX_THREAD_ID")
+    if not thread_id:
+        raise ValidationError("self requires CODEX_THREAD_ID from the current Codex thread")
+    lane = await ctx.registry.find_lane(thread_id)
+    if lane is None:
+        raise ValidationError("self requires the current Codex thread to be managed by dispatch")
+    return lane
 
 
 async def _resolve_thread_target(ctx: Ctx, ref: str) -> tuple[str, Lane | None]:
@@ -649,6 +688,16 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
             raise
         await ctx.registry.log_action("send", lane=lane.id, detail=settings.text[:120])
         message_accepted = True
+    subscription = None
+    if inp.subscribe is not None:
+        subscription = await subscribe(
+            SubscribeInput(
+                target=lane.ref,
+                spec=inp.subscribe,
+                caller_thread_id=inp.caller_thread_id,
+            ),
+            ctx,
+        )
     ctx.log.info("lane.new", lane=lane.id, handle=lane.handle, message_accepted=message_accepted)
     ref = _ref(lane, ctx)
     return NewLane(
@@ -659,6 +708,7 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         workspace=workspace.view,
         latest_turn=_latest_turn_view(lane),
         model=_model_view(lane_model),
+        subscription=subscription,
     )
 
 
@@ -957,6 +1007,241 @@ async def stop(inp: LaneInput, ctx: Ctx) -> ActionAck:
     await ctx.client.turn_interrupt(lane.id, turn_id)
     await ctx.registry.log_action("stop", lane=lane.id)
     return ActionAck(**_managed_identity(lane, ctx), op="stop")
+
+
+async def _inbox_message_view(message: InboxMessage, ctx: Ctx) -> InboxMessageView:
+    recipient = await ctx.registry.find_lane(message.recipient_lane)
+    source = await ctx.registry.find_lane(message.source_lane) if message.source_lane else None
+    return InboxMessageView(
+        id=message.id,
+        recipient_ref=recipient.ref if recipient is not None else None,
+        recipient_lane=message.recipient_lane,
+        source_ref=source.ref if source is not None else None,
+        source_lane=message.source_lane,
+        subscription_id=message.subscription_id,
+        kind=message.kind,
+        subject=message.subject,
+        body=message.body,
+        payload=message.payload,
+        state=message.state,
+        delivery=message.delivery,
+        queued_message_id=message.queued_message_id,
+        created_at=message.created_at.isoformat(),
+        delivered_at=message.delivered_at.isoformat() if message.delivered_at else None,
+        acked_at=message.acked_at.isoformat() if message.acked_at else None,
+    )
+
+
+async def _subscription_view(subscription: Subscription, ctx: Ctx) -> SubscriptionView:
+    target = await ctx.registry.find_lane(subscription.target_lane)
+    subscriber = await ctx.registry.find_lane(subscription.subscriber_lane)
+    return SubscriptionView(
+        id=subscription.id,
+        target_ref=target.ref if target is not None else subscription.target_lane,
+        target_lane=subscription.target_lane,
+        subscriber_ref=subscriber.ref if subscriber is not None else subscription.subscriber_lane,
+        subscriber_lane=subscription.subscriber_lane,
+        when=subscription.when,
+        delivery=subscription.delivery,
+        deliver=subscription.deliver,
+        tail=subscription.tail,
+        once=subscription.once,
+        ack=subscription.ack,
+        state=subscription.state,
+        created_at=subscription.created_at.isoformat(),
+        updated_at=subscription.updated_at.isoformat(),
+        last_matched_at=subscription.last_matched_at.isoformat()
+        if subscription.last_matched_at
+        else None,
+        last_inbox_message_id=subscription.last_inbox_message_id,
+    )
+
+
+async def inbox_list(inp: InboxListInput, ctx: Ctx) -> InboxList:
+    lane = None
+    if inp.lane is not None:
+        lane = await _resolve(ctx, inp.lane)
+    elif inp.caller_thread_id is not None:
+        lane = await _resolve_self(ctx, inp.caller_thread_id)
+    messages = await ctx.registry.list_inbox_messages(
+        lane=lane.id if lane is not None else None,
+        state=inp.state,
+        kind=inp.kind,
+        limit=inp.limit,
+    )
+    return InboxList(messages=[await _inbox_message_view(message, ctx) for message in messages])
+
+
+async def inbox_read(inp: InboxReadInput, ctx: Ctx) -> InboxMessageView:
+    return await _inbox_message_view(await ctx.registry.get_inbox_message(inp.id), ctx)
+
+
+async def inbox_ack(inp: InboxAckInput, ctx: Ctx) -> InboxAckResult:
+    if inp.id is not None and (inp.all or inp.lane is not None):
+        raise ValidationError("ack one message by id or use --all with an optional lane")
+    if inp.id is not None:
+        message = await ctx.registry.ack_inbox_message(inp.id)
+        return InboxAckResult(acked=1, message=await _inbox_message_view(message, ctx))
+    if not inp.all:
+        raise ValidationError("inbox ack requires a message id or --all")
+    lane = (
+        await _resolve(ctx, inp.lane)
+        if inp.lane
+        else await _resolve_self(ctx, inp.caller_thread_id)
+    )
+    return InboxAckResult(acked=await ctx.registry.ack_inbox_messages_for_lane(lane.id))
+
+
+async def subscribe(inp: SubscribeInput, ctx: Ctx) -> SubscriptionView:
+    target = await _resolve(ctx, inp.target)
+    settings = _subscription_settings(inp)
+    subscriber = (
+        await _resolve_self(ctx, inp.caller_thread_id)
+        if settings["to"] == "self"
+        else await _resolve(ctx, settings["to"])
+    )
+    if settings["delivery"] == "turn" and not _can_write(subscriber, ctx):
+        raise AuthorityError(
+            "turn delivery requires a writable subscriber lane; use delivery:inbox or enable "
+            "policy.allow_attached_writes for attached-lane turn delivery"
+        )
+    now = datetime.fromisoformat(ctx.registry.now_iso())
+    subscription = Subscription(
+        id=f"sub_{uuid.uuid4().hex[:8]}",
+        target_lane=target.id,
+        subscriber_lane=subscriber.id,
+        when=settings["when"],
+        delivery=settings["delivery"],
+        deliver=settings["deliver"],
+        tail=settings["tail"],
+        once=settings["once"],
+        ack=settings["ack"],
+        created_at=now,
+        updated_at=now,
+    )
+    saved = await ctx.registry.add_subscription(subscription)
+    await ctx.registry.log_action(
+        "subscribe",
+        lane=target.id,
+        detail=f"{saved.when}->{subscriber.ref}:{saved.delivery}",
+    )
+    return await _subscription_view(saved, ctx)
+
+
+async def subscription_list(inp: SubscriptionListInput, ctx: Ctx) -> SubscriptionList:
+    target = await _resolve(ctx, inp.target) if inp.target is not None else None
+    subscriber = await _resolve(ctx, inp.subscriber) if inp.subscriber is not None else None
+    subscriptions = await ctx.registry.list_subscriptions(
+        target_lane=target.id if target is not None else None,
+        subscriber_lane=subscriber.id if subscriber is not None else None,
+        state=inp.state,
+    )
+    return SubscriptionList(
+        subscriptions=[
+            await _subscription_view(subscription, ctx) for subscription in subscriptions
+        ]
+    )
+
+
+async def unsubscribe(inp: SubscriptionIdInput, ctx: Ctx) -> SubscriptionRemoved:
+    return SubscriptionRemoved(id=inp.id, removed=await ctx.registry.remove_subscription(inp.id))
+
+
+def _subscription_settings(inp: SubscribeInput) -> _SubscriptionSettings:
+    settings: _SubscriptionSettings = {
+        "when": "done",
+        "to": "self",
+        "delivery": "turn",
+        "deliver": "idle",
+        "tail": 1,
+        "once": True,
+        "ack": "auto",
+    }
+    spec = inp.spec
+    if spec and spec not in {"true", "default", "all"}:
+        for part in [chunk.strip() for chunk in spec.split(",") if chunk.strip()]:
+            if ":" in part:
+                key, value = part.split(":", 1)
+            elif "=" in part:
+                key, value = part.split("=", 1)
+            else:
+                raise ValidationError(f"subscription spec entry {part!r} must use key:value")
+            key = key.strip()
+            if key not in settings:
+                raise ValidationError(f"unknown subscription spec key {key!r}")
+            _set_subscription_setting(settings, key, _parse_subscription_value(key, value.strip()))
+    if inp.when is not None:
+        settings["when"] = inp.when
+    if inp.to is not None:
+        settings["to"] = inp.to
+    if inp.delivery is not None:
+        settings["delivery"] = inp.delivery
+    if inp.deliver is not None:
+        settings["deliver"] = inp.deliver
+    if inp.tail is not None:
+        settings["tail"] = inp.tail
+    if inp.once is not None:
+        settings["once"] = inp.once
+    if inp.ack is not None:
+        settings["ack"] = inp.ack
+    return settings
+
+
+def _set_subscription_setting(settings: _SubscriptionSettings, key: str, value: object) -> None:
+    match key:
+        case "when":
+            settings["when"] = cast(SubscriptionWhen, value)
+        case "to":
+            settings["to"] = cast(str, value)
+        case "delivery":
+            settings["delivery"] = cast(SubscriptionDelivery, value)
+        case "deliver":
+            settings["deliver"] = cast(SubscriptionDeliverPolicy, value)
+        case "tail":
+            settings["tail"] = cast(int, value)
+        case "once":
+            settings["once"] = cast(bool, value)
+        case "ack":
+            settings["ack"] = cast(SubscriptionAckPolicy, value)
+
+
+def _parse_subscription_value(key: str, value: str) -> object:
+    if key == "when":
+        allowed = {"done", "completed", "failed", "needs-attention", "approval", "idle", "activity"}
+        if value not in allowed:
+            raise ValidationError(f"subscription when must be one of {', '.join(sorted(allowed))}")
+        return value
+    if key == "delivery":
+        allowed = {"turn", "inbox"}
+        if value not in allowed:
+            raise ValidationError("subscription delivery must be turn or inbox")
+        return value
+    if key == "deliver":
+        allowed = {"idle", "now"}
+        if value not in allowed:
+            raise ValidationError("subscription deliver must be idle or now")
+        return value
+    if key == "ack":
+        allowed = {"auto", "manual"}
+        if value not in allowed:
+            raise ValidationError("subscription ack must be auto or manual")
+        return value
+    if key == "tail":
+        try:
+            tail = int(value)
+        except ValueError as exc:
+            raise ValidationError("subscription tail must be an integer") from exc
+        if tail < 0:
+            raise ValidationError("subscription tail must be >= 0")
+        return tail
+    if key == "once":
+        normalized = value.lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        raise ValidationError("subscription once must be true or false")
+    return value
 
 
 async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:

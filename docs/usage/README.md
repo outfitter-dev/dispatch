@@ -494,6 +494,58 @@ thread must already be managed by dispatch:
 uv run dispatch send @docs-review "Can you sanity-check this?" --intro
 ```
 
+## Inbox And Subscriptions
+
+Subscriptions are event-to-inbox bindings. When a target lane matches a condition,
+Dispatch records a durable inbox message for the subscriber. Delivery can stop there
+(`delivery:inbox`) or bridge the inbox message into the existing queued-turn path
+(`delivery:turn`).
+
+The default compact subscription is:
+
+```text
+when:done,to:self,delivery:turn,deliver:idle,tail:1,once:true,ack:auto
+```
+
+`self` is derived from `CODEX_THREAD_ID`, so the current Codex thread must already
+be managed by Dispatch. Use explicit `--to <ref>` when one lane is subscribing on
+behalf of another.
+
+```bash
+uv run dispatch subscribe @worker
+uv run dispatch subscribe @worker when:done,delivery:inbox
+uv run dispatch subscribe @worker --when approval --delivery inbox --repeat
+uv run dispatch new --name worker --cwd /repo --text "Do it." --subscribe when:done,to:self
+```
+
+Useful `when` buckets:
+
+- `done`: completed or failed turns.
+- `completed` / `failed`: one terminal turn outcome.
+- `approval` / `needs-attention`: App Server approval requests.
+- `idle`: idle status events.
+- `activity`: any tracked lane event.
+
+`tail:1` includes the latest message by default. Use `tail:0` when the notification
+should only carry event metadata. `once:true` marks the subscription done after the
+first match; use `--repeat` or `once:false` for ongoing subscriptions.
+
+Inbox commands are JSON-shaped and jq-friendly:
+
+```bash
+uv run dispatch inbox list
+uv run dispatch inbox list --lane <dispatch-ref> --state pending
+uv run dispatch inbox read <message-id>
+uv run dispatch inbox ack <message-id>
+uv run dispatch inbox ack --all
+uv run dispatch subscriptions
+uv run dispatch unsubscribe <subscription-id> --yes --json
+```
+
+Use `delivery:inbox` when you want a durable message bus without waking the
+subscriber. Use `delivery:turn` when the subscriber should start a new turn after the
+target stops or needs attention.
+
 ## Thread History, Watch, And Goals
 
 `get` is the compact managed-thread summary:

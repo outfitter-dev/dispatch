@@ -19,6 +19,7 @@ from outfitter.dispatch.registry.models import (
     IdleForWhen,
     IntervalWhen,
     SendAction,
+    Subscription,
     Trigger,
 )
 from outfitter.dispatch.registry.store import Registry
@@ -230,6 +231,43 @@ async def test_reactor_fires_turn_completed_trigger_and_audits(store: Registry) 
     assert any(r.trigger_id == "t1" for r in recent)
 
 
+async def test_reactor_delivers_done_subscription_to_inbox_turn(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    reactor = Reactor(ctx, TriggerRunner(ctx, lambda: _T0))
+    await store.add_lane(id="target", handle="@target", source="own", status="busy")
+    await store.add_lane(id="subscriber", handle="@subscriber", source="own", status="idle")
+    await store.add_subscription(
+        Subscription(
+            id="sub_1",
+            target_lane="target",
+            subscriber_lane="subscriber",
+            when="done",
+            delivery="turn",
+            deliver="idle",
+            tail=0,
+            once=True,
+            ack="auto",
+            created_at=_T0,
+            updated_at=_T0,
+        )
+    )
+
+    await reactor.handle(TurnCompleted("target", "turn-1"))
+
+    messages = await store.list_inbox_messages(lane="subscriber", state=None)
+    assert len(messages) == 1
+    assert messages[0].state == "acked"
+    assert messages[0].queued_message_id == 1
+    assert (await store.get_subscription("sub_1")).state == "done"
+    sent = [kw for name, kw in client.calls if name == "turn_start"]
+    assert len(sent) == 1
+    assert sent[0]["thread_id"] == "subscriber"
+    text = sent[0]["text"]
+    assert isinstance(text, str)
+    assert "Event: completed" in text
+
+
 async def test_reactor_auto_declines_unhandled_approval(store: Registry) -> None:
     client = FakeLaneClient()
     ctx = make_ctx(store, client)
@@ -258,6 +296,36 @@ async def test_reactor_approval_trigger_suppresses_auto_decline(store: Registry)
     await reactor.handle(ApprovalRequested("L1", 7, "command"))
     assert not any(name == "respond_approval" for name, _ in client.calls)
     assert any(name == "inject_items" for name, _ in client.calls)
+
+
+async def test_reactor_approval_subscription_suppresses_auto_decline(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    reactor = Reactor(ctx, TriggerRunner(ctx, lambda: _T0))
+    await store.add_lane(id="target", handle="@target", source="own", status="busy")
+    await store.add_lane(id="subscriber", handle="@subscriber", source="own", status="idle")
+    await store.add_subscription(
+        Subscription(
+            id="sub_approval",
+            target_lane="target",
+            subscriber_lane="subscriber",
+            when="approval",
+            delivery="inbox",
+            deliver="idle",
+            tail=0,
+            once=False,
+            ack="manual",
+            created_at=_T0,
+            updated_at=_T0,
+        )
+    )
+
+    await reactor.handle(ApprovalRequested("target", 7, "command"))
+
+    assert not any(name == "respond_approval" for name, _ in client.calls)
+    messages = await store.list_inbox_messages(lane="subscriber")
+    assert len(messages) == 1
+    assert messages[0].payload["event"] == "approval"
 
 
 async def test_reactor_guard_suppressed_approval_trigger_still_suppresses_decline(

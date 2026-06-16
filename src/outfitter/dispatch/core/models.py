@@ -17,9 +17,16 @@ from outfitter.dispatch.client.models import (
     ThreadSandbox,
 )
 from outfitter.dispatch.registry.models import (
+    InboxMessageKind,
+    InboxMessageState,
     LaneSource,
     LaneStatus,
     ServiceTierSource,
+    SubscriptionAckPolicy,
+    SubscriptionDeliverPolicy,
+    SubscriptionDelivery,
+    SubscriptionState,
+    SubscriptionWhen,
     SyncState,
     TurnRuntimeStatus,
 )
@@ -127,6 +134,18 @@ class NewInput(BaseModel):
     )
     worktree_base: str | None = Field(
         default=None, description="Base ref for new Dispatch-created worktree branches."
+    )
+    subscribe: str | None = Field(
+        default=None,
+        description=(
+            "Create a subscription to the new lane. Use true/default for defaults or "
+            "spec keys like when:done,delivery:inbox,to:<ref>."
+        ),
+    )
+    caller_thread_id: str | None = Field(
+        default=None,
+        exclude=True,
+        json_schema_extra={"x-dispatch-internal": True},
     )
 
 
@@ -327,6 +346,71 @@ class ModelsInput(BaseModel):
     include_hidden: bool = Field(default=False, description="Include hidden model catalog rows.")
 
 
+class InboxListInput(BaseModel):
+    lane: str | None = Field(
+        default=None, description="Recipient thread selector. Omit to use current lane when known."
+    )
+    state: InboxMessageState | None = Field(
+        default="pending", description="Inbox state filter; omit for all states."
+    )
+    kind: InboxMessageKind | None = Field(default=None, description="Inbox message kind filter.")
+    limit: int = Field(default=50, ge=1, description="Max inbox messages to return.")
+    caller_thread_id: str | None = Field(
+        default=None,
+        exclude=True,
+        json_schema_extra={"x-dispatch-internal": True},
+    )
+
+
+class InboxReadInput(BaseModel):
+    id: int = Field(description="Inbox message id.")
+
+
+class InboxAckInput(BaseModel):
+    id: int | None = Field(default=None, description="Inbox message id.")
+    lane: str | None = Field(default=None, description="Ack all pending messages for this lane.")
+    all: bool = Field(default=False, description="Ack all pending messages for the selected lane.")
+    caller_thread_id: str | None = Field(
+        default=None,
+        exclude=True,
+        json_schema_extra={"x-dispatch-internal": True},
+    )
+
+
+class SubscribeInput(BaseModel):
+    target: str = Field(description=TARGET_THREAD_SELECTOR_DESCRIPTION)
+    spec: str | None = Field(
+        default=None,
+        description="Compact spec: when:done,to:self,delivery:turn,deliver:idle,tail:1.",
+    )
+    when: SubscriptionWhen | None = Field(default=None, description="Subscription condition.")
+    to: str | None = Field(default=None, description="Subscriber thread selector or self.")
+    delivery: SubscriptionDelivery | None = Field(default=None, description="Delivery mode.")
+    deliver: SubscriptionDeliverPolicy | None = Field(
+        default=None, description="Subscriber-side delivery policy."
+    )
+    tail: int | None = Field(default=None, ge=0, description="Final messages to include.")
+    once: bool | None = Field(default=None, description="Auto-complete after first match.")
+    ack: SubscriptionAckPolicy | None = Field(default=None, description="Acknowledgement policy.")
+    caller_thread_id: str | None = Field(
+        default=None,
+        exclude=True,
+        json_schema_extra={"x-dispatch-internal": True},
+    )
+
+
+class SubscriptionListInput(BaseModel):
+    target: str | None = Field(default=None, description="Filter by target thread selector.")
+    subscriber: str | None = Field(
+        default=None, description="Filter by subscriber thread selector."
+    )
+    state: SubscriptionState | None = Field(default=None, description="Filter by state.")
+
+
+class SubscriptionIdInput(BaseModel):
+    id: str = Field(description="Subscription id.")
+
+
 # --- outputs ------------------------------------------------------------------
 
 
@@ -434,6 +518,62 @@ class LaneListItem(LaneRef):
     model: ThreadModelView = Field(default_factory=ThreadModelView)
 
 
+class InboxMessageView(BaseModel):
+    id: int
+    recipient_ref: str | None = None
+    recipient_lane: str
+    source_ref: str | None = None
+    source_lane: str | None = None
+    subscription_id: str | None = None
+    kind: InboxMessageKind
+    subject: str
+    body: str
+    payload: dict[str, object] = Field(default_factory=dict)
+    state: InboxMessageState
+    delivery: SubscriptionDelivery
+    queued_message_id: int | None = None
+    created_at: str
+    delivered_at: str | None = None
+    acked_at: str | None = None
+
+
+class InboxList(BaseModel):
+    messages: list[InboxMessageView] = Field(default_factory=list)
+
+
+class InboxAckResult(BaseModel):
+    acked: int
+    message: InboxMessageView | None = None
+
+
+class SubscriptionView(BaseModel):
+    id: str
+    target_ref: str
+    target_lane: str
+    subscriber_ref: str
+    subscriber_lane: str
+    when: SubscriptionWhen
+    delivery: SubscriptionDelivery
+    deliver: SubscriptionDeliverPolicy
+    tail: int
+    once: bool
+    ack: SubscriptionAckPolicy
+    state: SubscriptionState
+    created_at: str
+    updated_at: str
+    last_matched_at: str | None = None
+    last_inbox_message_id: int | None = None
+
+
+class SubscriptionList(BaseModel):
+    subscriptions: list[SubscriptionView] = Field(default_factory=list)
+
+
+class SubscriptionRemoved(BaseModel):
+    id: str
+    removed: bool
+
+
 StagePart = Literal[
     "config", "goal", "prompt", "output_schema", "base", "developer", "hooks", "codex_config"
 ]
@@ -473,6 +613,7 @@ class NewLane(LaneRef):
     workspace: WorkspaceView = Field(description="Workspace preflight result.")
     latest_turn: LatestTurnView = Field(default_factory=LatestTurnView)
     model: ThreadModelView = Field(default_factory=ThreadModelView)
+    subscription: SubscriptionView | None = None
 
 
 LaunchSlot = Literal["goal", "prompt", "output_schema", "base", "developer"]

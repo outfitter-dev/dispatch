@@ -59,6 +59,7 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
         )
         return True
     await ctx.registry.complete_queued_message(message.id)
+    await ctx.registry.mark_inbox_delivered_for_queue(message.id, ack=True)
     await ctx.registry.log_action("send", lane=lane.id, detail=message.text[:120], outcome="queued")
     return True
 

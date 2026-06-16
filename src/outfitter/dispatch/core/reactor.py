@@ -21,6 +21,7 @@ from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.registry.models import EventWhen
 
 from .queue import drain_next_queued_message
+from .subscriptions import process_event_subscriptions
 from .triggers import TriggerRunner, resolve_lane
 
 
@@ -48,14 +49,17 @@ class Reactor:
         elif isinstance(event, TurnCompleted):
             await registry.record_turn_completed(lane.id, event.turn_id)
             await registry.touch_lane_event(lane.id)
+            await process_event_subscriptions(self._ctx, lane, event)
             await self._fire_event(lane.id, "turn_completed")
             await drain_next_queued_message(self._ctx, lane.id)
         elif isinstance(event, TurnFailed):
             await registry.record_turn_failed(lane.id, event.turn_id, event.message)
             await registry.touch_lane_event(lane.id)
+            await process_event_subscriptions(self._ctx, lane, event)
         elif isinstance(event, LaneIdle):
             await registry.mark_lane_idle(lane.id)
             await registry.touch_lane_event(lane.id)
+            await process_event_subscriptions(self._ctx, lane, event)
             await drain_next_queued_message(self._ctx, lane.id)
         elif isinstance(event, ItemCompleted | GoalUpdated | GoalCleared | ThreadCompacted):
             await registry.touch_lane_event(lane.id)
@@ -65,6 +69,7 @@ class Reactor:
             # Auto-decline only when NO handler is registered — a registered trigger
             # suppressed by its own guard still counts as "handled" (don't override intent).
             matched = await self._fire_event(lane.id, "waiting_on_approval")
+            matched += await process_event_subscriptions(self._ctx, lane, event)
             if matched == 0:
                 await self._ctx.client.respond_approval(event.request_id, "decline")
                 await registry.log_action(

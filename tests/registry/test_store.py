@@ -11,7 +11,7 @@ import pytest
 import pytest_asyncio
 
 from outfitter.dispatch.contracts.errors import NotFoundError
-from outfitter.dispatch.registry.models import LaneRuntimeSettings, LaneSync
+from outfitter.dispatch.registry.models import LaneRuntimeSettings, LaneSync, Subscription
 from outfitter.dispatch.registry.refs import BASE58BTC_ALPHABET, codex_ref_payload
 from outfitter.dispatch.registry.store import SCHEMA_VERSION, Registry
 from tests.fixtures.registry.builders import (
@@ -453,6 +453,66 @@ async def test_queued_messages_are_claimed_and_recovered(store: Registry) -> Non
     failed = await store.get_queued_message(second.id)
     assert failed.status == "error"
     assert failed.error == "app_server"
+
+
+async def test_inbox_messages_roundtrip_and_ack(store: Registry) -> None:
+    await store.add_lane(id="target", handle="@target", source="own")
+    await store.add_lane(id="subscriber", handle="@subscriber", source="own")
+
+    message = await store.add_inbox_message(
+        recipient_lane="subscriber",
+        source_lane="target",
+        kind="subscription_update",
+        subject="@target done",
+        body="finished",
+        payload={"event": "completed"},
+        delivery="inbox",
+    )
+
+    assert message.id == 1
+    assert message.state == "pending"
+    assert message.payload == {"event": "completed"}
+    listed = await store.list_inbox_messages(lane="subscriber")
+    assert [m.id for m in listed] == [message.id]
+
+    acked = await store.ack_inbox_message(message.id)
+    assert acked.state == "acked"
+    assert acked.acked_at == _clock()
+
+
+async def test_subscriptions_roundtrip_and_once_match(store: Registry) -> None:
+    await store.add_lane(id="target", handle="@target", source="own")
+    await store.add_lane(id="subscriber", handle="@subscriber", source="own")
+    now = _clock()
+
+    subscription = await store.add_subscription(
+        Subscription(
+            id="sub_1",
+            target_lane="target",
+            subscriber_lane="subscriber",
+            when="done",
+            delivery="turn",
+            deliver="idle",
+            tail=1,
+            once=True,
+            ack="auto",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    message = await store.add_inbox_message(
+        recipient_lane="subscriber",
+        source_lane="target",
+        subscription_id=subscription.id,
+        subject="@target done",
+        body="finished",
+    )
+
+    matched = await store.mark_subscription_matched(subscription.id, inbox_message_id=message.id)
+
+    assert matched.state == "done"
+    assert matched.last_inbox_message_id == message.id
+    assert matched.last_matched_at == _clock()
 
 
 async def test_lane_sync_roundtrip_and_many_lookup(store: Registry) -> None:

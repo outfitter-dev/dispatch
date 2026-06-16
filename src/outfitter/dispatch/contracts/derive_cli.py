@@ -45,6 +45,9 @@ _CUSTOM_ROUTES: tuple[CliRoute, ...] = (
     CliRoute(("search",), "search", ("query",)),
     CliRoute(("history",), "history"),
     CliRoute(("list",), "roster"),
+    CliRoute(("subscribe",), "subscribe", ("target", "spec")),
+    CliRoute(("inbox", "list"), "inbox-list"),
+    CliRoute(("inbox", "ack"), "inbox-ack", ("id",)),
     CliRoute(("trigger", "list"), "trigger-list"),
     CliRoute(("goal", "set"), "goal-set", ("lane", "objective")),
 )
@@ -59,6 +62,9 @@ _SIMPLE_ROUTES: tuple[CliRoute, ...] = (
     CliRoute(("archive",), "archive", ("target",)),
     CliRoute(("restore",), "restore", ("target",)),
     CliRoute(("models",), "models"),
+    CliRoute(("inbox", "read"), "inbox-read", ("id",)),
+    CliRoute(("subscriptions",), "subscription-list"),
+    CliRoute(("unsubscribe",), "unsubscribe", ("id",)),
     CliRoute(("goal", "status"), "goal-get", ("lane",)),
     CliRoute(("goal", "clear"), "goal-clear", ("lane",)),
     CliRoute(("trigger", "add"), "trigger-add"),
@@ -109,6 +115,23 @@ def derive_cli(
         app, ("history",), _history_command(registry.get("history"), invoke, renderer)
     )
     _register_command(app, ("list",), _list_command(registry, invoke, renderer))
+    _register_command(
+        app,
+        ("subscribe",),
+        _subscribe_command(registry.get("subscribe"), invoke, renderer),
+    )
+    _register_command(
+        app,
+        ("inbox", "list"),
+        _inbox_list_command(registry.get("inbox-list"), invoke, renderer),
+        groups,
+    )
+    _register_command(
+        app,
+        ("inbox", "ack"),
+        _inbox_ack_command(registry.get("inbox-ack"), invoke, renderer),
+        groups,
+    )
     _register_command(
         app,
         ("trigger", "list"),
@@ -273,6 +296,8 @@ def _new_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Cal
         dry_run = bool(kwargs.pop("dry_run", False))
         _resolve_new_stdin(kwargs)
         _absolutize_new_paths(kwargs)
+        if kwargs.get("subscribe") is not None:
+            kwargs["caller_thread_id"] = os.environ.get("CODEX_THREAD_ID")
         op = plan_op if dry_run else new_op
         result = invoke(op.id, kwargs)
         render(op, result)
@@ -591,6 +616,116 @@ def _list_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Ca
         _ignore_json(json)
 
     command.__doc__ = "List managed threads, or unmanaged discoverable sessions."
+    return command
+
+
+def _subscribe_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., None]:
+    def command(
+        target: Annotated[str, typer.Argument(help="Target thread selector.")],
+        spec: Annotated[
+            str | None,
+            typer.Argument(help="Compact spec: when:done,to:self,delivery:turn."),
+        ] = None,
+        when: Annotated[str | None, typer.Option("--when", help="Subscription condition.")] = None,
+        to: Annotated[
+            str | None, typer.Option("--to", help="Subscriber thread selector or self.")
+        ] = None,
+        delivery: Annotated[
+            str | None, typer.Option("--delivery", help="Delivery mode: turn or inbox.")
+        ] = None,
+        deliver: Annotated[
+            str | None, typer.Option("--deliver", help="Delivery policy: idle or now.")
+        ] = None,
+        tail: Annotated[int | None, typer.Option("--tail", help="Latest messages to include.")] = (
+            None
+        ),
+        once: Annotated[
+            bool | None, typer.Option("--once/--repeat", help="Complete after first match.")
+        ] = None,
+        ack: Annotated[
+            str | None, typer.Option("--ack", help="Acknowledgement policy: auto or manual.")
+        ] = None,
+        json: Annotated[
+            bool, typer.Option("--json", help="Render machine-readable JSON output.")
+        ] = False,
+    ) -> None:
+        params: dict[str, object] = {
+            "target": target,
+            "spec": spec,
+            "when": when,
+            "to": to,
+            "delivery": delivery,
+            "deliver": deliver,
+            "tail": tail,
+            "once": once,
+            "ack": ack,
+            "caller_thread_id": os.environ.get("CODEX_THREAD_ID"),
+        }
+        result = invoke(op.id, params)
+        render(op, result)
+        _ignore_json(json)
+
+    command.__doc__ = op.summary
+    return command
+
+
+def _inbox_list_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., None]:
+    def command(
+        lane: Annotated[
+            str | None,
+            typer.Option("--lane", "--thread", help="Recipient thread selector."),
+        ] = None,
+        state: Annotated[str | None, typer.Option("--state", help="Inbox state filter.")] = (
+            "pending"
+        ),
+        kind: Annotated[str | None, typer.Option("--kind", help="Inbox message kind.")] = None,
+        limit: Annotated[int, typer.Option("--limit", help="Max messages to return.")] = 50,
+        json: Annotated[
+            bool, typer.Option("--json", help="Render machine-readable JSON output.")
+        ] = False,
+    ) -> None:
+        result = invoke(
+            op.id,
+            {
+                "lane": lane,
+                "state": state,
+                "kind": kind,
+                "limit": limit,
+                "caller_thread_id": os.environ.get("CODEX_THREAD_ID"),
+            },
+        )
+        render(op, result)
+        _ignore_json(json)
+
+    command.__doc__ = op.summary
+    return command
+
+
+def _inbox_ack_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., None]:
+    def command(
+        id: Annotated[int | None, typer.Argument(help="Inbox message id.")] = None,
+        all: Annotated[bool, typer.Option("--all", help="Ack all pending messages.")] = False,
+        lane: Annotated[
+            str | None,
+            typer.Option("--lane", "--thread", help="Recipient thread selector for --all."),
+        ] = None,
+        json: Annotated[
+            bool, typer.Option("--json", help="Render machine-readable JSON output.")
+        ] = False,
+    ) -> None:
+        result = invoke(
+            op.id,
+            {
+                "id": id,
+                "all": all,
+                "lane": lane,
+                "caller_thread_id": os.environ.get("CODEX_THREAD_ID"),
+            },
+        )
+        render(op, result)
+        _ignore_json(json)
+
+    command.__doc__ = op.summary
     return command
 
 

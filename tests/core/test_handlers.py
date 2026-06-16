@@ -44,6 +44,9 @@ from outfitter.dispatch.core.models import (
     GoalGetInput,
     GoalSetInput,
     HistoryInput,
+    InboxAckInput,
+    InboxListInput,
+    InboxReadInput,
     LaneInput,
     LaneRenameInput,
     LaneSyncInput,
@@ -58,6 +61,8 @@ from outfitter.dispatch.core.models import (
     SendInput,
     ShowInput,
     StatusInput,
+    SubscribeInput,
+    SubscriptionListInput,
     ThreadTargetInput,
     TranscriptInput,
     WatchInput,
@@ -86,6 +91,89 @@ async def test_open_then_send_owned_lane(store: Registry) -> None:
     ack = await handlers.send(LaneTextInput(lane="lane-1", text="ping"), ctx)
     assert ack.accepted is True
     assert any(name == "turn_start" and kw["thread_id"] == "lane-1" for name, kw in client.calls)
+
+
+async def test_subscribe_defaults_to_current_thread_and_inbox_ack(store: Registry) -> None:
+    ctx = make_ctx(store)
+    target = await store.add_lane(id="target", handle="@target", source="own", status="idle")
+    subscriber = await store.add_lane(
+        id="subscriber", handle="@subscriber", source="own", status="idle"
+    )
+
+    created = await handlers.subscribe(
+        SubscribeInput(target=target.ref, spec="delivery:inbox", caller_thread_id=subscriber.id),
+        ctx,
+    )
+
+    assert created.target_ref == target.ref
+    assert created.subscriber_ref == subscriber.ref
+    assert created.when == "done"
+    assert created.delivery == "inbox"
+
+    message = await store.add_inbox_message(
+        recipient_lane=subscriber.id,
+        source_lane=target.id,
+        subscription_id=created.id,
+        kind="subscription_update",
+        subject="@target done",
+        body="finished",
+    )
+    listed = await handlers.inbox_list(
+        InboxListInput(caller_thread_id=subscriber.id, limit=10), ctx
+    )
+    assert [item.id for item in listed.messages] == [message.id]
+    read = await handlers.inbox_read(InboxReadInput(id=message.id), ctx)
+    assert read.source_ref == target.ref
+
+    acked = await handlers.inbox_ack(InboxAckInput(id=message.id), ctx)
+    assert acked.acked == 1
+    assert acked.message is not None
+    assert acked.message.state == "acked"
+
+
+async def test_new_lane_can_create_subscription_to_launcher(
+    store: Registry, tmp_path: Path
+) -> None:
+    repo = tmp_path / "dispatch"
+    repo.mkdir()
+    launcher = await store.add_lane(id="launcher", handle="@launcher", source="own", status="idle")
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.new_lane(
+        NewInput(
+            name="worker",
+            cwd=str(repo),
+            send=False,
+            subscribe="when:done,delivery:inbox",
+            caller_thread_id=launcher.id,
+        ),
+        ctx,
+    )
+
+    assert out.subscription is not None
+    assert out.subscription.subscriber_ref == launcher.ref
+    assert out.subscription.target_ref == out.ref
+    listed = await handlers.subscription_list(SubscriptionListInput(subscriber=launcher.ref), ctx)
+    assert [sub.id for sub in listed.subscriptions] == [out.subscription.id]
+
+
+async def test_subscribe_rejects_invalid_compact_spec(store: Registry) -> None:
+    ctx = make_ctx(store)
+    target = await store.add_lane(id="target", handle="@target", source="own", status="idle")
+    subscriber = await store.add_lane(
+        id="subscriber", handle="@subscriber", source="own", status="idle"
+    )
+
+    with pytest.raises(ValidationError, match="delivery must be turn or inbox"):
+        await handlers.subscribe(
+            SubscribeInput(
+                target=target.ref,
+                spec="delivery:maybe",
+                caller_thread_id=subscriber.id,
+            ),
+            ctx,
+        )
 
 
 async def test_new_lane_sets_name_and_sends_initial_turn(store: Registry, tmp_path: Path) -> None:

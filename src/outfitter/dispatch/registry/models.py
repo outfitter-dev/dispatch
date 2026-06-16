@@ -22,6 +22,17 @@ TurnRuntimeStatus = Literal["started", "completed", "failed"]
 SyncState = Literal["unknown", "metadata", "partial", "complete", "error"]
 QueuedMessageStatus = Literal["pending", "sending", "sent", "error"]
 ServiceTierSource = Literal["dispatch", "configured_default", "observed", "unknown"]
+InboxMessageState = Literal["pending", "acked", "archived"]
+InboxMessageKind = Literal[
+    "subscription_update", "direct_message", "system_notice", "trigger_result", "reminder"
+]
+SubscriptionWhen = Literal[
+    "done", "completed", "failed", "needs-attention", "approval", "idle", "activity"
+]
+SubscriptionDelivery = Literal["turn", "inbox"]
+SubscriptionDeliverPolicy = Literal["idle", "now"]
+SubscriptionAckPolicy = Literal["auto", "manual"]
+SubscriptionState = Literal["active", "done", "paused"]
 
 
 class ServiceTierEntry(BaseModel):
@@ -119,6 +130,44 @@ class QueuedMessage(BaseModel):
     created_at: datetime
     updated_at: datetime
     error: str | None = None
+
+
+class InboxMessage(BaseModel):
+    """A durable recipient-facing coordination message."""
+
+    id: int
+    recipient_lane: str
+    source_lane: str | None = None
+    subscription_id: str | None = None
+    kind: InboxMessageKind = "system_notice"
+    subject: str
+    body: str
+    payload: dict[str, object] = Field(default_factory=dict)
+    state: InboxMessageState = "pending"
+    delivery: SubscriptionDelivery = "inbox"
+    queued_message_id: int | None = None
+    created_at: datetime
+    delivered_at: datetime | None = None
+    acked_at: datetime | None = None
+
+
+class Subscription(BaseModel):
+    """A durable event-to-inbox binding."""
+
+    id: str
+    target_lane: str
+    subscriber_lane: str
+    when: SubscriptionWhen = "done"
+    delivery: SubscriptionDelivery = "turn"
+    deliver: SubscriptionDeliverPolicy = "idle"
+    tail: int = Field(default=1, ge=0)
+    once: bool = True
+    ack: SubscriptionAckPolicy = "auto"
+    state: SubscriptionState = "active"
+    created_at: datetime
+    updated_at: datetime
+    last_matched_at: datetime | None = None
+    last_inbox_message_id: int | None = None
 
 
 class LaneSync(BaseModel):

@@ -60,6 +60,91 @@ def test_send_intro_flag_maps_to_send_contract(monkeypatch: pytest.MonkeyPatch) 
     }
 
 
+def test_subscribe_command_maps_compact_spec_and_caller_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setenv("CODEX_THREAD_ID", "subscriber-thread")
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        captured["op"] = op_id
+        captured["params"] = params
+        return {
+            "id": "sub_1",
+            "target_ref": "0target",
+            "target_lane": "target",
+            "subscriber_ref": "0sub",
+            "subscriber_lane": "subscriber",
+            "when": "done",
+            "delivery": "inbox",
+            "deliver": "idle",
+            "tail": 1,
+            "once": True,
+            "ack": "auto",
+            "state": "active",
+            "created_at": "2026-06-03T12:00:00+00:00",
+            "updated_at": "2026-06-03T12:00:00+00:00",
+        }
+
+    app = derive_cli(REGISTRY, invoke)
+    result = runner.invoke(app, ["subscribe", "@worker", "when:done,delivery:inbox"])
+
+    assert result.exit_code == 0
+    assert captured["op"] == "subscribe"
+    assert captured["params"] == {
+        "target": "@worker",
+        "spec": "when:done,delivery:inbox",
+        "when": None,
+        "to": None,
+        "delivery": None,
+        "deliver": None,
+        "tail": None,
+        "once": None,
+        "ack": None,
+        "caller_thread_id": "subscriber-thread",
+    }
+
+
+def test_inbox_commands_map_to_contracts(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setenv("CODEX_THREAD_ID", "current-thread")
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        calls.append((op_id, params))
+        if op_id == "inbox-list":
+            return {"messages": []}
+        if op_id == "inbox-ack":
+            return {"acked": 0, "message": None}
+        return {}
+
+    app = derive_cli(REGISTRY, invoke)
+
+    assert runner.invoke(app, ["inbox", "list"]).exit_code == 0
+    assert runner.invoke(app, ["inbox", "ack", "--all"]).exit_code == 0
+
+    assert calls == [
+        (
+            "inbox-list",
+            {
+                "lane": None,
+                "state": "pending",
+                "kind": None,
+                "limit": 50,
+                "caller_thread_id": "current-thread",
+            },
+        ),
+        (
+            "inbox-ack",
+            {
+                "id": None,
+                "all": True,
+                "lane": None,
+                "caller_thread_id": "current-thread",
+            },
+        ),
+    ]
+
+
 def test_send_rejects_multiple_modes() -> None:
     app = derive_cli(REGISTRY, lambda _op, _params: {})
 
