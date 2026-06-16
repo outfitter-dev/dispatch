@@ -107,7 +107,12 @@ def derive_cli(
     renderer = render if render is not None else _default_render
     groups: dict[str, typer.Typer] = {}
 
-    _register_command(app, ("new",), _new_command(registry, invoke, renderer))
+    _register_command(
+        app,
+        ("new",),
+        _new_command(registry, invoke, renderer),
+        context_settings={"allow_extra_args": True},
+    )
     _register_command(app, ("send",), _send_command(registry.get("send"), invoke, renderer))
     _register_command(app, ("stop",), _stop_command(registry.get("stop"), invoke, renderer))
     _register_command(app, ("search",), _search_command(registry.get("search"), invoke, renderer))
@@ -161,9 +166,12 @@ def _register_command(
     path: tuple[str, ...],
     callback: Callable[..., None],
     groups: dict[str, typer.Typer] | None = None,
+    context_settings: dict[str, object] | None = None,
 ) -> None:
     if len(path) == 1:
-        app.command(name=path[0], help=callback.__doc__)(callback)
+        app.command(name=path[0], help=callback.__doc__, context_settings=context_settings)(
+            callback
+        )
         return
     group_name, command_name = path
     if groups is None:
@@ -173,7 +181,9 @@ def _register_command(
         group = typer.Typer(no_args_is_help=True, add_completion=False)
         groups[group_name] = group
         app.add_typer(group, name=group_name)
-    group.command(name=command_name, help=callback.__doc__)(callback)
+    group.command(name=command_name, help=callback.__doc__, context_settings=context_settings)(
+        callback
+    )
 
 
 def _op_command(
@@ -279,6 +289,20 @@ def _new_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Cal
     new_op = registry.get("new")
     plan_op = registry.get("new-plan")
     parameters = _parameters(new_op)
+    parameters = [_new_subscribe_parameter(param) for param in parameters]
+    parameters.insert(
+        len(parameters) - 1,  # before the trailing --json option
+        inspect.Parameter(
+            "subscribe_spec",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=typer.Option(
+                None,
+                "--subscribe-spec",
+                help="Explicit compact subscription spec for --subscribe.",
+            ),
+            annotation=str | None,
+        ),
+    )
     parameters.insert(
         len(parameters) - 1,  # before the trailing --json option
         inspect.Parameter(
@@ -290,10 +314,15 @@ def _new_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Cal
             annotation=bool,
         ),
     )
+    parameters.insert(
+        0,
+        inspect.Parameter("ctx", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=typer.Context),
+    )
 
-    def command(**kwargs: object) -> None:
+    def command(ctx: typer.Context, **kwargs: object) -> None:
         json_requested = bool(kwargs.pop("json", False))
         dry_run = bool(kwargs.pop("dry_run", False))
+        _resolve_new_subscribe(ctx, kwargs)
         _resolve_new_stdin(kwargs)
         _absolutize_new_paths(kwargs)
         if kwargs.get("subscribe") is not None:
@@ -307,6 +336,47 @@ def _new_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Cal
     command.__name__ = "new"
     command.__doc__ = new_op.summary
     return command
+
+
+def _new_subscribe_parameter(param: inspect.Parameter) -> inspect.Parameter:
+    if param.name != "subscribe":
+        return param
+    return inspect.Parameter(
+        "subscribe",
+        inspect.Parameter.KEYWORD_ONLY,
+        default=typer.Option(
+            False,
+            "--subscribe",
+            help="Create a default subscription to the new lane; optionally followed by a spec.",
+        ),
+        annotation=bool,
+    )
+
+
+def _resolve_new_subscribe(ctx: typer.Context, kwargs: dict[str, object]) -> None:
+    subscribe = bool(kwargs.pop("subscribe", False))
+    subscribe_spec = kwargs.pop("subscribe_spec", None)
+    extras = list(ctx.args)
+    if extras:
+        if not subscribe:
+            typer.secho(
+                f"dispatch: unexpected argument(s): {' '.join(extras)}",
+                fg="red",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        if len(extras) > 1:
+            typer.secho("dispatch: provide at most one --subscribe spec", fg="red", err=True)
+            raise typer.Exit(code=2)
+        if subscribe_spec is not None:
+            typer.secho(
+                "dispatch: use either --subscribe <spec> or --subscribe-spec, not both",
+                fg="red",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        subscribe_spec = extras[0]
+    kwargs["subscribe"] = (subscribe_spec or "default") if subscribe or subscribe_spec else None
 
 
 def _resolve_new_stdin(kwargs: dict[str, object]) -> None:

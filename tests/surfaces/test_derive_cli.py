@@ -202,6 +202,78 @@ def test_new_command_maps_repeated_presets_and_no_send() -> None:
     assert params["send"] is False
 
 
+def test_new_subscribe_flag_accepts_default_and_compact_spec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setenv("CODEX_THREAD_ID", "launcher-thread")
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        calls.append((op_id, params))
+        return {}
+
+    app = derive_cli(REGISTRY, invoke)
+
+    default = runner.invoke(app, ["new", "--name", "worker", "--cwd", "/work", "--subscribe"])
+    compact = runner.invoke(
+        app,
+        [
+            "new",
+            "--name",
+            "worker",
+            "--cwd",
+            "/work",
+            "--subscribe",
+            "when:done,delivery:inbox",
+        ],
+    )
+    explicit = runner.invoke(
+        app,
+        [
+            "new",
+            "--name",
+            "worker",
+            "--cwd",
+            "/work",
+            "--subscribe-spec",
+            "when:approval,delivery:inbox",
+        ],
+    )
+
+    assert default.exit_code == 0, default.output
+    assert compact.exit_code == 0, compact.output
+    assert explicit.exit_code == 0, explicit.output
+    assert [params["subscribe"] for _op, params in calls] == [
+        "default",
+        "when:done,delivery:inbox",
+        "when:approval,delivery:inbox",
+    ]
+    assert all(params["caller_thread_id"] == "launcher-thread" for _op, params in calls)
+
+
+def test_new_subscribe_rejects_ambiguous_specs() -> None:
+    app = derive_cli(REGISTRY, lambda _op, _params: {})
+
+    conflict = runner.invoke(
+        app,
+        [
+            "new",
+            "--name",
+            "worker",
+            "--subscribe",
+            "when:done",
+            "--subscribe-spec",
+            "when:failed",
+        ],
+    )
+    stray = runner.invoke(app, ["new", "--name", "worker", "when:done"])
+
+    assert conflict.exit_code == 2
+    assert "either --subscribe <spec> or --subscribe-spec" in conflict.stderr
+    assert stray.exit_code == 2
+    assert "unexpected argument" in stray.stderr
+
+
 def test_top_level_thread_actions_route_to_lane_contracts() -> None:
     calls: list[tuple[str, dict[str, object]]] = []
 

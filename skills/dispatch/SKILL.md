@@ -337,7 +337,9 @@ subscriber.
 uv run dispatch subscribe @worker
 uv run dispatch subscribe @worker when:done,delivery:inbox
 uv run dispatch subscribe @worker --when approval --delivery inbox --repeat
+uv run dispatch new --name worker --cwd /repo --text "Do it." --subscribe
 uv run dispatch new --name worker --cwd /repo --text "Do it." --subscribe when:done,to:self
+uv run dispatch new --name worker --cwd /repo --text "Do it." --subscribe-spec when:done,to:self
 ```
 
 Default subscription settings are `when:done,to:self,delivery:turn,deliver:idle,
