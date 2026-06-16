@@ -304,6 +304,7 @@ def _registry_check() -> DoctorCheck:
         "lane_snapshots",
         "model_catalog",
         "lane_model_settings",
+        "lane_runtime_settings",
     }
     data.update(
         {

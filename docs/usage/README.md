@@ -335,8 +335,106 @@ left registered and marked `error`, and the first turn does not start.
 
 Dispatch **stages** `hooks/` and `codex/` files but never executes hooks or applies
 Codex config — execution and trust remain Codex's authority. The current App Server
-has no native worktree request, so there is no `--worktree` flag; Dispatch does not
-guess worktree paths.
+has no native worktree request; Dispatch's `--worktree create` helper is a vanilla
+git preflight, not a Codex protocol feature.
+
+For worktree-backed lanes, pass the exact `--cwd` you want Dispatch to launch in
+and treat the runtime checkout as authoritative. Do not depend on a fixed Codex
+worktree layout such as `.codex/worktrees/<run>/<lane>` or
+`~/.config/codex/worktrees/<name>`; Codex-managed worktrees may be detached or
+unnamed, and an empty `git branch --show-current` is not automatically a failure.
+Verify identity with `pwd`, `git rev-parse --show-toplevel`,
+`git rev-parse --short HEAD`, `git status --short`, and any repo-provided runtime
+or workspace doctor command. If a repo provides `.codex/environments/environment.toml`,
+setup/teardown hooks, or bootstrap scripts, repo-local tooling owns those
+semantics; Dispatch only stages files and reports the lane/ref/cwd facts.
+
+### Workspace Preflight
+
+Use `--workspace` when you want Dispatch to resolve repo-local workspace metadata before
+creating the thread:
+
+```bash
+uv run dispatch new --name lane-a --cwd /repo --packet ./packet --workspace auto --dry-run --json
+uv run dispatch new --name lane-a --cwd /repo --packet ./packet --workspace auto --stage all --json
+uv run dispatch new --name lane-a --cwd /repo --packet ./packet --workspace none
+```
+
+`--workspace none` preserves the normal exact-`--cwd` launch path. `--workspace auto`
+looks for `.codex/environments/environment.toml` from the launch cwd/repo root and
+reports the environment name, version, setup script, cleanup script, repo root, and
+effective cwd. If no supported metadata exists, it is a no-op with `state:
+"not_found"` in JSON output.
+
+Use `--worktree create` when Dispatch should create a vanilla git worktree before
+launch:
+
+```bash
+uv run dispatch new --name lane-a --cwd /repo --worktree create --dry-run --json
+uv run dispatch new --name lane-a --cwd /repo --worktree create --worktree-branch dispatch/lane-a --json
+uv run dispatch new --name lane-a --cwd /repo --worktree create --worktree-path /tmp/lane-a
+```
+
+By default, Dispatch-created worktrees live under
+`~/.dispatch/worktrees/<repo>/<lane>/`. Override the root with
+`DISPATCH_WORKTREE_ROOT` or pass an explicit `--worktree-path`. Dispatch does not use
+repo-local `.dispatch/worktrees/` by default, and it does not mimic Claude/Codex
+private worktree layouts. The JSON output reports the exact worktree path, branch,
+base ref, source repo, and head used for the branch.
+
+Worktree defaults can live in repo `.dispatch/config.toml` workspace settings, with
+CLI flags winning:
+
+```toml
+[workspace]
+default = "auto"
+worktree = "create"
+worktree_branch = "dispatch/default"
+worktree_base = "HEAD"
+
+[workspace.presets.athena]
+mode = "auto"
+worktree = "create"
+worktree_branch = "dispatch/athena"
+```
+
+Relative `worktree_path` values in `.dispatch/config.toml` resolve from the repo
+configuration root. Prefer the default global root or explicit absolute paths for
+cross-machine packets.
+
+Default branch naming is `dispatch/<lane-slug>`. If the branch is already checked
+out in another worktree, launch fails before thread creation with the owning
+worktree path. If the branch does not exist, Dispatch creates it from
+`--worktree-base` (default `HEAD`); if it exists and is not checked out elsewhere,
+Dispatch checks it out in the new worktree.
+
+The first supported environment file shape is:
+
+```toml
+version = 1
+name = "repo-name"
+
+[setup]
+script = "./scripts/bootstrap.sh codex"
+
+[cleanup]
+script = "./scripts/bootstrap.sh teardown"
+```
+
+Discovery is automatic, but setup execution is not granted by packet files. A setup
+script runs only when explicitly requested with `--workspace-setup run` or allowed by
+local daemon policy:
+
+```toml
+[policy]
+allow_workspace_setup = true
+workspace_setup_timeout_seconds = 120
+```
+
+Setup runs before `thread/start`; a failing or timed-out setup prevents thread
+creation. Dry runs never execute setup. Launch JSON includes bounded stdout/stderr
+tails so operators can see what happened without treating Dispatch as a full
+workspace lifecycle manager.
 
 Use `send --context` for silent context injection. It adds model-visible context without
 starting a turn:
@@ -398,6 +496,20 @@ full execution log. App Server does not support `includeTurns` on ephemeral thre
 
 ```bash
 uv run dispatch tail <dispatch-ref> --limit 50
+```
+
+Use `history` when you want transcript inspection and rollups rather than only recent
+items. Bare `history` summarizes managed lanes; passing a selector drills into one
+thread and can show summary, items, tools, or files. `--type`, `--tool`, and `--grep`
+filter item views; `--raw` includes raw App Server item payloads for jq-heavy
+inspection.
+
+```bash
+uv run dispatch history
+uv run dispatch history <dispatch-ref>
+uv run dispatch history <dispatch-ref> --view tools
+uv run dispatch history <dispatch-ref> --view files
+uv run dispatch history <dispatch-ref> --view items --tool bash --grep "git status" --raw
 ```
 
 Use `watch` for a bounded live event sample from dispatch's app-server stream.

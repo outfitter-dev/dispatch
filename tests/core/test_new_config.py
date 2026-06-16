@@ -33,6 +33,20 @@ developer_file = ".dispatch/instructions/builder.md"
 [presets.fast]
 effort = "low"
 model = "fast-model"
+
+[workspace]
+default = "auto"
+worktree = "create"
+worktree_path = ".dispatch/wt-default"
+worktree_branch = "dispatch/default"
+worktree_base = "main"
+
+[workspace.presets.athena]
+mode = "auto"
+worktree = "create"
+worktree_path = ".dispatch/wt-athena"
+worktree_branch = "dispatch/athena"
+worktree_base = "origin/main"
 """
     )
     monkeypatch.chdir(tmp_path)
@@ -51,6 +65,18 @@ model = "fast-model"
     assert resolved.settings.approval_policy == "on-request"
     assert resolved.settings.effort == "low"
     assert resolved.settings.model == "cli-model"
+    assert resolved.workspace.default == "auto"
+    assert resolved.workspace.worktree == "create"
+    assert resolved.workspace.worktree_path == str(repo / ".dispatch" / "wt-default")
+    assert resolved.workspace.worktree_branch == "dispatch/default"
+    assert resolved.workspace.worktree_base == "main"
+    assert resolved.workspace.presets["athena"].mode == "auto"
+    assert resolved.workspace.presets["athena"].worktree == "create"
+    assert resolved.workspace.presets["athena"].worktree_path == str(
+        repo / ".dispatch" / "wt-athena"
+    )
+    assert resolved.workspace.presets["athena"].worktree_branch == "dispatch/athena"
+    assert resolved.workspace.presets["athena"].worktree_base == "origin/main"
 
 
 def test_resolve_new_ignores_runtime_policy_table(tmp_path: Path) -> None:

@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 
 from outfitter.dispatch.registry.models import (
     LaneModelSettings,
+    LaneRuntimeSettings,
     ModelCatalogEntry,
     ServiceTierEntry,
 )
@@ -70,5 +71,25 @@ def lane_model_settings(
         resolved_service_tier="priority",
         service_tier_name="Fast",
         service_tier_source="dispatch",
+        updated_at=updated_at or fixed_now_iso(),
+    )
+
+
+def lane_runtime_settings(
+    *,
+    lane: str = "L1",
+    updated_at: str | None = None,
+) -> LaneRuntimeSettings:
+    return LaneRuntimeSettings(
+        lane=lane,
+        sandbox="workspace-write",
+        approval_policy="on-request",
+        approvals_reviewer="user",
+        effort="low",
+        summary="concise",
+        model="gpt-5.5",
+        service_tier="priority",
+        output_schema={"type": "object", "properties": {"ok": {"type": "boolean"}}},
+        personality="pragmatic",
         updated_at=updated_at or fixed_now_iso(),
     )

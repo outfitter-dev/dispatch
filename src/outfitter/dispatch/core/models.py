@@ -30,6 +30,9 @@ SendMode = Literal["send", "steer", "queue", "interject", "context"]
 ThreadActionSource = Literal["own", "attached", "unmanaged"]
 SearchSortKey = Literal["created_at", "updated_at"]
 SearchDateField = Literal["created_at", "updated_at"]
+HistoryView = Literal["auto", "overview", "summary", "items", "tools", "files"]
+WorkspaceSetupMode = Literal["auto", "skip", "run"]
+WorktreeMode = Literal["none", "create"]
 THREAD_SELECTOR_DESCRIPTION = (
     "Thread selector: dispatch ref, full Codex thread id, or unique handle/title."
 )
@@ -103,6 +106,27 @@ class NewInput(BaseModel):
     inline: str | None = Field(
         default=None,
         description="Packet parts to keep inline only (not staged): 'all' or a comma list.",
+    )
+    workspace: str | None = Field(
+        default=None,
+        description="Workspace preflight mode: none, auto, or a named workspace preset.",
+    )
+    workspace_setup: WorkspaceSetupMode = Field(
+        default="auto",
+        description="Workspace setup execution: auto, skip, or run.",
+    )
+    worktree: WorktreeMode | None = Field(
+        default=None,
+        description=("Git worktree preflight: none or create; omit to use workspace config."),
+    )
+    worktree_path: str | None = Field(
+        default=None, description="Explicit path for a Dispatch-created git worktree."
+    )
+    worktree_branch: str | None = Field(
+        default=None, description="Branch to check out/create in a Dispatch-created worktree."
+    )
+    worktree_base: str | None = Field(
+        default=None, description="Base ref for new Dispatch-created worktree branches."
     )
 
 
@@ -206,6 +230,22 @@ class WatchInput(BaseModel):
 class TranscriptInput(BaseModel):
     lane: str = Field(description=THREAD_SELECTOR_DESCRIPTION)
     limit: int = Field(default=50, ge=1, description="Max compact transcript items to return.")
+
+
+class HistoryInput(BaseModel):
+    lane: str | None = Field(
+        default=None,
+        description="Optional thread selector. Omit for managed-thread overview.",
+    )
+    view: HistoryView = Field(
+        default="auto",
+        description="History view: auto, overview, summary, items, tools, or files.",
+    )
+    item_type: str | None = Field(default=None, description="Only include matching item types.")
+    tool: str | None = Field(default=None, description="Only include matching tool names.")
+    grep: str | None = Field(default=None, description="Only include items containing text.")
+    raw: bool = Field(default=False, description="Include raw App Server item payloads.")
+    limit: int = Field(default=50, ge=1, description="Max rows/items to return.")
 
 
 class GoalGetInput(BaseModel):
@@ -413,6 +453,7 @@ class NewLane(LaneRef):
     staged: StageView = Field(
         default_factory=StageView, description="Packet parts staged to the session directory."
     )
+    workspace: WorkspaceView = Field(description="Workspace preflight result.")
     latest_turn: LatestTurnView = Field(default_factory=LatestTurnView)
     model: ThreadModelView = Field(default_factory=ThreadModelView)
 
@@ -446,12 +487,60 @@ class LaunchSettingsView(BaseModel):
     ephemeral: bool = False
 
 
+class WorkspaceEnvironmentView(BaseModel):
+    version: int | None = None
+    name: str | None = None
+    setup_script: str | None = None
+    cleanup_script: str | None = None
+    unknown_keys: list[str] = Field(default_factory=list)
+
+
+class WorkspaceSetupView(BaseModel):
+    policy: str = Field(description="Setup policy decision.")
+    ran: bool = Field(description="Whether the setup script ran.")
+    script: str | None = None
+    cwd: str | None = None
+    exit_code: int | None = None
+    duration_ms: int | None = None
+    stdout_tail: str | None = None
+    stderr_tail: str | None = None
+
+
+class WorktreeView(BaseModel):
+    mode: WorktreeMode = "none"
+    state: str = Field(description="Worktree preflight state.")
+    path: str | None = None
+    branch: str | None = None
+    base: str | None = None
+    head: str | None = None
+    source_repo: str | None = None
+    created: bool = False
+
+
+class WorkspaceView(BaseModel):
+    mode: str = Field(description="Requested workspace mode or preset.")
+    resolved_mode: str = Field(description="Resolved workspace mode after preset expansion.")
+    state: str = Field(description="Workspace preflight state.")
+    input_cwd: str = Field(description="Input cwd before workspace resolution.")
+    repo_root: str | None = Field(default=None, description="Detected git repo root, if any.")
+    effective_cwd: str = Field(description="Exact cwd Dispatch will pass to App Server.")
+    environment_file: str | None = Field(
+        default=None, description="Resolved .codex environment file, if discovered."
+    )
+    environment: WorkspaceEnvironmentView | None = None
+    setup: WorkspaceSetupView = Field(
+        default_factory=lambda: WorkspaceSetupView(policy="none", ran=False)
+    )
+    worktree: WorktreeView = Field(default_factory=lambda: WorktreeView(state="disabled"))
+
+
 class LaunchPlan(BaseModel):
     """A mutation-free preview of what ``dispatch new`` would launch (``--dry-run``)."""
 
     name: str = Field(description="Resolved display name (after prefix/presets).")
     handle: str = Field(description="Resolved @handle the lane would receive.")
     cwd: str = Field(description="Resolved working directory.")
+    workspace: WorkspaceView = Field(description="Workspace preflight plan.")
     packet: str | None = Field(default=None, description="Resolved packet directory, if any.")
     settings: LaunchSettingsView = Field(description="Effective lane settings.")
     sources: list[LaunchInputSource] = Field(
@@ -487,6 +576,65 @@ class TranscriptItem(BaseModel):
     item_id: str | None = None
     type: str
     text: str | None = None
+
+
+class HistoryWorktree(BaseModel):
+    detected: bool = False
+    path: str | None = None
+    repo: str | None = None
+    branch: str | None = None
+    head: str | None = None
+    is_codex_worktree: bool = False
+
+
+class HistoryToolStat(BaseModel):
+    tool: str
+    count: int
+    item_types: list[str] = Field(default_factory=list)
+
+
+class HistoryFileStat(BaseModel):
+    path: str
+    count: int
+
+
+class HistoryItem(TranscriptItem):
+    role: str | None = None
+    tool: str | None = None
+    files: list[str] = Field(default_factory=list)
+    raw: dict[str, object] | None = None
+
+
+class HistoryThreadSummary(BaseModel):
+    ref: str | None = None
+    id: str
+    handle: str | None = None
+    source: LaneSource | None = None
+    status: LaneStatus | None = None
+    cwd: str | None = None
+    first_event_at: str | None = None
+    last_event_at: str | None = None
+    turns: int = 0
+    items: int = 0
+    messages: int = 0
+    tool_calls: int = 0
+    unique_tools: list[str] = Field(default_factory=list)
+    files_changed_count: int = 0
+    files_changed: list[HistoryFileStat] = Field(default_factory=list)
+    transcript_bytes: int | None = None
+    estimated_tokens: int | None = None
+    subagents_count: int = 0
+    subagent_thread_ids: list[str] = Field(default_factory=list)
+    worktree: HistoryWorktree = Field(default_factory=HistoryWorktree)
+
+
+class HistoryOutput(BaseModel):
+    mode: Literal["overview", "summary", "items", "tools", "files"]
+    threads: list[HistoryThreadSummary] = Field(default_factory=list)
+    thread: HistoryThreadSummary | None = None
+    items: list[HistoryItem] = Field(default_factory=list)
+    tools: list[HistoryToolStat] = Field(default_factory=list)
+    files: list[HistoryFileStat] = Field(default_factory=list)
 
 
 class WatchEvent(BaseModel):

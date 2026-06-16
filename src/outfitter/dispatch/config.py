@@ -33,6 +33,12 @@ def pidfile_path() -> Path:
     return Path(override) if override else _base() / "dispatchd.pid"
 
 
+def worktree_root_path() -> Path:
+    """Default root for Dispatch-created git worktrees."""
+    override = os.environ.get("DISPATCH_WORKTREE_ROOT")
+    return Path(override).expanduser() if override else _base() / "worktrees"
+
+
 def config_path() -> Path:
     """Local dispatch daemon config."""
     override = os.environ.get("DISPATCH_CONFIG")
@@ -55,6 +61,8 @@ class RuntimePolicy:
     """
 
     allow_attached_writes: bool = False
+    allow_workspace_setup: bool = False
+    workspace_setup_timeout_seconds: int = 120
 
 
 def runtime_policy() -> RuntimePolicy:
@@ -63,21 +71,42 @@ def runtime_policy() -> RuntimePolicy:
     Env wins so test and one-shot operator shells can force policy without
     mutating the user's config file.
     """
-    value = os.environ.get("DISPATCH_ALLOW_ATTACHED_WRITES")
-    if value is not None:
-        return RuntimePolicy(allow_attached_writes=_truthy(value))
-
     path = config_path()
+    policy = RuntimePolicy()
     if not path.exists():
-        return RuntimePolicy()
+        return _apply_env_policy(policy)
 
     with path.open("rb") as f:
         raw = tomllib.load(f)
-    policy = raw.get("policy", raw)
-    if not isinstance(policy, dict):
-        return RuntimePolicy()
-    return RuntimePolicy(allow_attached_writes=bool(policy.get("allow_attached_writes", False)))
+    raw_policy = raw.get("policy", raw)
+    if not isinstance(raw_policy, dict):
+        return _apply_env_policy(policy)
+    policy = RuntimePolicy(
+        allow_attached_writes=bool(raw_policy.get("allow_attached_writes", False)),
+        allow_workspace_setup=bool(raw_policy.get("allow_workspace_setup", False)),
+        workspace_setup_timeout_seconds=_positive_int(
+            raw_policy.get("workspace_setup_timeout_seconds"), default=120
+        ),
+    )
+    return _apply_env_policy(policy)
 
 
 def _truthy(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _apply_env_policy(policy: RuntimePolicy) -> RuntimePolicy:
+    attached = os.environ.get("DISPATCH_ALLOW_ATTACHED_WRITES")
+    if attached is None:
+        return policy
+    return RuntimePolicy(
+        allow_attached_writes=_truthy(attached),
+        allow_workspace_setup=policy.allow_workspace_setup,
+        workspace_setup_timeout_seconds=policy.workspace_setup_timeout_seconds,
+    )
+
+
+def _positive_int(value: object, *, default: int) -> int:
+    if isinstance(value, int) and value > 0:
+        return value
+    return default

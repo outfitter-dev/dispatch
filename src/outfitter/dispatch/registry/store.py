@@ -22,6 +22,7 @@ from .models import (
     Guard,
     Lane,
     LaneModelSettings,
+    LaneRuntimeSettings,
     LaneSource,
     LaneStatus,
     LaneSync,
@@ -34,7 +35,7 @@ from .models import (
 from .refs import BASE58BTC_ALPHABET, CODEX_REF_SOURCE, codex_ref_payload, make_ref
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _QUEUED_MESSAGES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS queued_messages (
@@ -157,6 +158,20 @@ CREATE TABLE IF NOT EXISTS lane_model_settings (
     updated_at TEXT NOT NULL,
     FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS lane_runtime_settings (
+    lane TEXT PRIMARY KEY,
+    sandbox TEXT NOT NULL DEFAULT 'read-only',
+    approval_policy TEXT NOT NULL DEFAULT 'never',
+    approvals_reviewer TEXT,
+    effort TEXT,
+    summary TEXT,
+    model TEXT,
+    service_tier TEXT,
+    output_schema TEXT,
+    personality TEXT,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
+);
 """
 
 
@@ -220,6 +235,8 @@ class Registry:
         if user_version < 6:
             await self._prune_orphan_lane_children()
             await self._ensure_queued_messages_foreign_key()
+        if user_version < 7:
+            await self._ensure_lane_runtime_settings_table()
 
     async def _ensure_ref_columns(self) -> None:
         async with self._conn.execute("PRAGMA table_info(lanes)") as cur:
@@ -278,11 +295,32 @@ class Registry:
             """
         )
 
+    async def _ensure_lane_runtime_settings_table(self) -> None:
+        await self._conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS lane_runtime_settings (
+                lane TEXT PRIMARY KEY,
+                sandbox TEXT NOT NULL DEFAULT 'read-only',
+                approval_policy TEXT NOT NULL DEFAULT 'never',
+                approvals_reviewer TEXT,
+                effort TEXT,
+                summary TEXT,
+                model TEXT,
+                service_tier TEXT,
+                output_schema TEXT,
+                personality TEXT,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
+            );
+            """
+        )
+
     async def _prune_orphan_lane_children(self) -> None:
         for table in (
             "lane_sync_sources",
             "lane_snapshots",
             "lane_model_settings",
+            "lane_runtime_settings",
             "queued_messages",
         ):
             await self._conn.execute(
@@ -860,6 +898,42 @@ class Registry:
         settings = (_row_to_lane_model_settings(row) for row in rows)
         return {item.lane: item for item in settings}
 
+    # --- lane runtime settings -------------------------------------------------
+
+    async def upsert_lane_runtime_settings(self, settings: LaneRuntimeSettings) -> None:
+        await self._conn.execute(
+            "INSERT INTO lane_runtime_settings (lane, sandbox, approval_policy, "
+            "approvals_reviewer, effort, summary, model, service_tier, output_schema, "
+            "personality, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(lane) DO UPDATE SET sandbox = excluded.sandbox, "
+            "approval_policy = excluded.approval_policy, "
+            "approvals_reviewer = excluded.approvals_reviewer, effort = excluded.effort, "
+            "summary = excluded.summary, model = excluded.model, "
+            "service_tier = excluded.service_tier, output_schema = excluded.output_schema, "
+            "personality = excluded.personality, updated_at = excluded.updated_at",
+            (
+                settings.lane,
+                settings.sandbox,
+                settings.approval_policy,
+                settings.approvals_reviewer,
+                settings.effort,
+                settings.summary,
+                settings.model,
+                settings.service_tier,
+                json.dumps(settings.output_schema) if settings.output_schema is not None else None,
+                settings.personality,
+                settings.updated_at,
+            ),
+        )
+        await self._conn.commit()
+
+    async def get_lane_runtime_settings(self, lane_id: str) -> LaneRuntimeSettings | None:
+        async with self._conn.execute(
+            "SELECT * FROM lane_runtime_settings WHERE lane = ?", (lane_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return _row_to_lane_runtime_settings(row) if row is not None else None
+
     # --- triggers -------------------------------------------------------------
 
     async def add_trigger(self, trigger: Trigger) -> Trigger:
@@ -1034,6 +1108,13 @@ def _row_to_model_catalog_entry(row: aiosqlite.Row) -> ModelCatalogEntry:
 
 def _row_to_lane_model_settings(row: aiosqlite.Row) -> LaneModelSettings:
     return LaneModelSettings.model_validate(_row_dict(row))
+
+
+def _row_to_lane_runtime_settings(row: aiosqlite.Row) -> LaneRuntimeSettings:
+    data = _row_dict(row)
+    raw_schema = data["output_schema"]
+    data["output_schema"] = json.loads(str(raw_schema)) if raw_schema else None
+    return LaneRuntimeSettings.model_validate(data)
 
 
 def _row_to_trigger(row: aiosqlite.Row) -> Trigger:

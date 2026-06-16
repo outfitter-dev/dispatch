@@ -8,11 +8,10 @@ Server/reaction loop owns the next transition.
 from __future__ import annotations
 
 from outfitter.dispatch.client.errors import ClientError
-from outfitter.dispatch.client.models import SandboxPolicy
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.contracts.errors import DispatchError, project_error
 
-_READ_ONLY = SandboxPolicy(type="readOnly")
+from .turn_settings import load_turn_start_settings
 
 
 async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
@@ -32,12 +31,26 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
     try:
         if lane.source == "attached" and ctx.policy.allow_attached_writes:
             await ctx.client.thread_resume(lane.id, exclude_turns=True)
+        turn_settings = await load_turn_start_settings(ctx.registry, lane.id)
+        await ctx.registry.update_lane_status(lane.id, "busy")
         await ctx.client.turn_start(
-            lane.id, message.text, cwd=lane.cwd or ".", sandbox_policy=_READ_ONLY
+            lane.id,
+            message.text,
+            cwd=lane.cwd or ".",
+            approval_policy=turn_settings.approval_policy,
+            approvals_reviewer=turn_settings.approvals_reviewer,
+            sandbox_policy=turn_settings.sandbox_policy,
+            effort=turn_settings.effort,
+            summary=turn_settings.summary,
+            model=turn_settings.model,
+            service_tier=turn_settings.service_tier,
+            output_schema=turn_settings.output_schema,
+            personality=turn_settings.personality,
         )
     except (DispatchError, ClientError) as exc:
         projected = project_error(exc)
         await ctx.registry.fail_queued_message(message.id, projected.code)
+        await ctx.registry.record_turn_request_failed(lane.id, str(exc))
         await ctx.registry.log_action(
             "queue",
             lane=lane.id,
@@ -46,7 +59,6 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
         )
         return True
     await ctx.registry.complete_queued_message(message.id)
-    await ctx.registry.update_lane_status(lane.id, "busy")
     await ctx.registry.log_action("send", lane=lane.id, detail=message.text[:120], outcome="queued")
     return True
 

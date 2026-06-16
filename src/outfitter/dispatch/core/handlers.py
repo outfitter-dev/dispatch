@@ -20,11 +20,9 @@ from pydantic import ValidationError as PydanticValidationError
 from outfitter.dispatch.client.errors import AppServerError as ClientAppServerError
 from outfitter.dispatch.client.errors import ClientError
 from outfitter.dispatch.client.models import (
-    SandboxPolicy,
     ThreadGoal,
     ThreadInfo,
     ThreadResult,
-    ThreadSandbox,
 )
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.contracts.errors import (
@@ -48,6 +46,7 @@ from outfitter.dispatch.registry.models import (
 )
 
 from . import queue
+from .history import detect_worktree, history_items_from_thread, summarize_history
 from .launch import ResolvedLaunch, resolve_launch
 from .model_registry import refresh_model_catalog, resolve_model_settings
 from .models import (
@@ -64,6 +63,12 @@ from .models import (
     GoalGetInput,
     GoalSetInput,
     GoalView,
+    HistoryFileStat,
+    HistoryInput,
+    HistoryItem,
+    HistoryOutput,
+    HistoryThreadSummary,
+    HistoryToolStat,
     LaneCapabilities,
     LaneDetail,
     LaneInput,
@@ -114,8 +119,13 @@ from .models import (
 from .selectors import resolve_managed_selector, resolve_thread_selector
 from .staging import StageContent, stage_session
 from .sync import scan_codex_jsonl
+from .turn_settings import (
+    load_turn_start_settings,
+    runtime_settings_for_lane,
+    thread_sandbox_to_turn_policy,
+)
+from .workspace import plan_workspace, prepare_workspace
 
-_READ_ONLY = SandboxPolicy(type="readOnly")
 _INTRO_TEMPLATE = '[dispatch] From {handle} ({ref}). Use `dispatch send {ref} "..."` to reply.'
 
 # Bound attach metadata reads: if the app-server is wedged, fail clearly and never
@@ -398,6 +408,9 @@ async def open_lane(inp: OpenInput, ctx: Ctx) -> LaneRef:
     lane = await ctx.registry.add_lane(
         id=thread.id, handle=handle, source="own", cwd=inp.cwd, status="idle"
     )
+    await ctx.registry.upsert_lane_runtime_settings(
+        runtime_settings_for_lane(lane=lane.id, updated_at=ctx.registry.now_iso())
+    )
     await ctx.registry.log_action("open", lane=lane.id, detail=handle)
     ctx.log.info("lane.open", lane=lane.id, handle=handle)
     return _ref(lane, ctx)
@@ -438,11 +451,24 @@ async def plan_new_lane(inp: NewInput, ctx: Ctx) -> LaunchPlan:
     """Resolve a launch and report what it would do — no daemon/thread mutation."""
     launch = resolve_launch(inp)
     _validate_launch(launch)
+    workspace = plan_workspace(
+        cwd=launch.resolved.cwd,
+        name=launch.resolved.display_name,
+        requested=inp.workspace,
+        setup=inp.workspace_setup,
+        worktree=inp.worktree,
+        worktree_path=inp.worktree_path,
+        worktree_branch=inp.worktree_branch,
+        worktree_base=inp.worktree_base,
+        config=launch.resolved.workspace,
+        policy=ctx.policy,
+    )
     s = launch.resolved.settings
     return LaunchPlan(
         name=launch.resolved.display_name,
         handle=launch.resolved.handle,
-        cwd=str(launch.resolved.cwd),
+        cwd=str(workspace.effective_cwd),
+        workspace=workspace.view,
         packet=_packet_str(launch),
         settings=LaunchSettingsView(
             sandbox=s.sandbox,
@@ -481,6 +507,19 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
     resolved = launch.resolved
     settings = resolved.settings
     goal = launch.goal
+    workspace = await prepare_workspace(
+        cwd=resolved.cwd,
+        name=resolved.display_name,
+        requested=inp.workspace,
+        setup=inp.workspace_setup,
+        worktree=inp.worktree,
+        worktree_path=inp.worktree_path,
+        worktree_branch=inp.worktree_branch,
+        worktree_base=inp.worktree_base,
+        config=resolved.workspace,
+        policy=ctx.policy,
+    )
+    effective_cwd = workspace.effective_cwd
     sandbox = settings.sandbox or "read-only"
     approval_policy = settings.approval_policy or "never"
     resolved_model = await resolve_model_settings(
@@ -492,7 +531,7 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
     )
     explicit_service_tier = resolved_model.resolved_service_tier if settings.service_tier else None
     thread = await ctx.client.thread_start(
-        cwd=str(resolved.cwd),
+        cwd=str(effective_cwd),
         sandbox=sandbox,
         approval_policy=approval_policy,
         approvals_reviewer=settings.approvals_reviewer,
@@ -505,10 +544,25 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         ephemeral=bool(settings.ephemeral),
     )
     lane = await ctx.registry.add_lane(
-        id=thread.id, handle=resolved.handle, source="own", cwd=str(resolved.cwd), status="idle"
+        id=thread.id, handle=resolved.handle, source="own", cwd=str(effective_cwd), status="idle"
     )
     lane_model = resolved_model.for_lane(lane.id, ctx.registry.now_iso())
     await ctx.registry.upsert_lane_model_settings(lane_model)
+    await ctx.registry.upsert_lane_runtime_settings(
+        runtime_settings_for_lane(
+            lane=lane.id,
+            updated_at=ctx.registry.now_iso(),
+            sandbox=sandbox,
+            approval_policy=approval_policy,
+            approvals_reviewer=settings.approvals_reviewer,
+            effort=settings.effort,
+            summary=settings.summary,
+            model=settings.model,
+            service_tier=explicit_service_tier,
+            output_schema=settings.output_schema,
+            personality=settings.personality,
+        )
+    )
     await ctx.registry.log_action("new", lane=lane.id, detail=resolved.display_name)
     try:
         await ctx.client.thread_set_name(thread.id, resolved.display_name)
@@ -535,7 +589,7 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         try:
             result = await asyncio.to_thread(
                 stage_session,
-                cwd=resolved.cwd,
+                cwd=effective_cwd,
                 ref=lane.ref,
                 lane_id=lane.id,
                 plan=launch.stage_plan,
@@ -567,13 +621,14 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
     message_accepted = False
     if settings.text is not None and inp.send:
         try:
+            await ctx.registry.update_lane_status(lane.id, "busy")
             await ctx.client.turn_start(
                 lane.id,
                 settings.text,
-                cwd=str(resolved.cwd),
+                cwd=str(effective_cwd),
                 approval_policy=approval_policy,
                 approvals_reviewer=settings.approvals_reviewer,
-                sandbox_policy=_turn_sandbox(sandbox),
+                sandbox_policy=thread_sandbox_to_turn_policy(sandbox),
                 effort=settings.effort,
                 summary=settings.summary,
                 model=settings.model,
@@ -599,19 +654,10 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         message_accepted=message_accepted,
         goal_set=goal_set,
         staged=staged,
+        workspace=workspace.view,
         latest_turn=_latest_turn_view(lane),
         model=_model_view(lane_model),
     )
-
-
-def _turn_sandbox(sandbox: ThreadSandbox) -> SandboxPolicy:
-    match sandbox:
-        case "read-only":
-            return SandboxPolicy(type="readOnly")
-        case "workspace-write":
-            return SandboxPolicy(type="workspaceWrite")
-        case "danger-full-access":
-            return SandboxPolicy(type="dangerFullAccess")
 
 
 async def attach_lane(inp: AttachInput, ctx: Ctx) -> LaneRef:
@@ -785,8 +831,21 @@ async def send(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
     _require_writable(lane, ctx)
     try:
         await _prepare_attached_write(lane, ctx)
+        turn_settings = await load_turn_start_settings(ctx.registry, lane.id)
+        await ctx.registry.update_lane_status(lane.id, "busy")
         await ctx.client.turn_start(
-            lane.id, inp.text, cwd=lane.cwd or ".", sandbox_policy=_READ_ONLY
+            lane.id,
+            inp.text,
+            cwd=lane.cwd or ".",
+            approval_policy=turn_settings.approval_policy,
+            approvals_reviewer=turn_settings.approvals_reviewer,
+            sandbox_policy=turn_settings.sandbox_policy,
+            effort=turn_settings.effort,
+            summary=turn_settings.summary,
+            model=turn_settings.model,
+            service_tier=turn_settings.service_tier,
+            output_schema=turn_settings.output_schema,
+            personality=turn_settings.personality,
         )
     except (DispatchError, ClientError) as exc:
         await ctx.registry.record_turn_request_failed(lane.id, str(exc))
@@ -794,7 +853,6 @@ async def send(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
             "send", lane=lane.id, detail=inp.text[:120], outcome=project_error(exc).code
         )
         raise
-    await ctx.registry.update_lane_status(lane.id, "busy")
     await ctx.registry.log_action("send", lane=lane.id, detail=inp.text[:120])
     return ActionAck(**_managed_identity(lane, ctx), op="send")
 
@@ -816,8 +874,21 @@ async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
                 await _prepare_attached_write(lane, ctx)
                 await ctx.client.turn_interrupt(lane.id, turn_id)
                 await ctx.registry.log_action("interrupt", lane=lane.id, detail="interject")
+                turn_settings = await load_turn_start_settings(ctx.registry, lane.id)
+                await ctx.registry.update_lane_status(lane.id, "busy")
                 await ctx.client.turn_start(
-                    lane.id, text, cwd=lane.cwd or ".", sandbox_policy=_READ_ONLY
+                    lane.id,
+                    text,
+                    cwd=lane.cwd or ".",
+                    approval_policy=turn_settings.approval_policy,
+                    approvals_reviewer=turn_settings.approvals_reviewer,
+                    sandbox_policy=turn_settings.sandbox_policy,
+                    effort=turn_settings.effort,
+                    summary=turn_settings.summary,
+                    model=turn_settings.model,
+                    service_tier=turn_settings.service_tier,
+                    output_schema=turn_settings.output_schema,
+                    personality=turn_settings.personality,
                 )
             except (DispatchError, ClientError) as exc:
                 await ctx.registry.record_turn_request_failed(lane.id, str(exc))
@@ -825,7 +896,6 @@ async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
                     "send", lane=lane.id, detail=text[:120], outcome=project_error(exc).code
                 )
                 raise
-            await ctx.registry.update_lane_status(lane.id, "busy")
             await ctx.registry.log_action("send", lane=lane.id, detail=text[:120])
             return ActionAck(**_managed_identity(lane, ctx), op="interject")
         case "queue":
@@ -984,6 +1054,60 @@ async def transcript(inp: TranscriptInput, ctx: Ctx) -> TranscriptOutput:
         **_managed_identity(lane, ctx),
         items=_transcript_from_thread(result, limit=inp.limit),
     )
+
+
+async def history(inp: HistoryInput, ctx: Ctx) -> HistoryOutput:
+    mode = _history_mode(inp)
+    if mode == "overview":
+        if inp.lane is not None:
+            raise ValidationError("history overview does not accept a thread selector")
+        lanes = (await ctx.registry.list_lanes())[: inp.limit]
+        summaries = [await _history_summary_for_lane(lane, ctx) for lane in lanes]
+        return HistoryOutput(mode="overview", threads=summaries)
+
+    if inp.lane is None:
+        raise ValidationError("history view requires a thread selector")
+    lane = await _resolve(ctx, inp.lane)
+    result = await ctx.client.thread_read(lane.id, include_turns=True)
+    summary, _items, tools, files = await _history_details(lane, result, ctx)
+    if mode == "summary":
+        return HistoryOutput(mode="summary", thread=summary, tools=tools, files=files)
+    if mode == "tools":
+        return HistoryOutput(mode="tools", thread=summary, tools=tools[: inp.limit])
+    if mode == "files":
+        return HistoryOutput(mode="files", thread=summary, files=files[: inp.limit])
+    return HistoryOutput(
+        mode="items",
+        thread=summary,
+        items=history_items_from_thread(
+            result,
+            item_type=inp.item_type,
+            tool=inp.tool,
+            grep=inp.grep,
+            raw=inp.raw,
+            limit=inp.limit,
+        ),
+    )
+
+
+def _history_mode(inp: HistoryInput) -> Literal["overview", "summary", "items", "tools", "files"]:
+    if inp.view == "auto":
+        return "overview" if inp.lane is None else "summary"
+    return inp.view
+
+
+async def _history_summary_for_lane(lane: Lane, ctx: Ctx) -> HistoryThreadSummary:
+    result = await ctx.client.thread_read(lane.id, include_turns=True)
+    summary, _items, _tools, _files = await _history_details(lane, result, ctx)
+    return summary
+
+
+async def _history_details(
+    lane: Lane, result: dict[str, object], ctx: Ctx
+) -> tuple[HistoryThreadSummary, list[HistoryItem], list[HistoryToolStat], list[HistoryFileStat]]:
+    sync = await ctx.registry.get_lane_sync(lane.id)
+    worktree = await detect_worktree(lane.cwd)
+    return summarize_history(result, lane=lane, sync=sync, worktree=worktree)
 
 
 async def search(inp: SearchInput, ctx: Ctx) -> SearchOutput:
@@ -1369,6 +1493,17 @@ async def fork(inp: ForkInput, ctx: Ctx) -> LaneRef:
     )
     await ctx.registry.upsert_lane_model_settings(
         resolved_model.for_lane(lane.id, ctx.registry.now_iso())
+    )
+    await ctx.registry.upsert_lane_runtime_settings(
+        runtime_settings_for_lane(
+            lane=lane.id,
+            updated_at=ctx.registry.now_iso(),
+            sandbox=inp.sandbox or "read-only",
+            approval_policy=inp.approval_policy or "never",
+            approvals_reviewer=inp.approvals_reviewer,
+            model=inp.model,
+            service_tier=explicit_service_tier,
+        )
     )
     await ctx.registry.log_action("fork", lane=lane.id, detail=f"from {source.id}")
     try:

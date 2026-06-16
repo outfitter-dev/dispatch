@@ -14,7 +14,11 @@ from outfitter.dispatch.contracts.errors import NotFoundError
 from outfitter.dispatch.registry.models import LaneSync
 from outfitter.dispatch.registry.refs import BASE58BTC_ALPHABET, codex_ref_payload
 from outfitter.dispatch.registry.store import SCHEMA_VERSION, Registry
-from tests.fixtures.registry.builders import lane_model_settings, model_catalog_entry
+from tests.fixtures.registry.builders import (
+    lane_model_settings,
+    lane_runtime_settings,
+    model_catalog_entry,
+)
 
 
 def _clock() -> datetime:
@@ -260,6 +264,16 @@ async def test_model_catalog_and_lane_model_settings_roundtrip(store: Registry) 
 
     assert await store.get_lane_model_settings(lane.id) == settings
     assert await store.get_lane_model_settings_many([lane.id, "missing"]) == {lane.id: settings}
+
+
+async def test_lane_runtime_settings_roundtrip(store: Registry) -> None:
+    lane = await store.add_lane(id="L1", handle="@alpha", source="own")
+    settings = lane_runtime_settings(lane=lane.id, updated_at=store.now_iso())
+
+    await store.upsert_lane_runtime_settings(settings)
+
+    assert await store.get_lane_runtime_settings(lane.id) == settings
+    assert await store.get_lane_runtime_settings("missing") is None
 
 
 async def test_get_missing_lane_raises_not_found(store: Registry) -> None:

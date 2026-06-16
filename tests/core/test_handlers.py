@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -13,6 +14,12 @@ from outfitter.dispatch.client.errors import AppServerError as ClientAppServerEr
 from outfitter.dispatch.client.errors import TransportError
 from outfitter.dispatch.client.events import LaneIdle, TurnFailed, TurnStarted
 from outfitter.dispatch.client.models import (
+    ApprovalPolicy,
+    ApprovalsReviewer,
+    Effort,
+    Personality,
+    ReasoningSummary,
+    SandboxPolicy,
     ThreadGoal,
     ThreadInfo,
     ThreadSearchMatch,
@@ -36,6 +43,7 @@ from outfitter.dispatch.core.models import (
     GoalClearInput,
     GoalGetInput,
     GoalSetInput,
+    HistoryInput,
     LaneInput,
     LaneRenameInput,
     LaneSyncInput,
@@ -247,6 +255,100 @@ async def test_new_lane_no_send_registers_without_turn(store: Registry, tmp_path
     assert not any(name == "turn_start" for name, _ in client.calls)
 
 
+async def test_send_reuses_runtime_settings_from_no_send_lane(
+    store: Registry, tmp_path: Path
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    out = await handlers.new_lane(
+        NewInput(
+            name="worker",
+            cwd=str(tmp_path),
+            text="later",
+            send=False,
+            sandbox="workspace-write",
+            approval_policy="on-request",
+            approvals_reviewer="user",
+            effort="low",
+            summary="concise",
+            model="gpt-5.5",
+            service_tier="priority",
+            personality="pragmatic",
+        ),
+        ctx,
+    )
+    client.calls.clear()
+
+    await handlers.send(LaneTextInput(lane=out.ref, text="start now"), ctx)
+
+    call = next(kw for name, kw in client.calls if name == "turn_start")
+    assert call["sandbox_policy"] == {"type": "workspaceWrite"}
+    assert call["approval_policy"] == "on-request"
+    assert call["approvals_reviewer"] == "user"
+    assert call["effort"] == "low"
+    assert call["summary"] == "concise"
+    assert call["model"] == "gpt-5.5"
+    assert call["service_tier"] == "priority"
+    assert call["personality"] == "pragmatic"
+
+
+async def test_queue_reuses_runtime_settings_from_no_send_lane(
+    store: Registry, tmp_path: Path
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    out = await handlers.new_lane(
+        NewInput(
+            name="queued-worker",
+            cwd=str(tmp_path),
+            text="later",
+            send=False,
+            sandbox="workspace-write",
+            approval_policy="on-request",
+        ),
+        ctx,
+    )
+    client.calls.clear()
+
+    ack = await handlers.send_message(SendInput(lane=out.ref, text="queued", mode="queue"), ctx)
+
+    assert ack.op == "queue"
+    call = next(kw for name, kw in client.calls if name == "turn_start")
+    assert call["sandbox_policy"] == {"type": "workspaceWrite"}
+    assert call["approval_policy"] == "on-request"
+
+
+async def test_interject_reuses_runtime_settings_from_no_send_lane(
+    store: Registry, tmp_path: Path
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    out = await handlers.new_lane(
+        NewInput(
+            name="interject-worker",
+            cwd=str(tmp_path),
+            text="later",
+            send=False,
+            sandbox="workspace-write",
+            approval_policy="on-request",
+        ),
+        ctx,
+    )
+    await store.set_active_turn(out.id, "turn-1")
+    await store.update_lane_status(out.id, "busy")
+    client.calls.clear()
+
+    ack = await handlers.send_message(
+        SendInput(lane=out.ref, text="replace", mode="interject"), ctx
+    )
+
+    assert ack.op == "interject"
+    assert any(name == "turn_interrupt" and kw["turn_id"] == "turn-1" for name, kw in client.calls)
+    call = next(kw for name, kw in client.calls if name == "turn_start")
+    assert call["sandbox_policy"] == {"type": "workspaceWrite"}
+    assert call["approval_policy"] == "on-request"
+
+
 async def test_new_lane_sets_native_goal_before_initial_turn(
     store: Registry, tmp_path: Path
 ) -> None:
@@ -289,6 +391,45 @@ class _FailingTurnClient(FakeLaneClient):
         raise TransportError("boom")
 
 
+class _CompletingBeforeReturnClient(FakeLaneClient):
+    def __init__(self, store: Registry) -> None:
+        super().__init__()
+        self._store = store
+
+    async def turn_start(
+        self,
+        thread_id: str,
+        text: str,
+        cwd: str,
+        approval_policy: ApprovalPolicy = "never",
+        approvals_reviewer: ApprovalsReviewer | None = None,
+        sandbox_policy: SandboxPolicy | None = None,
+        effort: Effort | None = None,
+        summary: ReasoningSummary | None = None,
+        model: str | None = None,
+        service_tier: str | None = None,
+        output_schema: dict[str, object] | None = None,
+        personality: Personality | None = None,
+    ) -> dict[str, object]:
+        await super().turn_start(
+            thread_id,
+            text,
+            cwd,
+            approval_policy=approval_policy,
+            approvals_reviewer=approvals_reviewer,
+            sandbox_policy=sandbox_policy,
+            effort=effort,
+            summary=summary,
+            model=model,
+            service_tier=service_tier,
+            output_schema=output_schema,
+            personality=personality,
+        )
+        await self._store.record_turn_started(thread_id, "turn-race")
+        await self._store.record_turn_completed(thread_id, "turn-race")
+        return {}
+
+
 async def test_new_lane_initial_send_failure_leaves_lane_registered(
     store: Registry, tmp_path: Path
 ) -> None:
@@ -318,6 +459,20 @@ async def test_send_resolves_by_handle(store: Registry) -> None:
     assert ack.lane == "lane-1"
     by_ref = await handlers.send(LaneTextInput(lane=ref.ref, text="again"), ctx)
     assert by_ref.lane == "lane-1"
+
+
+async def test_send_does_not_overwrite_fast_completion_with_busy(store: Registry) -> None:
+    client = _CompletingBeforeReturnClient(store)
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="beta"), ctx)
+
+    await handlers.send(LaneTextInput(lane="@beta", text="fast"), ctx)
+
+    detail = await handlers.show(ShowInput(lane="@beta"), ctx)
+    assert detail.status == "idle"
+    assert detail.active_turn_id is None
+    assert detail.latest_turn.id == "turn-race"
+    assert detail.latest_turn.status == "completed"
 
 
 async def test_send_failure_marks_latest_turn_error(store: Registry) -> None:
@@ -567,6 +722,100 @@ async def test_transcript_reads_persisted_turn_items(store: Registry) -> None:
     assert out.lane == "lane-1"
     assert len(out.items) == 1
     assert out.items[0].text == "done"
+
+
+async def test_history_overview_summarizes_managed_threads(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.read_result = {
+        "thread": {
+            "id": "lane-1",
+            "turns": [
+                {
+                    "id": "t1",
+                    "items": [
+                        {"id": "u1", "type": "userMessage", "text": "run status"},
+                        {
+                            "id": "tool-1",
+                            "type": "toolCall",
+                            "toolName": "bash",
+                            "text": "git status",
+                        },
+                        {
+                            "id": "file-1",
+                            "type": "fileChange",
+                            "path": "src/app.py",
+                            "text": "edited app",
+                        },
+                    ],
+                }
+            ],
+        }
+    }
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="alpha", cwd="/tmp/no-such-history-worktree"), ctx)
+
+    out = await handlers.history(HistoryInput(), ctx)
+
+    assert out.mode == "overview"
+    assert len(out.threads) == 1
+    summary = out.threads[0]
+    assert summary.ref == "0BGeK1"
+    assert summary.turns == 1
+    assert summary.items == 3
+    assert summary.messages == 1
+    assert summary.tool_calls == 1
+    assert summary.unique_tools == ["bash"]
+    assert summary.files_changed_count == 1
+    assert summary.files_changed[0].path == "src/app.py"
+    assert summary.transcript_bytes is not None
+
+
+async def test_history_thread_views_filter_items_and_rollups(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.read_result = {
+        "thread": {
+            "id": "lane-1",
+            "turns": [
+                {
+                    "id": "t1",
+                    "items": [
+                        {"id": "a1", "type": "agentMessage", "text": "I will inspect."},
+                        {
+                            "id": "b1",
+                            "type": "toolCall",
+                            "toolName": "bash",
+                            "text": "git status",
+                        },
+                        {
+                            "id": "p1",
+                            "type": "toolCall",
+                            "toolName": "apply_patch",
+                            "path": "src/app.py",
+                            "text": "patch src/app.py",
+                        },
+                    ],
+                }
+            ],
+        }
+    }
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+
+    summary = await handlers.history(HistoryInput(lane="@alpha"), ctx)
+    tools = await handlers.history(HistoryInput(lane="@alpha", view="tools"), ctx)
+    files = await handlers.history(HistoryInput(lane="@alpha", view="files"), ctx)
+    items = await handlers.history(
+        HistoryInput(lane="@alpha", view="items", tool="bash", raw=True), ctx
+    )
+
+    assert summary.mode == "summary"
+    assert summary.thread is not None
+    assert summary.thread.tool_calls == 2
+    assert [tool.tool for tool in tools.tools] == ["bash", "apply_patch"]
+    assert files.files[0].path == "src/app.py"
+    assert len(items.items) == 1
+    assert items.items[0].tool == "bash"
+    assert items.items[0].raw is not None
 
 
 async def test_watch_collects_bounded_raw_events(store: Registry) -> None:
@@ -1463,3 +1712,203 @@ async def test_plan_new_lane_reports_stage_without_writing(store: Registry, tmp_
     assert set(plan.stage.parts) == {"goal", "prompt"}
     assert plan.stage.session_dir is None  # dry-run: ref unknown, nothing written
     assert not (cwd / ".agents").exists()
+
+
+async def test_plan_new_lane_reports_workspace_without_setup(
+    store: Registry, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    env_dir = repo / ".codex" / "environments"
+    env_dir.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (env_dir / "environment.toml").write_text(
+        """
+version = 1
+name = "repo"
+
+[setup]
+script = "touch SHOULD_NOT_EXIST"
+"""
+    )
+    ctx = make_ctx(store)
+
+    plan = await handlers.plan_new_lane(
+        NewInput(name="worker", cwd=str(repo), workspace="auto"), ctx
+    )
+
+    assert plan.cwd == str(repo)
+    assert plan.workspace.state == "discovered"
+    assert plan.workspace.environment is not None
+    assert plan.workspace.environment.name == "repo"
+    assert plan.workspace.setup.ran is False
+    assert not (repo / "SHOULD_NOT_EXIST").exists()
+
+
+async def test_new_lane_workspace_auto_uses_effective_repo_cwd(
+    store: Registry, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    nested = repo / "nested"
+    env_dir = repo / ".codex" / "environments"
+    env_dir.mkdir(parents=True)
+    nested.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (env_dir / "environment.toml").write_text('version = 1\nname = "repo"\n')
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.new_lane(
+        NewInput(name="worker", cwd=str(nested), workspace="auto", send=False), ctx
+    )
+
+    assert out.cwd == str(repo)
+    assert out.workspace.effective_cwd == str(repo)
+    assert out.workspace.repo_root == str(repo)
+    assert any(name == "thread_start" and kw["cwd"] == str(repo) for name, kw in client.calls)
+
+
+async def test_new_lane_workspace_setup_requires_policy_or_explicit_run(
+    store: Registry, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    env_dir = repo / ".codex" / "environments"
+    env_dir.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (env_dir / "environment.toml").write_text(
+        """
+version = 1
+name = "repo"
+
+[setup]
+script = "printf ran > setup.txt"
+"""
+    )
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.new_lane(
+        NewInput(name="worker", cwd=str(repo), workspace="auto", send=False), ctx
+    )
+
+    assert out.workspace.setup.ran is False
+    assert out.workspace.setup.policy == "not_allowed"
+    assert not (repo / "setup.txt").exists()
+
+
+async def test_new_lane_workspace_setup_runs_with_explicit_run(
+    store: Registry, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    env_dir = repo / ".codex" / "environments"
+    env_dir.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (env_dir / "environment.toml").write_text(
+        """
+version = 1
+name = "repo"
+
+[setup]
+script = "printf ran > setup.txt"
+"""
+    )
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.new_lane(
+        NewInput(
+            name="worker",
+            cwd=str(repo),
+            workspace="auto",
+            workspace_setup="run",
+            send=False,
+        ),
+        ctx,
+    )
+
+    assert out.workspace.state == "setup_completed"
+    assert out.workspace.setup.ran is True
+    assert (repo / "setup.txt").read_text() == "ran"
+
+
+async def test_new_lane_workspace_setup_failure_prevents_thread_start(
+    store: Registry, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    env_dir = repo / ".codex" / "environments"
+    env_dir.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (env_dir / "environment.toml").write_text(
+        """
+version = 1
+name = "repo"
+
+[setup]
+script = "exit 4"
+"""
+    )
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    with pytest.raises(ValidationError, match="workspace setup failed"):
+        await handlers.new_lane(
+            NewInput(
+                name="worker",
+                cwd=str(repo),
+                workspace="auto",
+                workspace_setup="run",
+                send=False,
+            ),
+            ctx,
+        )
+
+    assert not any(name == "thread_start" for name, _ in client.calls)
+
+
+async def test_new_lane_dispatch_created_worktree_is_effective_cwd_for_stage_and_thread(
+    store: Registry, tmp_path: Path
+) -> None:
+    repo = _git_repo_for_worktree(tmp_path / "repo")
+    pkt = _stage_packet(tmp_path)
+    worktree_path = tmp_path / "worker-wt"
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.new_lane(
+        NewInput(
+            name="worker",
+            cwd=str(repo),
+            packet=str(pkt),
+            stage="all",
+            send=False,
+            worktree="create",
+            worktree_path=str(worktree_path),
+            worktree_branch="dispatch/worker",
+        ),
+        ctx,
+    )
+
+    assert out.cwd == str(worktree_path)
+    assert out.workspace.worktree.state == "created"
+    assert out.workspace.worktree.created is True
+    assert out.workspace.worktree.branch == "dispatch/worker"
+    assert any(
+        name == "thread_start" and kw["cwd"] == str(worktree_path) for name, kw in client.calls
+    )
+    assert out.staged.session_dir == str(worktree_path / ".agents" / "sessions" / out.ref)
+    assert (worktree_path / ".agents" / "sessions" / out.ref / "packet" / "goal.md").is_file()
+
+
+def _git_repo_for_worktree(path: Path) -> Path:
+    path.mkdir()
+    _run_git_for_worktree(path, "init", "-q")
+    _run_git_for_worktree(path, "config", "user.email", "dispatch@example.test")
+    _run_git_for_worktree(path, "config", "user.name", "Dispatch Test")
+    (path / "README.md").write_text("hi\n")
+    _run_git_for_worktree(path, "add", "README.md")
+    _run_git_for_worktree(path, "commit", "-qm", "init")
+    return path
+
+
+def _run_git_for_worktree(cwd: Path, *args: str) -> str:
+    proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True)
+    return proc.stdout.strip()

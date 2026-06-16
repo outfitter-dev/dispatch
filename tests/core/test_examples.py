@@ -20,6 +20,7 @@ async def test_registry_has_the_v1_ops() -> None:
         "show",
         "lane-rename",
         "transcript",
+        "history",
         "watch",
         "sync",
         "roster",
