@@ -75,6 +75,11 @@ Projections (pure functions over the registry, mirroring Trails' `derive* → cr
 - Daemon lifecycle: `up` / `down` (process) · `daemon status` · `daemon log` ·
   `registry migrate`
 - Thread creation: `new <name> [--preset ...] [--goal ...] [--text ...] [--no-send]`
+  · launch packets/files: `[--packet DIR] [--goal-file F|-] [--input-file F|-]
+  [--output-schema-file F]` · preview: `[--dry-run]` · staging:
+  `[--stage all|<parts>] [--inline <parts>]` (writes `.agents/sessions/<ref>/`;
+  `new --dry-run` → mutation-free `new-plan` op). No `--worktree`: no native App
+  Server worktree request exists.
 - Thread reads/discovery: `get <selector>` · `list` · `list --unmanaged` ·
   `sync <selector>` · `tail <selector>` · `watch <selector>`
 - Thread management/search: `attach <thread-id> [--sync]` ·

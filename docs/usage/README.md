@@ -264,6 +264,77 @@ means the App Server accepted the initial turn request; it does not prove the
 assistant produced work. Use `get` to inspect `latest_turn`, `tail` for persisted
 history, or `watch` for a bounded live event sample after launch.
 
+### Launch Packets And File Inputs
+
+For durable, repeatable launches (especially parallel worker lanes), point `new`
+at a **launch packet** — a directory of files instead of one-off shell strings:
+
+```text
+packet/
+  dispatch.toml          # safe subset of new settings (sandbox/model/effort/…)
+  goal.md                # native App Server goal (== --goal-file)
+  prompt.md              # initial turn text (== --input-file)
+  output.schema.json     # JSON Schema for structured turn output
+  base.md                # thread baseInstructions
+  developer.md           # thread developerInstructions
+  hooks/                 # staged hook files (dispatch never executes these)
+  codex/                 # staged Codex config files (staged, not applied)
+```
+
+```bash
+uv run dispatch new --name lane-a --cwd /repo --packet ./packet
+```
+
+You can also pass file inputs directly, or read one from stdin with `-`:
+
+```bash
+uv run dispatch new --name lane-a --cwd /repo \
+  --goal-file goal.md --input-file prompt.md --output-schema-file out.schema.json
+
+printf 'Review until no P2 findings remain.' \
+  | uv run dispatch new --name lane-a --goal-file - --input-file prompt.md
+```
+
+Precedence per slot is **inline flag > explicit file > packet > repo config**, so
+`--goal` overrides `--goal-file`, which overrides a packet's `goal.md`. At most one
+input may come from stdin (`-`), and `--goal`/`--goal-file` (or `--text`/
+`--input-file`) cannot both be set. `goal.md` becomes a native goal — it is not
+`/goal` slash-command text.
+
+Use `--dry-run` to resolve a launch and print exactly what *would* happen, with no
+daemon or thread mutation. The plan reports the resolved cwd, effective settings,
+per-input sources (origin + byte count + SHA-256), and whether a turn would start:
+
+```bash
+uv run dispatch new --name lane-a --cwd /repo --packet ./packet --dry-run --json
+```
+
+### Staged Session Directories
+
+`--stage` writes durable copies of packet parts into the launched cwd at
+`.agents/sessions/<ref>/` (alongside an empty `scratch/` and a `state.json`
+manifest), so the worker lane and repo tooling can read the launch from disk.
+Staging is additive — protocol fields (goal/prompt/schema/instructions) are still
+delivered inline; the staged files are durable twins built from the same bytes.
+
+```bash
+uv run dispatch new --name lane-a --cwd /repo --packet ./packet --stage all
+uv run dispatch new --name lane-a --cwd /repo --packet ./packet --stage prompt,goal
+uv run dispatch new --name lane-a --cwd /repo --packet ./packet --stage all --inline prompt
+```
+
+Stageable parts: `config`, `goal`, `prompt`, `output_schema`, `base`, `developer`,
+`hooks`, `codex_config`. `--stage all` stages every available part; a comma list
+stages a subset; `--inline` removes parts from the staged set. Staging refuses to
+overwrite an existing `.agents/sessions/<ref>/` and is atomic (a half-written
+packet is never visible). If staging fails after the lane is created, the lane is
+left registered and marked `error`, and the first turn does not start.
+
+Dispatch **stages** `hooks/` and `codex/` files but never executes hooks or applies
+Codex config — execution and trust remain Codex's authority. The current App Server
+has no native worktree request, so there is no `--worktree` flag; Dispatch does not
+guess worktree paths.
+
 Use `send --context` for silent context injection. It adds model-visible context without
 starting a turn:
 

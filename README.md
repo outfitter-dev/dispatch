@@ -42,6 +42,12 @@ uv run dispatch daemon log --limit 10
 uv run dispatch down --json
 ```
 
+For durable or parallel launches, point `new` at a launch packet directory and
+preview it without side effects: `dispatch new --name lane-a --cwd /repo --packet
+./packet --dry-run --json`, then `--stage all` to write durable session files under
+`.agents/sessions/<ref>/`. See [`docs/usage/README.md`](docs/usage/README.md) for
+packet layout, file/stdin inputs, and staging.
+
 Use owned managed threads for turn-writing work. Existing desktop Codex threads can be attached as
 managed threads, but ADR-0005 still blocks turn-writing and history-mutating commands such
 as `send`, `stop`, `goal set`, and `goal clear` on attached lanes. Every managed

@@ -90,6 +90,26 @@ Use `--goal` for a native App Server goal before the initial turn. Do not put
 `/goal ...` in `--text`; dispatch treats slash commands as plain text and rejects
 that shape so agents do not create a thread that only looks goal-driven.
 
+For durable or parallel launches, drive `new` from a **launch packet** directory
+(`goal.md`, `prompt.md`, `output.schema.json`, `base.md`, `developer.md`,
+`dispatch.toml`, plus staged-only `hooks/` and `codex/`) or from explicit files:
+
+```bash
+uv run dispatch new --name lane-a --cwd /repo --packet ./packet
+uv run dispatch new --name lane-a --cwd /repo --goal-file goal.md --input-file prompt.md
+printf 'goal text' | uv run dispatch new --name lane-a --goal-file - --input-file prompt.md
+uv run dispatch new --name lane-a --cwd /repo --packet ./packet --dry-run --json
+uv run dispatch new --name lane-a --cwd /repo --packet ./packet --stage all
+```
+
+Prefer `--input-file` over `--text-file`. Precedence per slot is inline flag >
+explicit file > packet > repo config. Only one input may read stdin (`-`).
+`--dry-run` resolves and prints the plan (sources with byte/SHA-256, effective
+settings, staged parts) without mutating any state. `--stage all|<parts>` writes
+durable twins to `.agents/sessions/<ref>/` (with `--inline <parts>` to exclude
+some); dispatch stages `hooks/`/`codex/` but never executes hooks. There is no
+`--worktree`: the current App Server exposes no native worktree request.
+
 `new` returns `message_accepted`, not proof of assistant completion. After launch,
 use `get` to check `latest_turn`, `tail` for persisted history, or `watch` for a
 bounded live sample.

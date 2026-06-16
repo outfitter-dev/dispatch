@@ -159,6 +159,21 @@ Net: the worktree and hook/config questions are resolved — worktree is **not
 supported** (recorded with evidence), and the safe hook/config posture is
 **stage-only** with no trust bypass. No code changed in Phase 3.
 
+### Phase 4 — docs (branch `phase-4-docs`)
+
+Documented the new launch surface (no code):
+
+- `docs/usage/README.md`: new "Launch Packets And File Inputs" + "Staged Session
+  Directories" sections (packet layout, `--packet`/`--input-file`/`--goal-file -`/
+  `--output-schema-file`, precedence, `--dry-run --json`, `--stage`/`--inline`,
+  no-`--worktree` rationale).
+- `skills/dispatch/SKILL.md`: packet/file/dry-run/stage paragraph under `new`.
+- `README.md`: quickstart pointer to packet/dry-run/stage + usage doc.
+- `plugins/dispatch/README.md`: one-line summary of the new `new` inputs.
+- `docs/development/design.md`: extended the `new` command-surface line with the
+  packet/file/dry-run/stage flags and the new-plan compose + no-worktree note.
+- `just check` EXIT=0 (278 passed) after docs.
+
 ## Verification Log
 
 ### Phase 1
