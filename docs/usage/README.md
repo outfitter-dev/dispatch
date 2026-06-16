@@ -295,10 +295,11 @@ printf 'Review until no P2 findings remain.' \
   | uv run dispatch new --name lane-a --goal-file - --input-file prompt.md
 ```
 
-Precedence per slot is **inline flag > explicit file > packet > repo config**, so
-`--goal` overrides `--goal-file`, which overrides a packet's `goal.md`. At most one
-input may come from stdin (`-`), and `--goal`/`--goal-file` (or `--text`/
-`--input-file`) cannot both be set. `goal.md` becomes a native goal — it is not
+Precedence per slot is **inline flag > explicit file > packet > repo config**, so a
+CLI input (`--goal` or `--goal-file`) overrides a packet's `goal.md`, which
+overrides repo config. The inline flag and its file form are mutually exclusive:
+`--goal`/`--goal-file` (and `--text`/`--input-file`) cannot both be set, and at
+most one input may come from stdin (`-`). `goal.md` becomes a native goal — it is not
 `/goal` slash-command text.
 
 Use `--dry-run` to resolve a launch and print exactly what *would* happen, with no

@@ -271,6 +271,19 @@ it touches the whole `new`/cwd contract; deferred rather than rewritten here.
   `test_new_json_output_includes_staged_summary` checks rendered JSON).
 - Re-verified: `just check` EXIT=0 (278 passed). No open P0/P1/P2.
 
+### Phase 4 — round 1 (local reviewer subagent, docs accuracy)
+
+- Score: 3/5. Three doc-vs-code mismatches, all **fixed**:
+  - P1 — `SKILL.md` referenced `--text-file` (never implemented; it was the plan's
+    design guidance). Reworded to describe `--input-file` (the file form of `--text`).
+  - P2 — `docs/usage` said "`--goal` overrides `--goal-file`"; they are mutually
+    exclusive (error), not precedence-ordered. Corrected to "a CLI input overrides
+    the packet's goal.md".
+  - P2 — `design.md` command surface showed `new <name>` (positional); it is
+    `--name`. Changed to `new --name <name>`.
+- Re-verified: no remaining `--text-file` refs; `just check` EXIT=0 (278 passed).
+  No open P0/P1/P2.
+
 ## Remote Review / CI Log
 
 - Not started.

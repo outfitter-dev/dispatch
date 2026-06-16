@@ -74,7 +74,7 @@ Projections (pure functions over the registry, mirroring Trails' `derive* → cr
 
 - Daemon lifecycle: `up` / `down` (process) · `daemon status` · `daemon log` ·
   `registry migrate`
-- Thread creation: `new <name> [--preset ...] [--goal ...] [--text ...] [--no-send]`
+- Thread creation: `new --name <name> [--preset ...] [--goal ...] [--text ...] [--no-send]`
   · launch packets/files: `[--packet DIR] [--goal-file F|-] [--input-file F|-]
   [--output-schema-file F]` · preview: `[--dry-run]` · staging:
   `[--stage all|<parts>] [--inline <parts>]` (writes `.agents/sessions/<ref>/`;

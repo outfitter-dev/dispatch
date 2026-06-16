@@ -102,8 +102,9 @@ uv run dispatch new --name lane-a --cwd /repo --packet ./packet --dry-run --json
 uv run dispatch new --name lane-a --cwd /repo --packet ./packet --stage all
 ```
 
-Prefer `--input-file` over `--text-file`. Precedence per slot is inline flag >
-explicit file > packet > repo config. Only one input may read stdin (`-`).
+Use `--input-file` for the prompt file (the file form of `--text`). Precedence
+per slot is inline flag > explicit file > packet > repo config. Only one input may
+read stdin (`-`).
 `--dry-run` resolves and prints the plan (sources with byte/SHA-256, effective
 settings, staged parts) without mutating any state. `--stage all|<parts>` writes
 durable twins to `.agents/sessions/<ref>/` (with `--inline <parts>` to exclude
