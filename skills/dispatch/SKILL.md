@@ -343,9 +343,12 @@ uv run dispatch new --name worker --cwd /repo --text "Do it." --subscribe-spec w
 ```
 
 Default subscription settings are `when:done,to:self,delivery:turn,deliver:idle,
-tail:1,once:true,ack:auto`. `self` is derived from `CODEX_THREAD_ID`, so the
-calling thread must already be managed by dispatch. Use explicit `--to <ref>`
-when one managed lane is subscribing on behalf of another.
+tail:1,once:true,ack:auto` when the subscriber is writable. If the subscriber is
+an attached/read-only lane, the default falls back to `delivery:inbox`; explicit
+`delivery:turn` still fails unless attached writes are enabled. `self` is
+derived from `CODEX_THREAD_ID`, so the calling thread must already be managed by
+dispatch. Use explicit `--to <ref>` when one managed lane is subscribing on
+behalf of another.
 
 Useful `when` buckets:
 

@@ -507,9 +507,12 @@ The default compact subscription is:
 when:done,to:self,delivery:turn,deliver:idle,tail:1,once:true,ack:auto
 ```
 
-`self` is derived from `CODEX_THREAD_ID`, so the current Codex thread must already
-be managed by Dispatch. Use explicit `--to <ref>` when one lane is subscribing on
-behalf of another.
+That default uses `delivery:turn` only when the subscriber is writable. If `self`
+resolves to an attached/read-only lane, Dispatch falls back to `delivery:inbox` so
+the subscription can still collect durable updates. Explicit `delivery:turn` still
+fails unless attached writes are enabled. `self` is derived from `CODEX_THREAD_ID`,
+so the current Codex thread must already be managed by Dispatch. Use explicit
+`--to <ref>` when one lane is subscribing on behalf of another.
 
 ```bash
 uv run dispatch subscribe @worker

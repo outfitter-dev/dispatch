@@ -158,6 +158,42 @@ async def test_new_lane_can_create_subscription_to_launcher(
     assert [sub.id for sub in listed.subscriptions] == [out.subscription.id]
 
 
+async def test_subscribe_default_falls_back_to_inbox_for_attached_subscriber(
+    store: Registry,
+) -> None:
+    ctx = make_ctx(store)
+    target = await store.add_lane(id="target", handle="@target", source="own", status="idle")
+    subscriber = await store.add_lane(
+        id="subscriber", handle="@subscriber", source="attached", status="idle"
+    )
+
+    created = await handlers.subscribe(
+        SubscribeInput(target=target.ref, spec="default", caller_thread_id=subscriber.id),
+        ctx,
+    )
+
+    assert created.delivery == "inbox"
+    assert created.subscriber_ref == subscriber.ref
+
+
+async def test_subscribe_explicit_turn_requires_writable_subscriber(store: Registry) -> None:
+    ctx = make_ctx(store)
+    target = await store.add_lane(id="target", handle="@target", source="own", status="idle")
+    subscriber = await store.add_lane(
+        id="subscriber", handle="@subscriber", source="attached", status="idle"
+    )
+
+    with pytest.raises(AuthorityError, match="turn delivery requires a writable subscriber"):
+        await handlers.subscribe(
+            SubscribeInput(
+                target=target.ref,
+                spec="delivery:turn",
+                caller_thread_id=subscriber.id,
+            ),
+            ctx,
+        )
+
+
 async def test_subscribe_rejects_invalid_compact_spec(store: Registry) -> None:
     ctx = make_ctx(store)
     target = await store.add_lane(id="target", handle="@target", source="own", status="idle")

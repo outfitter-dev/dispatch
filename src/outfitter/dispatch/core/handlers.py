@@ -1100,6 +1100,12 @@ async def subscribe(inp: SubscribeInput, ctx: Ctx) -> SubscriptionView:
         if settings["to"] == "self"
         else await _resolve(ctx, settings["to"])
     )
+    if (
+        settings["delivery"] == "turn"
+        and not _can_write(subscriber, ctx)
+        and not _subscription_delivery_explicit(inp)
+    ):
+        settings["delivery"] = "inbox"
     if settings["delivery"] == "turn" and not _can_write(subscriber, ctx):
         raise AuthorityError(
             "turn delivery requires a writable subscriber lane; use delivery:inbox or enable "
@@ -1185,6 +1191,19 @@ def _subscription_settings(inp: SubscribeInput) -> _SubscriptionSettings:
     if inp.ack is not None:
         settings["ack"] = inp.ack
     return settings
+
+
+def _subscription_delivery_explicit(inp: SubscribeInput) -> bool:
+    if inp.delivery is not None:
+        return True
+    spec = inp.spec or ""
+    if spec in {"", "true", "default", "all"}:
+        return False
+    return any(
+        part.strip().startswith(("delivery:", "delivery="))
+        for part in spec.split(",")
+        if part.strip()
+    )
 
 
 def _set_subscription_setting(settings: _SubscriptionSettings, key: str, value: object) -> None:

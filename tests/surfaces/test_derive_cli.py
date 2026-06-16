@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 
 from outfitter.dispatch.contracts.derive_cli import derive_cli
 from outfitter.dispatch.core.ops import REGISTRY
+from tests.fixtures import load_json
 
 runner = CliRunner()
 
@@ -205,8 +206,13 @@ def test_new_command_maps_repeated_presets_and_no_send() -> None:
 def test_new_subscribe_flag_accepts_default_and_compact_spec(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    fixture = load_json("cli_smoke", "new_subscribe.json")
+    env = fixture["env"]
+    assert isinstance(env, dict)
+    thread_id = env["CODEX_THREAD_ID"]
+    assert isinstance(thread_id, str)
     calls: list[tuple[str, dict[str, object]]] = []
-    monkeypatch.setenv("CODEX_THREAD_ID", "launcher-thread")
+    monkeypatch.setenv("CODEX_THREAD_ID", thread_id)
 
     def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
         calls.append((op_id, params))
@@ -214,64 +220,33 @@ def test_new_subscribe_flag_accepts_default_and_compact_spec(
 
     app = derive_cli(REGISTRY, invoke)
 
-    default = runner.invoke(app, ["new", "--name", "worker", "--cwd", "/work", "--subscribe"])
-    compact = runner.invoke(
-        app,
-        [
-            "new",
-            "--name",
-            "worker",
-            "--cwd",
-            "/work",
-            "--subscribe",
-            "when:done,delivery:inbox",
-        ],
-    )
-    explicit = runner.invoke(
-        app,
-        [
-            "new",
-            "--name",
-            "worker",
-            "--cwd",
-            "/work",
-            "--subscribe-spec",
-            "when:approval,delivery:inbox",
-        ],
-    )
-
-    assert default.exit_code == 0, default.output
-    assert compact.exit_code == 0, compact.output
-    assert explicit.exit_code == 0, explicit.output
-    assert [params["subscribe"] for _op, params in calls] == [
-        "default",
-        "when:done,delivery:inbox",
-        "when:approval,delivery:inbox",
-    ]
-    assert all(params["caller_thread_id"] == "launcher-thread" for _op, params in calls)
+    cases = fixture["cases"]
+    assert isinstance(cases, list)
+    for case in cases:
+        assert isinstance(case, dict)
+        argv = case["argv"]
+        assert isinstance(argv, list)
+        result = runner.invoke(app, [str(arg) for arg in argv])
+        assert result.exit_code == 0, f"{case['name']}: {result.output}"
+        op_id, params = calls[-1]
+        assert op_id == case["op"]
+        assert params["subscribe"] == case["subscribe"]
+        assert params["caller_thread_id"] == case["caller_thread_id"]
 
 
 def test_new_subscribe_rejects_ambiguous_specs() -> None:
+    fixture = load_json("cli_smoke", "new_subscribe.json")
     app = derive_cli(REGISTRY, lambda _op, _params: {})
 
-    conflict = runner.invoke(
-        app,
-        [
-            "new",
-            "--name",
-            "worker",
-            "--subscribe",
-            "when:done",
-            "--subscribe-spec",
-            "when:failed",
-        ],
-    )
-    stray = runner.invoke(app, ["new", "--name", "worker", "when:done"])
-
-    assert conflict.exit_code == 2
-    assert "either --subscribe <spec> or --subscribe-spec" in conflict.stderr
-    assert stray.exit_code == 2
-    assert "unexpected argument" in stray.stderr
+    rejects = fixture["rejects"]
+    assert isinstance(rejects, list)
+    for case in rejects:
+        assert isinstance(case, dict)
+        argv = case["argv"]
+        assert isinstance(argv, list)
+        result = runner.invoke(app, [str(arg) for arg in argv])
+        assert result.exit_code == 2, case["name"]
+        assert str(case["stderr_contains"]) in result.stderr
 
 
 def test_top_level_thread_actions_route_to_lane_contracts() -> None:
