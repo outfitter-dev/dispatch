@@ -236,7 +236,14 @@ def _parameters(op: Op, *, positionals: tuple[str, ...] = ()) -> list[inspect.Pa
 
 
 _STDIN_FIELDS: dict[str, str] = {"goal_file": "goal", "input_file": "text"}
-_PATH_FIELDS: tuple[str, ...] = ("packet", "input_file", "goal_file", "output_schema_file")
+_PATH_FIELDS: tuple[str, ...] = (
+    "packet",
+    "input_file",
+    "goal_file",
+    "output_schema_file",
+    "base_file",
+    "developer_file",
+)
 
 
 def _new_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Callable[..., None]:

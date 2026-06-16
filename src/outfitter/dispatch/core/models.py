@@ -351,7 +351,9 @@ class NewLane(LaneRef):
 
 
 LaunchSlot = Literal["goal", "prompt", "output_schema", "base", "developer"]
-LaunchOrigin = Literal["inline", "stdin", "file", "packet", "config"]
+# stdin is read CLI-side and inlined before the daemon resolves a launch, so the
+# daemon reports it as "inline"; no separate "stdin" origin reaches resolution.
+LaunchOrigin = Literal["inline", "file", "packet", "config"]
 
 
 class LaunchInputSource(BaseModel):

@@ -125,9 +125,27 @@ Not yet done in Phase 1 (later phases): staged session directory (`--stage`/
 
 ## Local Review Log
 
-- Not started.
-- Executor must request local review before ready/handoff and record score,
-  summary, findings, and P0/P1/P2 closeout here.
+### Phase 1 — round 1 (local reviewer subagent)
+
+- Score: 3/5. Summary: solid architecture + coverage; one real path-resolution
+  inconsistency.
+- P1 — `derive_cli.py` `_PATH_FIELDS` omitted `base_file`/`developer_file`, so
+  relative `--base-file`/`--developer-file` would resolve against the daemon cwd,
+  not the caller's. **Fixed**: added both to `_PATH_FIELDS` (CLI absolutizes them
+  like the other file flags; config-provided instruction files still resolve
+  daemon-side relative to `config_dir`).
+- P2 — `LaunchOrigin` declared a dead `"stdin"` value (stdin is inlined CLI-side).
+  **Fixed**: removed `"stdin"`; origin is honestly `"inline"`.
+- P2 — instruction `LaunchSource.path` could be relative. **Fixed** by the P1
+  change (CLI now forwards an absolute path); added a regression test.
+- P2 — missing explicit source-origin tests. **Fixed**: added
+  `test_resolve_launch_reports_instruction_file_source` and
+  `test_resolve_launch_inlined_stdin_goal_reports_inline_origin`.
+- Re-verified: `just check` EXIT=0 (260 passed). No open P0/P1/P2.
+
+Known non-blocking item (recorded, out of Phase 1 scope): `--cwd` itself is still
+resolved daemon-side for relative values (pre-existing `new` behavior). Changing
+it touches the whole `new`/cwd contract; deferred rather than rewritten here.
 
 ## Remote Review / CI Log
 

@@ -195,3 +195,25 @@ def test_resolve_launch_no_send_when_no_text(tmp_path: Path) -> None:
     launch = resolve_launch(NewInput(name="w", cwd=str(tmp_path), goal="only a goal"))
     assert launch.text is None
     assert launch.would_send is False
+
+
+def test_resolve_launch_reports_instruction_file_source(tmp_path: Path) -> None:
+    base_file = tmp_path / "base.md"
+    base_file.write_text("Base instructions body.")
+
+    launch = resolve_launch(NewInput(name="w", cwd=str(tmp_path), base_file=str(base_file)))
+
+    base_src = next(src for src in launch.sources if src.slot == "base")
+    assert base_src.origin == "file"
+    assert base_src.path == str(base_file)  # absolute path, as forwarded by the CLI
+    assert base_src.bytes == len(b"Base instructions body.")
+
+
+def test_resolve_launch_inlined_stdin_goal_reports_inline_origin(tmp_path: Path) -> None:
+    # The CLI inlines `--goal-file -` into `goal` before the daemon resolves, so
+    # the reported origin is "inline" with byte/hash provenance over the content.
+    launch = resolve_launch(NewInput(name="w", cwd=str(tmp_path), goal="from stdin"))
+    goal_src = next(src for src in launch.sources if src.slot == "goal")
+    assert goal_src.origin == "inline"
+    assert goal_src.path is None
+    assert goal_src.bytes == len(b"from stdin")
