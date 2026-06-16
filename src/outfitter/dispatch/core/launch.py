@@ -20,9 +20,10 @@ from typing import Literal
 
 from outfitter.dispatch.contracts.errors import ValidationError
 
-from .models import LaunchOrigin, LaunchSlot, NewInput
+from .models import LaunchOrigin, LaunchSlot, NewInput, StagePart
 from .new_config import NewSettings, ResolvedNew, resolve_new
 from .packet import PacketContent, load_packet, parse_output_schema
+from .staging import StagePlan, resolve_stage_plan
 
 # Which layer owns a launch slot's value (drives precedence + reported origin).
 _Owner = Literal["cli", "packet", "config"]
@@ -43,11 +44,12 @@ class ResolvedLaunch:
     goal: str | None
     text: str | None
     output_schema: dict[str, object] | None
-    packet_path: Path | None
+    packet: PacketContent | None
     sources: list[LaunchSource]
     unknown_files: list[str]
     aux_dirs: list[str]
     would_send: bool
+    stage_plan: StagePlan
 
 
 def resolve_launch(inp: NewInput) -> ResolvedLaunch:
@@ -90,17 +92,44 @@ def resolve_launch(inp: NewInput) -> ResolvedLaunch:
     )
 
     would_send = resolved.settings.text is not None and inp.send
+    available = _stage_available(resolved, goal, packet)
+    stage_plan = resolve_stage_plan(inp.stage, inp.inline, available)
     return ResolvedLaunch(
         resolved=resolved,
         goal=goal,
         text=resolved.settings.text,
         output_schema=resolved.settings.output_schema,
-        packet_path=packet.path if packet else None,
+        packet=packet,
         sources=sources,
         unknown_files=list(packet.unknown_files) if packet else [],
         aux_dirs=list(packet.aux_dirs) if packet else [],
         would_send=would_send,
+        stage_plan=stage_plan,
     )
+
+
+def _stage_available(
+    resolved: ResolvedNew, goal: str | None, packet: PacketContent | None
+) -> frozenset[StagePart]:
+    available: set[StagePart] = set()
+    if goal is not None:
+        available.add("goal")
+    if resolved.settings.text is not None:
+        available.add("prompt")
+    if resolved.settings.output_schema is not None:
+        available.add("output_schema")
+    if resolved.base_instructions is not None:
+        available.add("base")
+    if resolved.developer_instructions is not None:
+        available.add("developer")
+    if packet is not None:
+        if packet.has_config:
+            available.add("config")
+        if "hooks" in packet.aux_dirs:
+            available.add("hooks")
+        if "codex" in packet.aux_dirs:
+            available.add("codex_config")
+    return frozenset(available)
 
 
 def _resolve_goal(

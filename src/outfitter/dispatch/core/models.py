@@ -93,6 +93,17 @@ class NewInput(BaseModel):
     output_schema_file: str | None = Field(
         default=None, description="JSON Schema file for structured turn output."
     )
+    stage: str | None = Field(
+        default=None,
+        description=(
+            "Stage packet parts to .agents/sessions/<ref>/: 'all' or a comma list "
+            "(config,goal,prompt,output_schema,base,developer,hooks,codex_config)."
+        ),
+    )
+    inline: str | None = Field(
+        default=None,
+        description="Packet parts to keep inline only (not staged): 'all' or a comma list.",
+    )
 
 
 class AttachInput(BaseModel):
@@ -339,12 +350,41 @@ class LaneListItem(LaneRef):
     model: ThreadModelView = Field(default_factory=ThreadModelView)
 
 
+StagePart = Literal[
+    "config", "goal", "prompt", "output_schema", "base", "developer", "hooks", "codex_config"
+]
+
+
+class StagedFile(BaseModel):
+    part: StagePart = Field(description="Which packet part this entry stages.")
+    path: str = Field(description="Path written, relative to the session directory.")
+    bytes: int | None = Field(default=None, description="Byte length for file parts.")
+    sha256: str | None = Field(default=None, description="SHA-256 hex digest for file parts.")
+
+
+class StageView(BaseModel):
+    """What a launch staged (or, in a plan, would stage) under .agents/sessions/<ref>/."""
+
+    parts: list[StagePart] = Field(
+        default_factory=list, description="Packet parts staged to disk, in canonical order."
+    )
+    session_dir: str | None = Field(
+        default=None, description="Absolute session directory (known only after launch)."
+    )
+    files: list[StagedFile] = Field(
+        default_factory=list, description="Files/dirs written under the session directory."
+    )
+
+
 class NewLane(LaneRef):
     message_accepted: bool = Field(
         description="Whether the App Server accepted the initial message request."
     )
     goal_set: bool = Field(
         default=False, description="Whether a native App Server goal was set before launch."
+    )
+    staged: StageView = Field(
+        default_factory=StageView, description="Packet parts staged to the session directory."
     )
     latest_turn: LatestTurnView = Field(default_factory=LatestTurnView)
     model: ThreadModelView = Field(default_factory=ThreadModelView)
@@ -394,6 +434,9 @@ class LaunchPlan(BaseModel):
     would_send: bool = Field(description="Whether an initial turn would start.")
     output_schema_present: bool = Field(
         description="Whether a structured output schema would be applied."
+    )
+    stage: StageView = Field(
+        default_factory=StageView, description="Packet parts that would be staged to disk."
     )
     unknown_packet_files: list[str] = Field(
         default_factory=list, description="Packet files with no defined launch meaning."

@@ -31,6 +31,7 @@ from outfitter.dispatch.contracts.errors import (
     AuthorityError,
     DispatchError,
     NotFoundError,
+    StagingError,
     ValidationError,
     project_error,
 )
@@ -94,6 +95,8 @@ from .models import (
     SendInput,
     ServiceTierView,
     ShowInput,
+    StagedFile,
+    StageView,
     StatusInput,
     StatusOutput,
     ThreadActionRef,
@@ -107,6 +110,7 @@ from .models import (
     WatchOutput,
 )
 from .selectors import resolve_managed_selector, resolve_thread_selector
+from .staging import StageContent, stage_session
 from .sync import scan_codex_jsonl
 
 _READ_ONLY = SandboxPolicy(type="readOnly")
@@ -351,6 +355,21 @@ def _validate_launch(launch: ResolvedLaunch) -> None:
         raise ValidationError("native goals require non-ephemeral threads")
 
 
+def _packet_str(launch: ResolvedLaunch) -> str | None:
+    return str(launch.packet.path) if launch.packet is not None else None
+
+
+def _stage_content(launch: ResolvedLaunch) -> StageContent:
+    return StageContent(
+        goal=launch.goal,
+        prompt=launch.text,
+        output_schema=launch.output_schema,
+        base=launch.resolved.base_instructions,
+        developer=launch.resolved.developer_instructions,
+        packet_path=launch.packet.path if launch.packet is not None else None,
+    )
+
+
 async def plan_new_lane(inp: NewInput, ctx: Ctx) -> LaunchPlan:
     """Resolve a launch and report what it would do — no daemon/thread mutation."""
     launch = resolve_launch(inp)
@@ -360,7 +379,7 @@ async def plan_new_lane(inp: NewInput, ctx: Ctx) -> LaunchPlan:
         name=launch.resolved.display_name,
         handle=launch.resolved.handle,
         cwd=str(launch.resolved.cwd),
-        packet=str(launch.packet_path) if launch.packet_path is not None else None,
+        packet=_packet_str(launch),
         settings=LaunchSettingsView(
             sandbox=s.sandbox,
             approval_policy=s.approval_policy,
@@ -386,6 +405,7 @@ async def plan_new_lane(inp: NewInput, ctx: Ctx) -> LaunchPlan:
         goal_set=launch.goal is not None,
         would_send=launch.would_send,
         output_schema_present=launch.output_schema is not None,
+        stage=StageView(parts=list(launch.stage_plan.parts)),
         unknown_packet_files=launch.unknown_files,
         aux_packet_dirs=launch.aux_dirs,
     )
@@ -446,6 +466,39 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         await ctx.registry.log_action("goal-set", lane=lane.id, detail=goal[:120])
         goal_set = True
 
+    staged = StageView()
+    if launch.stage_plan.parts:
+        try:
+            result = await asyncio.to_thread(
+                stage_session,
+                cwd=resolved.cwd,
+                ref=lane.ref,
+                lane_id=lane.id,
+                plan=launch.stage_plan,
+                content=_stage_content(launch),
+            )
+        except StagingError as exc:
+            # Lane stays registered; the first turn never starts (ADR: staging is a
+            # pre-turn durability step). Surface the typed error for the caller.
+            await ctx.registry.log_action(
+                "stage",
+                lane=lane.id,
+                detail=",".join(launch.stage_plan.parts),
+                outcome=project_error(exc).code,
+            )
+            raise
+        await ctx.registry.log_action(
+            "stage", lane=lane.id, detail=",".join(launch.stage_plan.parts)
+        )
+        staged = StageView(
+            parts=list(launch.stage_plan.parts),
+            session_dir=str(result.session_dir),
+            files=[
+                StagedFile(part=e.part, path=e.path, bytes=e.bytes, sha256=e.sha256)
+                for e in result.entries
+            ],
+        )
+
     message_accepted = False
     if settings.text is not None and inp.send:
         try:
@@ -480,6 +533,7 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         **ref.model_dump(),
         message_accepted=message_accepted,
         goal_set=goal_set,
+        staged=staged,
         latest_turn=_latest_turn_view(lane),
         model=_model_view(lane_model),
     )

@@ -83,6 +83,34 @@ worktree behavior.
 Not yet done in Phase 1 (later phases): staged session directory (`--stage`/
 `--inline`), hook/config staging, worktree spike.
 
+### Phase 2 — staged session directory (branch `phase-2-staged-session`)
+
+Durable staging of packet parts under `<launch-cwd>/.agents/sessions/<ref>/`.
+
+- New `core/staging.py`: `resolve_stage_plan(stage, inline, available)` (pure;
+  `all`/comma-list/`inline` removal; rejects unknown/unavailable parts) and
+  `stage_session(...)` (sync, atomic: build under `.staging-<ref>/`, then
+  `os.replace` into `<ref>/`). Writes `packet/` (resolved content twins +
+  copied `hooks/`/`codex/`), empty `scratch/`, and `state.json` last.
+  No-overwrite by default; target-escapes-cwd guard; cleans temp dir on any
+  failure.
+- Parts: config, goal, prompt, output_schema, base, developer, hooks,
+  codex_config. Content parts are written from the *resolved* bytes (staged ==
+  inlined); hooks/codex/config copied from the packet dir.
+- CLI grammar: `--stage all` / `--stage prompt,goal` and `--inline ...` (dual
+  vocabulary). Note: Typer ignores click `flag_value`, so bare `--stage`
+  (no value) is not supported — `--stage all` is the canonical "everything"
+  spelling. Recorded as a forced framework deviation from the plan's bare-flag.
+- `resolve_launch` computes stage availability + a validated `StagePlan`;
+  `plan_new_lane` reports `stage` (parts only, no writes); `new_lane` stages via
+  `asyncio.to_thread(stage_session, ...)` AFTER goal-set, BEFORE the first turn.
+- Staging failure (`StagingError`, new typed error exit 9 / rpc 1009) leaves the
+  lane registered, logs a `stage` audit failure, and does NOT start the turn —
+  exactly the plan's failure rule.
+- `NewLane.staged` / `LaunchPlan.stage` (`StageView`) report parts + session dir
+  + per-file byte/sha provenance.
+- `.gitignore`: added `.agents/sessions/` (runtime artifacts).
+
 ## Verification Log
 
 ### Phase 1
@@ -96,6 +124,19 @@ Not yet done in Phase 1 (later phases): staged session directory (`--stage`/
 - Manual: `dispatch schema "new --dry-run"` → op `new-plan`; `dispatch schema new`
   exposes `packet`/`input_file`/`goal_file`/`output_schema_file`.
 - No live daemon/app-server/user-state touched (pure resolution + fakes only).
+
+### Phase 2
+
+- `just check` → EXIT=0 (276 passed/9 deselected, mypy clean, build + package check).
+- New: `tests/core/test_staging.py` (12) — plan resolution + atomic writer +
+  no-overwrite + atomic-cleanup-on-failure.
+- `tests/core/test_handlers.py` — `new` stages packet parts (files on disk,
+  state.json, turn still runs), staging failure prevents the turn (lane stays
+  registered, no turn_start), `new-plan` reports stage parts without writing.
+- `tests/surfaces/test_derive_cli.py` — `--stage`/`--inline` pass through.
+- Manual: `dispatch schema new` exposes `stage`/`inline` + `staged`; `new --dry-run`
+  output carries `stage`.
+- Staging tests write only under `tmp_path`; no live daemon/user-state touched.
 
 - Planning verification:
   - Read repo `AGENTS.md` supplied in prompt.

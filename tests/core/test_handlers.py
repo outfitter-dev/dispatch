@@ -23,6 +23,7 @@ from outfitter.dispatch.contracts.errors import (
     AppServerError,
     AuthorityError,
     NotFoundError,
+    StagingError,
     ValidationError,
 )
 from outfitter.dispatch.core import handlers
@@ -1312,3 +1313,65 @@ async def test_new_lane_rejects_invalid_schema_file_before_thread_start(
 
     assert client.calls == []
     assert (await store.find_lane("lane-1")) is None
+
+
+def _stage_packet(root: Path) -> Path:
+    pkt = root / "packet"
+    pkt.mkdir()
+    (pkt / "goal.md").write_text("Stage goal.")
+    (pkt / "prompt.md").write_text("Stage prompt.")
+    return pkt
+
+
+async def test_new_lane_stages_packet_parts(store: Registry, tmp_path: Path) -> None:
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    pkt = _stage_packet(tmp_path)
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.new_lane(
+        NewInput(name="worker", cwd=str(cwd), packet=str(pkt), stage="all"), ctx
+    )
+
+    assert set(out.staged.parts) == {"goal", "prompt"}
+    assert out.staged.session_dir is not None
+    session = Path(out.staged.session_dir)
+    assert session == cwd / ".agents" / "sessions" / out.ref
+    assert (session / "packet" / "goal.md").read_text() == "Stage goal."
+    assert (session / "state.json").is_file()
+    # Staging happens before the first turn, which still runs.
+    assert any(name == "turn_start" for name, _ in client.calls)
+
+
+async def test_new_lane_staging_failure_prevents_turn(store: Registry, tmp_path: Path) -> None:
+    cwd = tmp_path / "repo"
+    (cwd / ".agents").mkdir(parents=True)
+    (cwd / ".agents" / "sessions").write_text("not a directory")  # makes staging fail
+    pkt = _stage_packet(tmp_path)
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    with pytest.raises(StagingError):
+        await handlers.new_lane(
+            NewInput(name="worker", cwd=str(cwd), packet=str(pkt), stage="goal", text="hi"), ctx
+        )
+
+    # Lane stays registered; the first turn never started.
+    assert (await store.find_lane("lane-1")) is not None
+    assert not any(name == "turn_start" for name, _ in client.calls)
+
+
+async def test_plan_new_lane_reports_stage_without_writing(store: Registry, tmp_path: Path) -> None:
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    pkt = _stage_packet(tmp_path)
+    ctx = make_ctx(store)
+
+    plan = await handlers.plan_new_lane(
+        NewInput(name="worker", cwd=str(cwd), packet=str(pkt), stage="all"), ctx
+    )
+
+    assert set(plan.stage.parts) == {"goal", "prompt"}
+    assert plan.stage.session_dir is None  # dry-run: ref unknown, nothing written
+    assert not (cwd / ".agents").exists()

@@ -83,6 +83,7 @@ class PacketContent:
     base: str | None = None
     developer: str | None = None
     output_schema: dict[str, object] | None = None
+    has_config: bool = False
     unknown_files: list[str] = field(default_factory=list)
     aux_dirs: list[str] = field(default_factory=list)
 
@@ -114,6 +115,7 @@ def load_packet(path: Path) -> PacketContent:
         base=_read_text(path / _BASE_FILE),
         developer=_read_text(path / _DEVELOPER_FILE),
         output_schema=output_schema,
+        has_config=(path / _CONFIG_FILE).is_file(),
         unknown_files=unknown_files,
         aux_dirs=aux_dirs,
     )

@@ -103,6 +103,7 @@ NEW = define_op(
                 "cwd": "/work",
                 "message_accepted": False,
                 "goal_set": False,
+                "staged": {"parts": [], "session_dir": None, "files": []},
                 "latest_turn": {
                     "id": None,
                     "status": None,
@@ -158,6 +159,7 @@ NEW_PLAN = define_op(
                 "goal_set": False,
                 "would_send": False,
                 "output_schema_present": False,
+                "stage": {"parts": [], "session_dir": None, "files": []},
                 "unknown_packet_files": [],
                 "aux_packet_dirs": [],
             },

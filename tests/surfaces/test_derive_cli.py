@@ -486,3 +486,17 @@ def test_new_absolutizes_packet_path(tmp_path: Path, monkeypatch: pytest.MonkeyP
     params = captured["params"]
     assert isinstance(params, dict)
     assert params["packet"] == str((tmp_path / "pkt").resolve())
+
+
+def test_new_stage_and_inline_pass_through() -> None:
+    captured: dict[str, object] = {}
+    app = derive_cli(REGISTRY, _capture_invoke(captured))
+    result = runner.invoke(
+        app, ["new", "--name", "w", "--cwd", "/work", "--stage", "all", "--inline", "prompt"]
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["op"] == "new"
+    params = captured["params"]
+    assert isinstance(params, dict)
+    assert params["stage"] == "all"
+    assert params["inline"] == "prompt"
