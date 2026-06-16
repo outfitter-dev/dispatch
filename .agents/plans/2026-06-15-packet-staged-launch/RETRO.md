@@ -17,12 +17,16 @@ Durable execution ledger for packet-based Dispatch launch work.
 
 ## Branch / PR / Issue Ledger
 
-- Planning packet only.
-- Branch: `main` at planning time.
-- PR: none.
-- Issues: none created or updated by planner.
-- Executor should create a focused Graphite branch per phase if implementing
-  under repo conventions, and should record exact branch/PR/issue state here.
+- Planning packet only (planner).
+- Execution (Graphite stack on `main`, one phase per branch, bottom → top):
+  - `phase-1-packet-inputs` — packet + file inputs + mutation-free dry-run
+    (commits: plan packet, feat, review-fix).
+  - `phase-2-staged-session` — `--stage`/`--inline` staging (feat, review-fix).
+  - `phase-3-protocol-spike` — protocol findings (docs only; no code).
+  - `phase-4-docs` — operator/agent docs (docs, docs review-fix).
+- PRs: **none submitted** (held for explicit user approval per goal stop rules).
+- Issues: none created or updated.
+- Working tree clean; all commits local. `just check` green at each phase tip.
 
 ## Key Decisions Captured
 
@@ -224,8 +228,8 @@ Documented the new launch surface (no code):
 ## Tracker Mutations
 
 - None by planner.
-- Executor should record any Linear/GitHub issue creation, comments, status
-  changes, labels, dependencies, or explicit non-mutation decisions here.
+- Executor: **none** — no Linear/GitHub issues created, commented, or changed
+  (the goal named no tracker target; staying read-free here is the safe default).
 
 ## Local Review Log
 
@@ -293,14 +297,36 @@ it touches the whole `new`/cwd contract; deferred rather than rewritten here.
 
 ## Forbidden Actions Audit
 
-- Planner did not implement the target feature.
-- Planner did not mutate live Dispatch daemon/user Codex state for this packet.
-- Planner did not create a branch, commit, push, submit a PR, merge, publish, or
-  change release state.
-- Executor must preserve these constraints unless explicitly authorized.
+Executor (this run):
+
+- **No merge.** No `gt merge`/`gh pr merge`/`git merge` to `main` or anywhere.
+- **No PR submission.** No `gt submit`/`gh pr create` — zero PRs (draft or not).
+- **No publish / release.** `just check` runs `uv build` locally into `dist/`;
+  nothing was uploaded/published; no version/release state changed.
+- **No live state touched.** All tests use ephemeral stores / fakes / `tmp_path`.
+  The Phase 3 schema probe used an isolated `CODEX_HOME` (job tmp dir), never the
+  user's `~/.codex` or a live daemon. No live `dispatchd` was started or mutated.
+- **No tracker mutations.** No Linear/GitHub issues created or changed.
+- Local Graphite branches + commits only (explicitly authorized by the goal:
+  "create a focused Graphite branch per phase").
+- Planner constraints preserved: planner did not implement, branch, or mutate.
 
 ## Final State
 
-- Status: planning packet seeded, execution not started.
-- Completion criteria for executor are in [`PLAN.md`](./PLAN.md) and
-  [`GOAL.md`](./GOAL.md).
+- **Status: complete (pending user decision on PR submission).** All four phases
+  implemented or recorded with evidence; `just check` EXIT=0 (278 passed,
+  9 deselected) at the top of the stack; local reviews each closed to no open
+  P0/P1/P2.
+- Delivered: `--packet`, `--input-file`/`--goal-file`/`--output-schema-file`
+  (with `-` stdin, single-consumer), mutation-free `--dry-run` (`new-plan` op),
+  `--stage`/`--inline` staging to `.agents/sessions/<ref>/`, output-schema support,
+  honest source/stage provenance, and full docs.
+- Recorded-not-built (stop rules, with schema evidence): native `--worktree`
+  (no App Server field), raw `thread/start.config` passthrough, `--trust-staged-hooks`
+  (hooks stage-only; execution/trust is Codex's authority).
+- Remaining risks / follow-ups:
+  - `--cwd` relative values still resolve daemon-side (pre-existing; out of scope).
+  - Bare `--stage` (no value) unsupported by Typer; `--stage all` is the spelling.
+  - Hook/config reload semantics are Codex-side/experimental and deliberately not
+    depended on; revisit if Codex adds native worktree or stable hook loading.
+  - PRs not submitted — awaiting user approval to `gt submit --stack --draft`.
