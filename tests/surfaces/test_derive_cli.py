@@ -442,6 +442,72 @@ def test_new_dry_run_routes_to_new_plan_op() -> None:
     assert "dry_run" not in params  # routing flag, not an op field
 
 
+def test_history_routes_to_history_op_with_optional_lane_and_filters() -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        calls.append((op_id, params))
+        return {
+            "mode": "overview",
+            "threads": [],
+            "thread": None,
+            "items": [],
+            "tools": [],
+            "files": [],
+        }
+
+    app = derive_cli(REGISTRY, invoke)
+
+    overview = runner.invoke(app, ["history"])
+    items = runner.invoke(
+        app,
+        [
+            "history",
+            "@lane",
+            "--view",
+            "items",
+            "--type",
+            "tool",
+            "--tool",
+            "bash",
+            "--grep",
+            "git",
+            "--raw",
+            "--limit",
+            "5",
+        ],
+    )
+
+    assert overview.exit_code == 0
+    assert items.exit_code == 0
+    assert calls == [
+        (
+            "history",
+            {
+                "lane": None,
+                "view": "auto",
+                "item_type": None,
+                "tool": None,
+                "grep": None,
+                "raw": False,
+                "limit": 50,
+            },
+        ),
+        (
+            "history",
+            {
+                "lane": "@lane",
+                "view": "items",
+                "item_type": "tool",
+                "tool": "bash",
+                "grep": "git",
+                "raw": True,
+                "limit": 5,
+            },
+        ),
+    ]
+
+
 def test_new_goal_file_dash_reads_stdin_into_inline_goal() -> None:
     captured: dict[str, object] = {}
     app = derive_cli(REGISTRY, _capture_invoke(captured))
@@ -492,7 +558,30 @@ def test_new_stage_and_inline_pass_through() -> None:
     captured: dict[str, object] = {}
     app = derive_cli(REGISTRY, _capture_invoke(captured))
     result = runner.invoke(
-        app, ["new", "--name", "w", "--cwd", "/work", "--stage", "all", "--inline", "prompt"]
+        app,
+        [
+            "new",
+            "--name",
+            "w",
+            "--cwd",
+            "/work",
+            "--stage",
+            "all",
+            "--inline",
+            "prompt",
+            "--workspace",
+            "auto",
+            "--workspace-setup",
+            "skip",
+            "--worktree",
+            "create",
+            "--worktree-path",
+            "wt",
+            "--worktree-branch",
+            "dispatch/lane",
+            "--worktree-base",
+            "main",
+        ],
     )
     assert result.exit_code == 0, result.output
     assert captured["op"] == "new"
@@ -500,6 +589,12 @@ def test_new_stage_and_inline_pass_through() -> None:
     assert isinstance(params, dict)
     assert params["stage"] == "all"
     assert params["inline"] == "prompt"
+    assert params["workspace"] == "auto"
+    assert params["workspace_setup"] == "skip"
+    assert params["worktree"] == "create"
+    assert str(params["worktree_path"]).endswith("/wt")
+    assert params["worktree_branch"] == "dispatch/lane"
+    assert params["worktree_base"] == "main"
 
 
 def test_new_json_output_includes_staged_summary() -> None:
@@ -516,6 +611,36 @@ def test_new_json_output_includes_staged_summary() -> None:
             "parts": ["goal", "prompt"],
             "session_dir": "/work/.agents/sessions/0AB12x",
             "files": [],
+        },
+        "workspace": {
+            "mode": "none",
+            "resolved_mode": "none",
+            "state": "disabled",
+            "input_cwd": "/work",
+            "repo_root": None,
+            "effective_cwd": "/work",
+            "environment_file": None,
+            "environment": None,
+            "setup": {
+                "policy": "not_requested",
+                "ran": False,
+                "script": None,
+                "cwd": None,
+                "exit_code": None,
+                "duration_ms": None,
+                "stdout_tail": None,
+                "stderr_tail": None,
+            },
+            "worktree": {
+                "mode": "none",
+                "state": "disabled",
+                "path": None,
+                "branch": None,
+                "base": None,
+                "head": None,
+                "source_repo": None,
+                "created": False,
+            },
         },
         "latest_turn": {"id": None, "status": None, "error": None, "error_at": None},
     }

@@ -30,7 +30,7 @@ The current canonical operator grammar is:
 - registry recovery: `registry migrate`
 - model catalog: `models`
 - thread lifecycle/read/search: `new`, `attach`, `list`, `list --unmanaged`,
-  `get`, `sync`, `tail`, `watch`, `search`
+  `get`, `sync`, `tail`, `history`, `watch`, `search`
 - thread actions: `rename`, `archive`, `restore`
 - message verbs: `send`, `stop`
 - goals: `goal status`, `goal set`, `goal clear`
@@ -108,8 +108,73 @@ read stdin (`-`).
 `--dry-run` resolves and prints the plan (sources with byte/SHA-256, effective
 settings, staged parts) without mutating any state. `--stage all|<parts>` writes
 durable twins to `.agents/sessions/<ref>/` (with `--inline <parts>` to exclude
-some); dispatch stages `hooks/`/`codex/` but never executes hooks. There is no
-`--worktree`: the current App Server exposes no native worktree request.
+some); dispatch stages `hooks/`/`codex/` but never executes hooks. The current
+App Server exposes no native worktree request; Dispatch's `--worktree create`
+helper is a vanilla git preflight, not a Codex protocol feature.
+
+For worktree-backed lanes, treat the launched runtime as the source of truth.
+Dispatch should be given the exact `--cwd`; it should not assume fixed Codex
+worktree paths such as `.codex/worktrees/<run>/<lane>` or
+`~/.config/codex/worktrees/<name>`. Codex-managed worktrees may be detached or
+unnamed, so an empty `git branch --show-current` is not automatically a failure.
+Verify identity with `pwd`, `git rev-parse --show-toplevel`,
+`git rev-parse --short HEAD`, `git status --short`, and any repo-provided runtime
+or workspace doctor command. A branch name is useful metadata, not proof of
+correctness unless the coordinator explicitly required a named branch.
+
+If the repo provides `.codex/environments/environment.toml`, setup/teardown
+hooks, or workspace bootstrap scripts, let repo-local tooling own those
+semantics. Dispatch may stage the packet, hook files, and Codex config files so
+the lane can inspect or run them, but Dispatch should not execute arbitrary hooks
+or apply trust-sensitive config on the repo's behalf.
+
+Use `--workspace` when Dispatch should resolve repo-local workspace metadata
+before creating the thread:
+
+```bash
+uv run dispatch new --name lane-a --cwd /repo --packet ./packet --workspace auto --dry-run --json
+uv run dispatch new --name lane-a --cwd /repo --packet ./packet --workspace auto --stage all
+uv run dispatch new --name lane-a --cwd /repo --packet ./packet --workspace none
+```
+
+`--workspace none` preserves the exact cwd path. `--workspace auto` discovers
+`.codex/environments/environment.toml`, reports environment name/version,
+setup/cleanup scripts, repo root, and effective cwd, and no-ops with
+`state="not_found"` when no supported metadata exists. Dry runs never execute
+setup. Setup scripts run only with explicit `--workspace-setup run` or local
+daemon policy `[policy] allow_workspace_setup = true`; packet-local config is
+not enough to grant setup execution.
+
+Use `--worktree create` when Dispatch should create a vanilla git worktree before
+launch:
+
+```bash
+uv run dispatch new --name lane-a --cwd /repo --worktree create --dry-run --json
+uv run dispatch new --name lane-a --cwd /repo --worktree create --worktree-branch dispatch/lane-a
+uv run dispatch new --name lane-a --cwd /repo --worktree create --worktree-path /tmp/lane-a
+```
+
+The default root is `~/.dispatch/worktrees/<repo>/<lane>/`, not a repo-local
+`.dispatch/worktrees/` directory. `DISPATCH_WORKTREE_ROOT` can override the root.
+Do not assume or mimic Claude/Codex private worktree path schemes; Dispatch
+reports the exact path/branch/base/head it created. If a branch is already
+checked out elsewhere, launch fails before thread creation and names the owning
+worktree.
+
+Workspace config can carry worktree defaults, with CLI flags winning:
+
+```toml
+[workspace]
+default = "auto"
+worktree = "create"
+worktree_branch = "dispatch/default"
+worktree_base = "HEAD"
+
+[workspace.presets.athena]
+mode = "auto"
+worktree = "create"
+worktree_branch = "dispatch/athena"
+```
 
 `new` returns `message_accepted`, not proof of assistant completion. After launch,
 use `get` to check `latest_turn`, `tail` for persisted history, or `watch` for a
@@ -270,6 +335,18 @@ uv run dispatch tail <dispatch-ref> --limit 50
 
 `tail` uses App Server `includeTurns`, which is not available for ephemeral
 threads.
+
+Use `history` for transcript inspection and rollups. Bare `history` summarizes
+managed lanes; passing a selector drills into one thread and can show summary,
+items, tools, or files:
+
+```bash
+uv run dispatch history
+uv run dispatch history <dispatch-ref>
+uv run dispatch history <dispatch-ref> --view tools
+uv run dispatch history <dispatch-ref> --view files
+uv run dispatch history <dispatch-ref> --view items --tool bash --grep "git status" --raw
+```
 
 Use `watch` for a bounded live event sample. It returns raw App
 Server method/params until a limit or timeout, and it is not an infinite tail:

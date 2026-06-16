@@ -59,11 +59,33 @@ class NewSettings(BaseModel):
         return self.model_copy(update=update)
 
 
+class WorkspacePreset(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: str = "auto"
+    worktree: str | None = None
+    worktree_path: str | None = None
+    worktree_branch: str | None = None
+    worktree_base: str | None = None
+
+
+class WorkspaceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    default: str | None = None
+    worktree: str | None = None
+    worktree_path: str | None = None
+    worktree_branch: str | None = None
+    worktree_base: str | None = None
+    presets: dict[str, WorkspacePreset] = Field(default_factory=dict)
+
+
 class NewConfigFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     defaults: NewSettings = Field(default_factory=NewSettings)
     presets: dict[str, NewSettings] = Field(default_factory=dict)
+    workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
     policy: dict[str, object] = Field(default_factory=dict, exclude=True)
 
 
@@ -77,6 +99,7 @@ class ResolvedNew:
         handle: str,
         base_instructions: str | None,
         developer_instructions: str | None,
+        workspace: WorkspaceConfig,
     ) -> None:
         self.settings = settings
         self.cwd = cwd
@@ -84,6 +107,7 @@ class ResolvedNew:
         self.handle = handle
         self.base_instructions = base_instructions
         self.developer_instructions = developer_instructions
+        self.workspace = workspace
 
 
 def resolve_new(
@@ -103,6 +127,10 @@ def resolve_new(
     config_path = _find_config(start_cwd)
     config_dir = config_path.parent.parent if config_path is not None else None
     config = _load_config(config_path) if config_path is not None else NewConfigFile()
+    if config_dir is not None:
+        config = config.model_copy(
+            update={"workspace": _resolve_workspace_paths(config.workspace, base=config_dir)}
+        )
 
     settings = NewSettings(
         cwd=str(start_cwd),
@@ -141,6 +169,7 @@ def resolve_new(
         handle=_handle(display_name),
         base_instructions=base_instructions,
         developer_instructions=developer_instructions,
+        workspace=config.workspace,
     )
 
 
@@ -185,6 +214,23 @@ def _flatten_instructions(section: dict[str, Any]) -> dict[str, Any]:
     return flattened
 
 
+def _resolve_workspace_paths(config: WorkspaceConfig, *, base: Path) -> WorkspaceConfig:
+    presets = {
+        name: preset.model_copy(
+            update={
+                "worktree_path": _resolve_optional_path(preset.worktree_path, base=base),
+            }
+        )
+        for name, preset in config.presets.items()
+    }
+    return config.model_copy(
+        update={
+            "worktree_path": _resolve_optional_path(config.worktree_path, base=base),
+            "presets": presets,
+        }
+    )
+
+
 def _find_config(cwd: Path) -> Path | None:
     for path in (cwd, *cwd.parents):
         candidate = path / _CONFIG_PATH
@@ -201,6 +247,12 @@ def _absolute(path: Path) -> Path:
 def _resolve_path(value: str, *, base: Path) -> Path:
     path = Path(value).expanduser()
     return path if path.is_absolute() else (base / path).resolve()
+
+
+def _resolve_optional_path(value: str | None, *, base: Path) -> str | None:
+    if value is None:
+        return None
+    return str(_resolve_path(value, base=base))
 
 
 def _resolve_instructions(*, inline: str | None, file: str | None, base: Path) -> str | None:

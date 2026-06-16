@@ -28,6 +28,7 @@ Renderer = Callable[[Op, dict[str, object]], None]
 
 _SendMode = Literal["send", "steer", "queue", "interject", "context"]
 _SearchSortKey = Literal["created_at", "updated_at"]
+_HistoryView = Literal["auto", "overview", "summary", "items", "tools", "files"]
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,7 @@ _CUSTOM_ROUTES: tuple[CliRoute, ...] = (
     CliRoute(("send",), "send", ("lane", "text")),
     CliRoute(("stop",), "stop", ("lane",)),
     CliRoute(("search",), "search", ("query",)),
+    CliRoute(("history",), "history"),
     CliRoute(("list",), "roster"),
     CliRoute(("trigger", "list"), "trigger-list"),
     CliRoute(("goal", "set"), "goal-set", ("lane", "objective")),
@@ -103,6 +105,9 @@ def derive_cli(
     _register_command(app, ("send",), _send_command(registry.get("send"), invoke, renderer))
     _register_command(app, ("stop",), _stop_command(registry.get("stop"), invoke, renderer))
     _register_command(app, ("search",), _search_command(registry.get("search"), invoke, renderer))
+    _register_command(
+        app, ("history",), _history_command(registry.get("history"), invoke, renderer)
+    )
     _register_command(app, ("list",), _list_command(registry, invoke, renderer))
     _register_command(
         app,
@@ -243,6 +248,7 @@ _PATH_FIELDS: tuple[str, ...] = (
     "output_schema_file",
     "base_file",
     "developer_file",
+    "worktree_path",
 )
 
 
@@ -489,6 +495,47 @@ def _invoke_search(
     )
     render(op, result)
     _ignore_json(json)
+
+
+def _history_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., None]:
+    def command(
+        lane: Annotated[
+            str | None,
+            typer.Argument(help="Optional thread selector. Omit for overview."),
+        ] = None,
+        view: Annotated[_HistoryView, typer.Option("--view", help="History view.")] = "auto",
+        item_type: Annotated[
+            str | None, typer.Option("--type", help="Only include matching item types.")
+        ] = None,
+        tool: Annotated[
+            str | None, typer.Option("--tool", help="Only include matching tool names.")
+        ] = None,
+        grep: Annotated[
+            str | None, typer.Option("--grep", help="Only include items containing text.")
+        ] = None,
+        raw: Annotated[bool, typer.Option("--raw", help="Include raw item payloads.")] = False,
+        limit: Annotated[int, typer.Option("--limit", help="Max rows/items to return.")] = 50,
+        json: Annotated[
+            bool, typer.Option("--json", help="Render machine-readable JSON output.")
+        ] = False,
+    ) -> None:
+        result = invoke(
+            op.id,
+            {
+                "lane": lane,
+                "view": view,
+                "item_type": item_type,
+                "tool": tool,
+                "grep": grep,
+                "raw": raw,
+                "limit": limit,
+            },
+        )
+        render(op, result)
+        _ignore_json(json)
+
+    command.__doc__ = op.summary
+    return command
 
 
 def _list_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Callable[..., None]:

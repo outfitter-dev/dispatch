@@ -51,6 +51,7 @@ _EXPECTED_CLI_SCHEMA_ROUTES = {
     "list --unmanaged": "discover",
     "get": "show",
     "tail": "transcript",
+    "history": "history",
     "watch": "watch",
     "sync": "sync",
     "search": "search",

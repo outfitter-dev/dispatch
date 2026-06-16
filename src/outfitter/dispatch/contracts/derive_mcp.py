@@ -52,6 +52,7 @@ _GROUPS: tuple[_ToolGroup, ...] = (
             ("new_plan", "new-plan"),
             ("show", "show"),
             ("transcript", "transcript"),
+            ("history", "history"),
             ("watch", "watch"),
             ("goal_get", "goal-get"),
             ("search", "search"),

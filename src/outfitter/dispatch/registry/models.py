@@ -7,6 +7,15 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, TypeAdapter
 
+from outfitter.dispatch.client.models import (
+    ApprovalPolicy,
+    ApprovalsReviewer,
+    Effort,
+    Personality,
+    ReasoningSummary,
+    ThreadSandbox,
+)
+
 LaneSource = Literal["own", "attached"]
 LaneStatus = Literal["idle", "busy", "waiting_approval", "archived", "error", "unknown"]
 TurnRuntimeStatus = Literal["started", "completed", "failed"]
@@ -47,6 +56,20 @@ class LaneModelSettings(BaseModel):
     resolved_service_tier: str | None = None
     service_tier_name: str | None = None
     service_tier_source: ServiceTierSource = "unknown"
+    updated_at: str
+
+
+class LaneRuntimeSettings(BaseModel):
+    lane: str
+    sandbox: ThreadSandbox = "read-only"
+    approval_policy: ApprovalPolicy = "never"
+    approvals_reviewer: ApprovalsReviewer | None = None
+    effort: Effort | None = None
+    summary: ReasoningSummary | None = None
+    model: str | None = None
+    service_tier: str | None = None
+    output_schema: dict[str, object] | None = None
+    personality: Personality | None = None
     updated_at: str
 
 

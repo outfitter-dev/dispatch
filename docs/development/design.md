@@ -78,10 +78,15 @@ Projections (pure functions over the registry, mirroring Trails' `derive* → cr
   · launch packets/files: `[--packet DIR] [--goal-file F|-] [--input-file F|-]
   [--output-schema-file F]` · preview: `[--dry-run]` · staging:
   `[--stage all|<parts>] [--inline <parts>]` (writes `.agents/sessions/<ref>/`;
-  `new --dry-run` → mutation-free `new-plan` op). No `--worktree`: no native App
-  Server worktree request exists.
+  `new --dry-run` → mutation-free `new-plan` op) · workspace preflight:
+  `[--workspace none|auto|<preset>] [--workspace-setup auto|skip|run]`
+  `[--worktree none|create] [--worktree-path PATH] [--worktree-branch BRANCH]
+  [--worktree-base REF]`. No native App Server worktree request exists;
+  `--worktree create` is Dispatch-owned vanilla git worktree setup under
+  `~/.dispatch/worktrees/` by default, with exact cwd/branch/head reported.
 - Thread reads/discovery: `get <selector>` · `list` · `list --unmanaged` ·
-  `sync <selector>` · `tail <selector>` · `watch <selector>`
+  `sync <selector>` · `tail <selector>` · `history [selector]` ·
+  `watch <selector>`
 - Thread management/search: `attach <thread-id> [--sync]` ·
   `rename <selector> <new>` · `archive <selector>` · `restore <selector>` ·
   `search <query>` with `--thread`/repo/directory/date/managed filters
@@ -129,6 +134,7 @@ for collisions. Titles and `@handles` are mutable convenience labels.
 | `models` | `config/read` + optional `model/list` | Reports current Codex model defaults and the App Server model catalog, including service-tier aliases such as user-facing `fast` to server-facing ids like `priority`. `--no-refresh` reads the registry cache plus current config defaults. |
 | `show` (`get`) | registry + optional `thread/read(includeTurns:true)` | Compact managed-thread summary with sync state and latest observed turn runtime/error state; optional transcript convenience. |
 | `transcript` (`tail`) | `thread/read(includeTurns:true)` | Persisted turn/item snapshot, not a full execution log. |
+| `history` (`history`) | `thread/read(includeTurns:true)` + registry/sync facts | Transcript intelligence surface. Bare `dispatch history` summarizes managed lanes; `dispatch history <selector>` reports per-thread summary/tools/files/items with optional filters and best-effort worktree facts. |
 | `watch` (`watch`) | raw app-server event stream, bounded by limit/timeout | Request/response bounded sample; a true infinite tail needs a subscription control-socket extension. |
 | `goal-get/set/clear` (`goal status/set/clear`) | `thread/goal/{get,set,clear}` | Native App Server goal lifecycle for owned lanes. |
 | `fork` | `thread/fork` + register | Creates a new owned lane; attached source lanes remain locked until cross-process fork semantics are verified. |
@@ -175,6 +181,7 @@ The client supports the full responder loop. v1 surfaces `waiting_on_approval` a
 - `lane_snapshots`: lane, display name, preview, cwd, source/model/session facts, latest event timestamp, latest turn id, transcript-partial flag.
 - `model_catalog`: provider/model rows refreshed from App Server `model/list`, including reasoning efforts, service tiers, aliases, and first/last seen timestamps.
 - `lane_model_settings`: per-lane model/provider/reasoning/service-tier provenance, distinguishing Dispatch-authored settings from configured defaults and observed metadata.
+- `lane_runtime_settings`: per-lane turn-start defaults such as sandbox, approval policy, reviewer, model/effort/tier, structured output schema, and personality; follow-up sends reuse these settings.
 - `queued_messages`: lane, text, delivery status, timestamps, and error for durable `send --queue` delivery; rows are tied to lanes and cascade with lane deletion.
 - `triggers`: id, name, lane selector, when-spec (json), action-spec (json), guard-spec (json), enabled, last_fired_at.
 - `actions_log`: id, ts, lane, op, trigger_id?, request/decision, outcome — full audit of every send/action.
