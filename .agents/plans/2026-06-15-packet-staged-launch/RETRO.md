@@ -288,6 +288,28 @@ it touches the whole `new`/cwd contract; deferred rather than rewritten here.
 - Re-verified: no remaining `--text-file` refs; `just check` EXIT=0 (278 passed).
   No open P0/P1/P2.
 
+## Local Release & Smoke (branch `release-0.6.0`)
+
+Cut a **local** release (no PyPI/GitHub publish, no merge) at user request to dogfood:
+
+- Bumped `pyproject.toml` 0.5.0 → 0.6.0 (+ `uv.lock`); `just check` EXIT=0;
+  `uv build` → `dist/outfitter_dispatch-0.6.0-*`; `uv tool install --force <wheel>`.
+- Restarted the daemon onto 0.6.0 (`down`/`up`); the 2 pre-existing idle lanes
+  re-resumed unchanged.
+- End-to-end smoke against the live daemon (isolated throwaway cwd/packet):
+  - `new --packet … --stage all --dry-run --json` → resolved settings + per-slot
+    sources (origin/bytes/sha256), `stage.parts` = all 6 available, `session_dir:
+    null` (no write), unknown `stray.txt` + aux dirs reported.
+  - Real `new --packet … --ephemeral --no-send --stage all` (no model call) wrote
+    `.agents/sessions/<ref>/packet/{dispatch.toml,prompt.md,output.schema.json,
+    base.md,hooks/,codex/}` + `scratch/` + `state.json` (phase=staged,
+    launch_state=pending_turn, per-file hashes); prompt sha256 matched the dry-run
+    (staged == resolved bytes); hook copied as inert text, never executed.
+  - Error paths: `--goal-file -` inlined from stdin (origin inline); `--goal`+
+    `--goal-file` → exit 2; two stdin consumers → exit 2; non-object schema → exit 2;
+    valid dry-run → exit 0.
+  - Cleaned up: archived the throwaway lane; roster back to the original 2 lanes.
+
 ## Remote Review / CI Log
 
 - Not started.
