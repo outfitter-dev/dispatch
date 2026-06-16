@@ -43,7 +43,9 @@ def main(argv: list[str] | None = None) -> int:
         _expect(models.get("source") == "app-server", models)
         _expect(_nonempty_list(models.get("models")), models)
         configured = models.get("configured_default")
-        _expect(isinstance(configured, dict), models)
+        if not isinstance(configured, dict):
+            _expect(False, models)
+            raise AssertionError("unreachable")
         _expect(isinstance(configured.get("model"), str), models)
 
         cached = _dispatch_json(
@@ -105,8 +107,17 @@ def _dispatch(
     timeout: float = 90.0,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
+    package_name = _package_name(package_spec)
     result = subprocess.run(
-        ["uvx", "--from", package_spec, "dispatch", *args],
+        [
+            "uvx",
+            "--refresh-package",
+            package_name,
+            "--from",
+            package_spec,
+            "dispatch",
+            *args,
+        ],
         env=env,
         text=True,
         capture_output=True,
@@ -119,6 +130,14 @@ def _dispatch(
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
     return result
+
+
+def _package_name(package_spec: str) -> str:
+    spec = package_spec.strip()
+    for separator in ("[", " @ ", "===", "==", "~=", "!=", ">=", "<=", ">", "<"):
+        if separator in spec:
+            return spec.split(separator, 1)[0].strip()
+    return spec
 
 
 def _dispatch_json(
