@@ -393,7 +393,7 @@ def test_flat_thread_routes_core_commands() -> None:
     assert synced.exit_code == 0
     assert calls == [
         ("roster", {"include_archived": False}),
-        ("discover", {"limit": 5}),
+        ("discover", {"limit": 5, "archived": False}),
         ("attach", {"thread": "thread-1", "sync": False}),
         ("show", {"lane": "@old", "include_transcript": False, "max_items": 20}),
         ("transcript", {"lane": "@old", "limit": 50}),

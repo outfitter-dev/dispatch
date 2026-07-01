@@ -256,7 +256,14 @@ bounded top+tail JSONL facts when Codex exposes a rollout path. It does not copy
 the full transcript by default. Transcript reads through `tail`, `history`, or
 transcript-inclusive `get` still use App Server `thread/read(includeTurns:true)`
 as the canonical source, and those reads backfill Dispatch's normalized local
-history index with turns, items, and refs.
+history index with turns, items, and refs. If the selector is a raw unmanaged
+Codex thread id, `sync` first registers it as an attached read/metadata-managed
+lane, then refreshes the index. That does not grant write authority.
+
+Sync also reconciles known App Server archive membership for the target. Archive
+state is lifecycle metadata, not cleanup: dispatch does not delete provider
+events or normalized history evidence during `archive`, `restore`, sync
+reconciliation, or event indexing.
 
 ## Discover Sessions
 
@@ -268,9 +275,12 @@ updates. It is read-only and does not resume or register anything:
 ```bash
 uv run dispatch list
 uv run dispatch list --unmanaged --limit 20
+uv run dispatch list --unmanaged --archived --limit 20
 ```
 
-Use a discovered session `id` with `attach <id>`.
+Use a discovered session `id` with `attach <id>` or `sync <id>`. `list --unmanaged`
+is read-only; `sync <id>` is the explicit step that registers the thread as an
+attached lane.
 
 ## Search And Thread Actions
 
@@ -299,8 +309,9 @@ uv run dispatch search "schema drift" --since 2026-06-01 --until 2026-06-05
 
 Broad search uses experimental App Server `thread/search` plus dispatch-side
 filters. Lane-focused search reads one thread transcript and scans locally.
-Sync is separate: `sync` refreshes dispatch's local index for a managed
-lane, but it does not attach unmanaged sessions or grant write authority.
+Sync is separate for managed lanes: it refreshes dispatch's local index and
+does not grant write authority. For a raw unmanaged Codex id, `sync` is also the
+explicit registration step.
 
 ## Message Verbs
 

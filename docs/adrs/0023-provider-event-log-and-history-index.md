@@ -91,9 +91,12 @@ Codex is first:
    `lane_runtime_state`.
 3. Backfill `thread_turns` and `thread_items` from
    `thread/read(includeTurns:true)` for managed threads.
-4. Use Codex JSONL sync as a cheap discovery and progressive backfill source,
+4. Persist Codex thread lifecycle events such as `thread/archived` and
+   `thread/unarchived`, and reconcile managed-lane archive state from App
+   Server list membership.
+5. Use Codex JSONL sync as a cheap discovery and progressive backfill source,
    keeping source offsets and file identity so indexing can resume efficiently.
-5. Move `history`, `search`, `tail`, `list`, `get`, subscriptions, and trigger
+6. Move `history`, `search`, `tail`, `list`, `get`, subscriptions, and trigger
    predicates toward DB-backed reads where correctness and freshness are
    sufficient.
 
@@ -125,6 +128,11 @@ Retention and privacy policy:
   explicit.
 - Keep provider source artifacts as the recoverable source of truth where
   available; the Dispatch DB is a local query/index layer plus operational state.
+- Treat archive state as provider lifecycle metadata, not cleanup permission.
+  `archive`, `restore`, event indexing, and sync reconciliation must not delete
+  append-only provider events. Any future cleanup of bulky raw payloads or derived
+  caches must be explicit, auditable, and preserve enough metadata to re-sync
+  when provider/source artifacts still exist.
 
 ## Consequences
 

@@ -213,7 +213,7 @@ def test_cli_composed_routes_invoke_canonical_ops() -> None:
     assert calls == [
         ("send", {"lane": "@docs", "text": "hi", "mode": "context", "intro": False}),
         ("stop", {"lane": "@docs"}),
-        ("discover", {"limit": 50}),
+        ("discover", {"limit": 50, "archived": False}),
         ("sync", {"lane": "@docs", "full": False}),
         (
             "search",

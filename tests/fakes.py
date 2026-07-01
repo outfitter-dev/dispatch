@@ -53,6 +53,7 @@ class FakeLaneClient:
         self.next_thread_id = "lane-1"
         self.threads: dict[str, ThreadInfo] = {}
         self.list_result: list[ThreadInfo] = []
+        self.list_results_by_archived: dict[bool | None, list[ThreadInfo]] = {}
         self.read_result: dict[str, object] = {}
         self.search_result = ThreadSearchResult()
         self.config_result = ConfigInfo(
@@ -197,7 +198,7 @@ class FakeLaneClient:
             source_kinds=source_kinds,
             use_state_db_only=use_state_db_only,
         )
-        return self.list_result
+        return self.list_results_by_archived.get(archived, self.list_result)
 
     async def thread_read(self, thread_id: str, include_turns: bool = False) -> dict[str, object]:
         self._record("thread_read", thread_id=thread_id, include_turns=include_turns)

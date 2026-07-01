@@ -677,14 +677,17 @@ local substring scan. Date bounds accept ISO dates or datetimes and default to f
 half: it lists the persisted Codex sessions on this machine — desktop threads and prior
 runs — that you could attach. It uses App Server `thread/list` in state-db-only mode,
 asks for active sessions sorted by recent updates, and remains read-only; it never
-resumes, writes, or registers anything.
+resumes, writes, or registers anything. Use `--archived` with `--unmanaged` when
+the first-run cleanup target is an archived Codex thread.
 
 ```bash
 uv run dispatch list --unmanaged --limit 20
+uv run dispatch list --unmanaged --archived --limit 20
 ```
 
 Each row carries `id`, `name`, a shortened `preview`, `cwd`, `status`, `source`, and
-`ephemeral`. Use the `id` with `attach` to bring a session under management:
+`ephemeral`; unmanaged archived rows also set `archived: true` in JSON output. Use the
+`id` with `attach` to bring a session under management:
 
 ```bash
 uv run dispatch attach <id-from-list-unmanaged>
@@ -693,8 +696,9 @@ uv run dispatch attach <id-from-list-unmanaged> --sync
 
 Keep the two straight: `list --unmanaged` shows unmanaged Codex sessions that are not
 registered in dispatch; `list` shows managed threads (owned or already attached). Sync is
-separate from both: `sync` refreshes dispatch's local index for a managed thread, but it
-does not change ownership or write authority.
+separate from both for already managed threads. When you explicitly run `sync` against a
+raw unmanaged Codex thread id, dispatch first registers it as an attached read/metadata
+managed lane, then refreshes the local index. That does not grant write authority.
 
 ## Attached Lanes
 
@@ -742,7 +746,10 @@ it never leaves a half-attached entry behind.
 Use `sync` to refresh dispatch's local indexed view of an attached lane. Sync reads the
 official metadata and, when Codex exposes a local rollout path, parses bounded top+tail JSONL
 records into a compact cache: source file identity, sync state, latest event timestamp,
-latest turn id, and a preview. It does not copy the full transcript by default.
+latest turn id, and a preview. It does not copy the full transcript by default. Sync also
+reconciles known App Server archive membership for the target: if Codex lists the thread as
+archived, dispatch marks the managed lane archived locally; if a locally archived lane is
+listed active again, dispatch marks it idle.
 
 ```bash
 uv run dispatch sync <dispatch-ref-or-thread-id>
@@ -751,11 +758,21 @@ uv run dispatch get <dispatch-ref-or-thread-id>
 uv run dispatch list
 ```
 
+`sync <raw-codex-thread-id>` is the quickest way to pick up a previously unmanaged thread:
+it verifies the id with `thread/read(includeTurns:false)`, registers an attached lane, and
+then runs the same index refresh. Unresolved `@handles` remain errors; they are not treated
+as raw thread ids.
+
 `sync --full` scans the whole current source file and marks the cache complete for that
 file identity. It is still an index refresh, not a write to the Codex thread. `history`,
 `tail`, and transcript-inclusive `get` continue to use official
 `thread/read(includeTurns:true)` when they need transcript turns, and those reads
 feed the normalized local history index as a side effect.
+
+Archive state is lifecycle metadata, not a cleanup command. Dispatch keeps provider events
+and normalized history evidence unless an explicit future retention command/policy prunes
+bulky cached payloads. `archive`, `restore`, sync reconciliation, and event indexing do not
+delete the append-only provider event log.
 
 When referring to a Codex thread in docs or prompts, prefer a readable handle with a URI:
 

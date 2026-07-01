@@ -10,7 +10,9 @@ from outfitter.dispatch.client.events import (
     LaneEvent,
     LaneIdle,
     StatusChanged,
+    ThreadArchived,
     ThreadCompacted,
+    ThreadUnarchived,
     TokenUsageUpdated,
     TurnCompleted,
     TurnFailed,
@@ -78,6 +80,10 @@ def _event_type(event: LaneEvent) -> str:
         return "thread/goal/cleared"
     if isinstance(event, ThreadCompacted):
         return "thread/compacted"
+    if isinstance(event, ThreadArchived):
+        return "thread/archived"
+    if isinstance(event, ThreadUnarchived):
+        return "thread/unarchived"
     return event.__class__.__name__
 
 
@@ -124,6 +130,10 @@ def _summary(event: LaneEvent) -> dict[str, object]:
         return {"kind": event.kind, "request_id": event.request_id}
     if isinstance(event, StatusChanged):
         return {"active_flags": list(event.active_flags)}
+    if isinstance(event, ThreadArchived):
+        return {"status": "archived"}
+    if isinstance(event, ThreadUnarchived):
+        return {"status": "unarchived"}
     return {}
 
 
@@ -194,6 +204,10 @@ def _runtime_state(lane: Lane, event: LaneEvent, now: str) -> LaneRuntimeState |
             attention_detail=event.message,
         )
     if isinstance(event, LaneIdle):
+        return _state(lane, now, status="idle")
+    if isinstance(event, ThreadArchived):
+        return _state(lane, now, status="archived")
+    if isinstance(event, ThreadUnarchived):
         return _state(lane, now, status="idle")
     if isinstance(event, ApprovalRequested):
         return _state(

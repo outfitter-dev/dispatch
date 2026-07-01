@@ -12,7 +12,9 @@ from outfitter.dispatch.client.events import (
     ItemCompleted,
     LaneEvent,
     LaneIdle,
+    ThreadArchived,
     ThreadCompacted,
+    ThreadUnarchived,
     TurnCompleted,
     TurnFailed,
     TurnStarted,
@@ -63,6 +65,12 @@ class Reactor:
             await registry.touch_lane_event(lane.id)
             await process_event_subscriptions(self._ctx, lane, event)
             await drain_next_queued_message(self._ctx, lane.id)
+        elif isinstance(event, ThreadArchived):
+            await registry.update_lane_status(lane.id, "archived")
+            await registry.touch_lane_event(lane.id)
+        elif isinstance(event, ThreadUnarchived):
+            await registry.mark_lane_idle(lane.id)
+            await registry.touch_lane_event(lane.id)
         elif isinstance(event, ItemCompleted | GoalUpdated | GoalCleared | ThreadCompacted):
             await registry.touch_lane_event(lane.id)
         elif isinstance(event, ApprovalRequested):

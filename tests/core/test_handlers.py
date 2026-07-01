@@ -1667,6 +1667,72 @@ async def test_lane_sync_can_full_scan_existing_lane(store: Registry, tmp_path: 
     assert any(name == "thread_read" for name, _ in client.calls)
 
 
+async def test_sync_raw_unmanaged_thread_registers_attached_lane(
+    store: Registry, tmp_path: Path
+) -> None:
+    path = tmp_path / "rollout.jsonl"
+    path.write_text(
+        '{"type":"session_meta","timestamp":"2026-06-05T10:00:00.000Z",'
+        '"payload":{"id":"T9","cwd":"/work"}}\n'
+    )
+    client = FakeLaneClient()
+    client.read_result = {
+        "thread": {
+            "id": "T9",
+            "name": "Desktop",
+            "cwd": "/work",
+            "path": str(path),
+        }
+    }
+    ctx = make_ctx(store, client)
+
+    out = await handlers.sync_lane(LaneSyncInput(lane="T9", full=True), ctx)
+
+    assert out.lane == "T9"
+    assert out.source == "attached"
+    assert out.handle == "Desktop"
+    assert out.writable is False
+    assert out.sync.state == "complete"
+    lane = await store.get_lane("T9")
+    assert lane.source == "attached"
+    assert lane.status == "idle"
+    assert [name for name, _ in client.calls].count("thread_read") == 2
+    assert not any(name == "thread_resume" for name, _ in client.calls)
+
+
+async def test_sync_reconciles_archived_membership(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.list_results_by_archived[True] = [ThreadInfo(id="T9")]
+    client.list_results_by_archived[False] = []
+    ctx = make_ctx(store, client)
+    await store.add_lane(id="T9", handle="@desktop", source="attached", status="idle")
+
+    out = await handlers.sync_lane(LaneSyncInput(lane="T9"), ctx)
+
+    assert out.status == "archived"
+    assert (await store.get_lane("T9")).status == "archived"
+    assert any(
+        name == "thread_list"
+        and kw["archived"] is True
+        and kw["search_term"] == "T9"
+        and kw["use_state_db_only"] is True
+        for name, kw in client.calls
+    )
+
+
+async def test_sync_reconciles_restored_membership(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.list_results_by_archived[True] = []
+    client.list_results_by_archived[False] = [ThreadInfo(id="T9")]
+    ctx = make_ctx(store, client)
+    await store.add_lane(id="T9", handle="@desktop", source="attached", status="archived")
+
+    out = await handlers.sync_lane(LaneSyncInput(lane="T9"), ctx)
+
+    assert out.status == "idle"
+    assert (await store.get_lane("T9")).status == "idle"
+
+
 async def test_discover_lists_persisted_sessions_from_client(store: Registry) -> None:
     client = FakeLaneClient()
     client.list_result = [
@@ -1712,6 +1778,27 @@ async def test_discover_lists_persisted_sessions_from_client(store: Registry) ->
     )
     # ...and registers nothing (pure read; lane authority untouched).
     assert (await handlers.roster(RosterInput(), ctx)).lanes == []
+
+
+async def test_discover_can_list_archived_unmanaged_sessions(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.list_results_by_archived[True] = [
+        ThreadInfo(id="archived-thread", name="Old work", status=ThreadStatus(type="idle"))
+    ]
+    ctx = make_ctx(store, client)
+
+    out = await handlers.discover(DiscoverInput(limit=5, archived=True), ctx)
+
+    assert len(out.sessions) == 1
+    assert out.sessions[0].id == "archived-thread"
+    assert out.sessions[0].archived is True
+    assert any(
+        name == "thread_list"
+        and kw["limit"] == 5
+        and kw["archived"] is True
+        and kw["use_state_db_only"] is True
+        for name, kw in client.calls
+    )
 
 
 async def test_discover_shortens_long_preview(store: Registry) -> None:

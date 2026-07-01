@@ -10,6 +10,8 @@ import pytest_asyncio
 from outfitter.dispatch.client.events import (
     ApprovalRequested,
     LaneIdle,
+    ThreadArchived,
+    ThreadUnarchived,
     TokenUsageUpdated,
     TurnCompleted,
     TurnStarted,
@@ -213,6 +215,33 @@ async def test_reactor_appends_events_without_stable_provider_ids(store: Registr
         "thread/token-usage/updated",
         "thread/token-usage/updated",
     ]
+
+
+async def test_reactor_indexes_archive_lifecycle_events(store: Registry) -> None:
+    ctx = make_ctx(store)
+    reactor = Reactor(ctx, TriggerRunner(ctx, lambda: _T0))
+    await store.add_lane(id="L1", handle="@x", source="attached", status="idle")
+
+    await reactor.handle(ThreadArchived("L1"))
+    archived = await store.get_lane("L1")
+    assert archived.status == "archived"
+    runtime = await store.get_lane_runtime_state("L1")
+    assert runtime is not None
+    assert runtime.status == "archived"
+
+    await reactor.handle(ThreadUnarchived("L1"))
+    restored = await store.get_lane("L1")
+    assert restored.status == "idle"
+    await reactor.handle(ThreadArchived("L1"))
+    archived_again = await store.get_lane("L1")
+    assert archived_again.status == "archived"
+    events = list(reversed(await store.list_provider_events(lane="L1")))
+    assert [event.event_type for event in events] == [
+        "thread/archived",
+        "thread/unarchived",
+        "thread/archived",
+    ]
+    assert [event.provider_event_id for event in events] == [None, None, None]
 
 
 async def test_reactor_drains_one_queued_message_on_turn_completed(store: Registry) -> None:

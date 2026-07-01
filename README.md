@@ -60,7 +60,10 @@ Titles and `@handles` are mutable convenience labels, not stable identity. Metad
 lifecycle actions (`rename`, `archive`, `restore`) can target managed refs or raw
 unmanaged Codex thread ids, and `search` can span both. Attach is metadata-only by
 default; use `dispatch sync <selector>` when you want dispatch to refresh its local
-indexed view of an attached thread. Transcript reads through `tail`, `history`, or
+indexed view of an attached thread. If `<selector>` is a raw unmanaged Codex thread
+id, `sync` first registers it as an attached read/metadata-managed lane, then refreshes
+the index. `dispatch list --unmanaged --archived` shows archived Codex sessions before
+you decide whether to sync or restore them. Transcript reads through `tail`, `history`, or
 transcript-inclusive `get` still use App Server `thread/read(includeTurns:true)`
 as the canonical source and backfill Dispatch's normalized local history index.
 

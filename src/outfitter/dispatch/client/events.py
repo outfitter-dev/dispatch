@@ -88,6 +88,16 @@ class ThreadCompacted(LaneEvent):
     pass
 
 
+@dataclass(frozen=True)
+class ThreadArchived(LaneEvent):
+    pass
+
+
+@dataclass(frozen=True)
+class ThreadUnarchived(LaneEvent):
+    pass
+
+
 def _thread_id(params: dict[str, object]) -> str | None:
     tid = params.get("threadId")
     return tid if isinstance(tid, str) else None
@@ -127,6 +137,10 @@ def project_notification(method: str, params: dict[str, object]) -> list[LaneEve
             return [GoalCleared(lane)]
         case "thread/compacted":
             return [ThreadCompacted(lane)]
+        case "thread/archived":
+            return [ThreadArchived(lane)]
+        case "thread/unarchived":
+            return [ThreadUnarchived(lane)]
         case "thread/status/changed":
             flags = _active_flags(params)
             events: list[LaneEvent] = [StatusChanged(lane, flags)]
