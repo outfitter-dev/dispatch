@@ -5,10 +5,15 @@ Overridable via env so tests never touch real user state.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, cast
+
+CaptureMode = Literal["minimal", "standard", "debug"]
+RawPayloadRetention = Literal["off", "errors", "debug", "all"]
 
 
 def _base() -> Path:
@@ -65,6 +70,39 @@ class RuntimePolicy:
     workspace_setup_timeout_seconds: int = 120
 
 
+@dataclass(frozen=True)
+class CapturePolicy:
+    """Local history/event capture policy.
+
+    ``standard`` is intentionally useful by default while raw provider payloads
+    stay gated by retention policy. ``debug`` is a developer posture and should
+    be visible in diagnostics because it can retain more provider data.
+    """
+
+    mode: CaptureMode = "standard"
+    raw_payload_retention: RawPayloadRetention = "debug"
+    max_text_bytes: int = 8192
+    max_payload_bytes: int = 65536
+
+    @property
+    def raw_payloads_enabled(self) -> bool:
+        return self.retains_any_raw_payloads
+
+    @property
+    def retains_any_raw_payloads(self) -> bool:
+        return self.raw_payload_retention == "all" or (
+            self.raw_payload_retention == "errors"
+            or (self.raw_payload_retention == "debug" and self.mode == "debug")
+        )
+
+    def should_retain_raw_payload(self, *, is_error: bool = False) -> bool:
+        if self.raw_payload_retention == "all":
+            return True
+        if self.raw_payload_retention == "errors":
+            return is_error
+        return self.raw_payload_retention == "debug" and self.mode == "debug"
+
+
 def runtime_policy() -> RuntimePolicy:
     """Read local policy from env and ``~/.dispatch/config.toml``.
 
@@ -91,6 +129,38 @@ def runtime_policy() -> RuntimePolicy:
     return _apply_env_policy(policy)
 
 
+def capture_policy() -> CapturePolicy:
+    """Read local history capture policy from env and ``~/.dispatch/config.toml``."""
+    path = config_path()
+    policy = CapturePolicy()
+    if not path.exists():
+        return _apply_env_capture(policy)
+
+    with path.open("rb") as f:
+        raw = tomllib.load(f)
+    raw_history = raw.get("history", {})
+    if not isinstance(raw_history, dict):
+        return _apply_env_capture(policy)
+    policy = CapturePolicy(
+        mode=_capture_mode(raw_history.get("capture"), default=policy.mode),
+        raw_payload_retention=_raw_payload_retention(
+            raw_history.get("raw_payload_retention"),
+            default=policy.raw_payload_retention,
+        ),
+        max_text_bytes=_capture_positive_int(
+            raw_history.get("max_text_bytes"),
+            name="max_text_bytes",
+            default=8192,
+        ),
+        max_payload_bytes=_capture_positive_int(
+            raw_history.get("max_payload_bytes"),
+            name="max_payload_bytes",
+            default=65536,
+        ),
+    )
+    return _apply_env_capture(policy)
+
+
 def _truthy(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
@@ -106,7 +176,61 @@ def _apply_env_policy(policy: RuntimePolicy) -> RuntimePolicy:
     )
 
 
+def _apply_env_capture(policy: CapturePolicy) -> CapturePolicy:
+    return CapturePolicy(
+        mode=_capture_mode(os.environ.get("DISPATCH_CAPTURE"), default=policy.mode),
+        raw_payload_retention=_raw_payload_retention(
+            os.environ.get("DISPATCH_RAW_PAYLOAD_RETENTION"),
+            default=policy.raw_payload_retention,
+        ),
+        max_text_bytes=_capture_positive_int(
+            os.environ.get("DISPATCH_CAPTURE_MAX_TEXT_BYTES"),
+            name="max_text_bytes",
+            default=policy.max_text_bytes,
+        ),
+        max_payload_bytes=_capture_positive_int(
+            os.environ.get("DISPATCH_CAPTURE_MAX_PAYLOAD_BYTES"),
+            name="max_payload_bytes",
+            default=policy.max_payload_bytes,
+        ),
+    )
+
+
+def _capture_mode(value: object, *, default: CaptureMode) -> CaptureMode:
+    if value is None:
+        return default
+    if isinstance(value, str) and value in {"minimal", "standard", "debug"}:
+        return cast(CaptureMode, value)
+    raise ValueError("history.capture must be one of: minimal, standard, debug")
+
+
+def _raw_payload_retention(value: object, *, default: RawPayloadRetention) -> RawPayloadRetention:
+    if value is None:
+        return default
+    if isinstance(value, str) and value in {"off", "errors", "debug", "all"}:
+        return cast(RawPayloadRetention, value)
+    raise ValueError("history.raw_payload_retention must be one of: off, errors, debug, all")
+
+
+def _capture_positive_int(value: object, *, name: str, default: int) -> int:
+    if value is None:
+        return default
+    if isinstance(value, int) and value > 0:
+        return value
+    if isinstance(value, str):
+        with contextlib.suppress(ValueError):
+            parsed = int(value)
+            if parsed > 0:
+                return parsed
+    raise ValueError(f"history.{name} must be a positive integer")
+
+
 def _positive_int(value: object, *, default: int) -> int:
     if isinstance(value, int) and value > 0:
         return value
+    if isinstance(value, str):
+        with contextlib.suppress(ValueError):
+            parsed = int(value)
+            if parsed > 0:
+                return parsed
     return default

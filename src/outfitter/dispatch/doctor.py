@@ -12,6 +12,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import tomllib
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -58,6 +59,7 @@ def run_doctor(options: DoctorOptions | None = None) -> DoctorReport:
         _codex_binary_check(),
         _codex_auth_check(),
         _daemon_state_check(),
+        _capture_policy_check(),
         _registry_check(),
         _asset_check(),
     ]
@@ -226,6 +228,44 @@ def _daemon_state_check() -> DoctorCheck:
         status="warn",
         summary="dispatchd is not running",
         recovery="Run `dispatch up` when you are ready to manage lanes.",
+        data=data,
+    )
+
+
+def _capture_policy_check() -> DoctorCheck:
+    try:
+        policy = config.capture_policy()
+    except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
+        return DoctorCheck(
+            name="capture_policy",
+            status="fail",
+            summary="history capture policy is invalid",
+            detail=str(exc),
+            recovery="Fix the [history] section in dispatch config or unset capture env overrides.",
+        )
+    data: dict[str, object] = {
+        "mode": policy.mode,
+        "raw_payload_retention": policy.raw_payload_retention,
+        "raw_payloads_enabled": policy.raw_payloads_enabled,
+        "retains_any_raw_payloads": policy.retains_any_raw_payloads,
+        "max_text_bytes": policy.max_text_bytes,
+        "max_payload_bytes": policy.max_payload_bytes,
+    }
+    if policy.mode == "debug" or policy.retains_any_raw_payloads:
+        return DoctorCheck(
+            name="capture_policy",
+            status="warn",
+            summary="history capture debug/raw retention is enabled",
+            detail=(
+                "Debug capture can retain larger provider payloads; "
+                "use bounded temp state for tests."
+            ),
+            data=data,
+        )
+    return DoctorCheck(
+        name="capture_policy",
+        status="ok",
+        summary=f"history capture mode is {policy.mode}",
         data=data,
     )
 

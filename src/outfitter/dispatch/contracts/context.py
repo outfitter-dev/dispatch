@@ -41,7 +41,7 @@ from outfitter.dispatch.client.models import (
     ThreadSortKey,
     ThreadSourceKind,
 )
-from outfitter.dispatch.config import RuntimePolicy
+from outfitter.dispatch.config import CapturePolicy, RuntimePolicy
 
 if TYPE_CHECKING:
     from outfitter.dispatch.registry.store import Registry
@@ -186,3 +186,4 @@ class Ctx:
     log: structlog.stdlib.BoundLogger
     abort: asyncio.Event
     policy: RuntimePolicy = field(default_factory=RuntimePolicy)
+    capture: CapturePolicy = field(default_factory=CapturePolicy)

@@ -729,6 +729,39 @@ turn-writing/history-mutating commands may target attached lanes through
 Dispatch's daemon. This is a local trust override, not a cross-process interlock:
 the desktop app still cannot be gated by Dispatch's advisory lock.
 
+## History Capture Policy
+
+Dispatch keeps a local SQLite registry and normalized history index. The default
+history capture mode is `standard`: capture operational state and bounded
+searchable facts by default, but do not retain raw provider payloads unless the
+raw retention policy allows it. Use `minimal` for a smaller footprint and
+`debug` while developing reducers, search, or provider adapters.
+
+Configure capture in `~/.dispatch/config.toml`:
+
+```toml
+[history]
+capture = "standard" # minimal | standard | debug
+raw_payload_retention = "debug" # off | errors | debug | all
+max_text_bytes = 8192
+max_payload_bytes = 65536
+```
+
+Environment overrides are available for one-shot runs:
+
+```bash
+DISPATCH_CAPTURE=debug \
+DISPATCH_RAW_PAYLOAD_RETENTION=debug \
+DISPATCH_CAPTURE_MAX_TEXT_BYTES=8192 \
+DISPATCH_CAPTURE_MAX_PAYLOAD_BYTES=65536 \
+uv run dispatch up
+```
+
+`dispatch doctor` reports the active capture mode. It warns when debug mode or
+raw payload retention is enabled because that posture can retain larger provider
+payloads and should usually run with isolated `DISPATCH_HOME`/`CODEX_HOME` while
+developing.
+
 Managed lane JSON exposes authority for filtering:
 
 ```bash

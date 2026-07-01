@@ -14,7 +14,7 @@ import structlog
 
 from outfitter.dispatch.client.client import AppServerClient
 from outfitter.dispatch.client.transport import StdioTransport
-from outfitter.dispatch.config import runtime_policy
+from outfitter.dispatch.config import capture_policy, runtime_policy
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.core.ops import REGISTRY
 from outfitter.dispatch.core.reactor import Reactor
@@ -52,6 +52,7 @@ async def run_daemon(socket_path: Path, db_path: Path) -> None:
         log=log,
         abort=asyncio.Event(),
         policy=runtime_policy(),
+        capture=capture_policy(),
     )
     runner = TriggerRunner(ctx, _utcnow)
     scheduler = Scheduler(ctx, runner, _utcnow)
