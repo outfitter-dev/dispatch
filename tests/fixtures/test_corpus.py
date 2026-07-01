@@ -20,7 +20,7 @@ from outfitter.dispatch.client.models import (
 )
 from outfitter.dispatch.core.history import summarize_history
 from outfitter.dispatch.core.sync import SyncLimits, scan_codex_jsonl
-from outfitter.dispatch.registry.models import Lane
+from outfitter.dispatch.registry.models import Lane, ProviderEvent
 
 from . import copy_fixture, load_json, load_jsonl
 
@@ -100,6 +100,18 @@ def test_app_server_event_fixture_projects_to_normalized_events() -> None:
         "unsupported model: gpt-5.5-codex",
     )
     assert isinstance(projected[-1], LaneIdle)
+
+
+def test_provider_event_replay_fixture_validates_storage_shape() -> None:
+    events = [
+        ProviderEvent.model_validate(row)
+        for row in load_jsonl("provider_events", "codex_turn_lifecycle.jsonl")
+    ]
+
+    assert [event.event_type for event in events] == ["turn/started", "turn/completed"]
+    assert [event.provider_turn_id for event in events] == ["turn-1", "turn-1"]
+    assert events[0].payload is not None
+    assert events[0].payload["method"] == "turn/started"
 
 
 def test_transcript_fixtures_scan_minimal_complete_case(tmp_path: Path) -> None:

@@ -11,8 +11,14 @@ from datetime import UTC, datetime
 from outfitter.dispatch.registry.models import (
     LaneModelSettings,
     LaneRuntimeSettings,
+    LaneRuntimeState,
+    MessageReceipt,
     ModelCatalogEntry,
+    ProviderEvent,
     ServiceTierEntry,
+    ThreadItem,
+    ThreadItemRef,
+    ThreadTurn,
 )
 
 
@@ -92,4 +98,126 @@ def lane_runtime_settings(
         output_schema={"type": "object", "properties": {"ok": {"type": "boolean"}}},
         personality="pragmatic",
         updated_at=updated_at or fixed_now_iso(),
+    )
+
+
+def provider_event(
+    *,
+    lane: str = "L1",
+    provider_thread_id: str = "thread-1",
+    event_type: str = "turn/started",
+    provider_event_id: str | None = "event-1",
+    provider_turn_id: str | None = "turn-1",
+    received_at: str | None = None,
+) -> ProviderEvent:
+    return ProviderEvent(
+        provider="codex",
+        provider_thread_id=provider_thread_id,
+        lane=lane,
+        event_type=event_type,
+        provider_event_id=provider_event_id,
+        provider_turn_id=provider_turn_id,
+        provider_ts="2026-06-11T12:00:00Z",
+        received_at=received_at or fixed_now_iso(),
+        summary={"status": "started"},
+        payload={"method": event_type, "params": {"turnId": provider_turn_id}},
+        raw_retained=True,
+    )
+
+
+def thread_turn(
+    *,
+    lane: str = "L1",
+    provider_thread_id: str = "thread-1",
+    turn_id: str = "turn-1",
+    status: str = "started",
+    updated_at: str | None = None,
+) -> ThreadTurn:
+    return ThreadTurn(
+        provider="codex",
+        provider_thread_id=provider_thread_id,
+        turn_id=turn_id,
+        lane=lane,
+        status=status,  # type: ignore[arg-type]
+        started_at=fixed_now_iso(),
+        updated_at=updated_at or fixed_now_iso(),
+    )
+
+
+def thread_item(
+    *,
+    lane: str = "L1",
+    provider_thread_id: str = "thread-1",
+    turn_id: str = "turn-1",
+    item_id: str = "item-1",
+    inserted_at: str | None = None,
+) -> ThreadItem:
+    return ThreadItem(
+        provider="codex",
+        provider_thread_id=provider_thread_id,
+        item_id=item_id,
+        lane=lane,
+        turn_id=turn_id,
+        item_type="toolCall",
+        text="uv run pytest",
+        tool="bash",
+        inserted_at=inserted_at or fixed_now_iso(),
+        payload={"type": "toolCall", "command": "uv run pytest"},
+        raw_retained=True,
+    )
+
+
+def thread_item_ref(
+    *,
+    provider_thread_id: str = "thread-1",
+    item_id: str = "item-1",
+    ref_type: str = "tool",
+    ref_value: str = "bash",
+) -> ThreadItemRef:
+    return ThreadItemRef(
+        provider="codex",
+        provider_thread_id=provider_thread_id,
+        item_id=item_id,
+        ref_type=ref_type,
+        ref_value=ref_value,
+    )
+
+
+def message_receipt(
+    *,
+    lane: str = "L1",
+    provider_thread_id: str = "thread-1",
+    dispatch_message_id: str = "dispatch-message-1",
+    status: str = "created",
+    updated_at: str | None = None,
+) -> MessageReceipt:
+    now = updated_at or fixed_now_iso()
+    return MessageReceipt(
+        lane=lane,
+        provider="codex",
+        provider_thread_id=provider_thread_id,
+        dispatch_message_id=dispatch_message_id,
+        status=status,  # type: ignore[arg-type]
+        created_at=fixed_now_iso(),
+        updated_at=now,
+    )
+
+
+def lane_runtime_state(
+    *,
+    lane: str = "L1",
+    provider_thread_id: str = "thread-1",
+    updated_at: str | None = None,
+) -> LaneRuntimeState:
+    return LaneRuntimeState(
+        lane=lane,
+        provider="codex",
+        provider_thread_id=provider_thread_id,
+        status="busy",
+        active_turn_id="turn-1",
+        latest_turn_id="turn-1",
+        latest_turn_status="started",
+        needs_attention=False,
+        updated_at=updated_at or fixed_now_iso(),
+        last_event_at=fixed_now_iso(),
     )

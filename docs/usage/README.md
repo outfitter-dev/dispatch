@@ -485,13 +485,20 @@ stored in dispatch's durable registry and starts one queued turn per idle transi
 uv run dispatch send @docs-review "Run this after the active turn." --queue
 ```
 
-Use `send --intro` for managed Codex-to-Codex coordination. It prepends a terse
-reply hint like `[dispatch] From @Dispatch (<ref>). Use dispatch send ... to
-reply.` The sender is derived from `CODEX_THREAD_ID`, so the current Codex
-thread must already be managed by dispatch:
+Use `send --intro` for managed Codex-to-Codex coordination. It appends the
+standard visible Dispatch attribution footer with a Codex thread link and reply
+hint. The sender is derived from `CODEX_THREAD_ID`, so the current Codex thread
+must already be managed by dispatch:
 
 ```bash
 uv run dispatch send @docs-review "Can you sanity-check this?" --intro
+```
+
+```text
+Can you sanity-check this?
+
+dispatch (dm): [@Dispatch](codex://threads/<thread-id>) `<ref>`
+↳ reply `dispatch send <ref> "..."`
 ```
 
 ## Inbox And Subscriptions
@@ -504,7 +511,7 @@ Dispatch records a durable inbox message for the subscriber. Delivery can stop t
 The default compact subscription is:
 
 ```text
-when:done,to:self,delivery:turn,deliver:idle,tail:1,once:true,ack:auto
+when:done,to:self,delivery:turn,deliver:idle,tail:1,once:true,ack:auto,attribution:true
 ```
 
 That default uses `delivery:turn` only when the subscriber is writable. If `self`
@@ -534,6 +541,19 @@ Useful `when` buckets:
 `tail:1` includes the latest message by default. Use `tail:0` when the notification
 should only carry event metadata. `once:true` marks the subscription done after the
 first match; use `--repeat` or `once:false` for ongoing subscriptions.
+Turn-delivered updates append the standard visible Dispatch attribution footer by
+default:
+
+```text
+Latest message:
+...
+
+dispatch (sub): [@worker](codex://threads/<thread-id>) `<ref>`
+↳ completed | done
+```
+
+Use `attribution:false` in the compact spec or `--no-attribution` to suppress the
+footer when a subscriber needs the compact legacy body.
 
 Inbox commands are JSON-shaped and jq-friendly:
 
@@ -580,6 +600,11 @@ visible, best-effort git worktree identity, and dirty changed-file names from th
 lane cwd. `--type`, `--tool`, and `--grep` filter item views; `--cwd`, `--source`,
 `--status`, `--has-tool`, `--changed/--clean`, and `--min-bytes` filter overview
 rows; `--raw` includes raw App Server item payloads for jq-heavy inspection.
+When `history`, `tail`, or transcript-inclusive `get` read `thread/read` with
+turns, Dispatch also backfills its local normalized history index with turns,
+items, tool/file refs, and compact retained item payloads. The App Server remains
+the canonical transcript source; the local index is for fast filtering,
+receipts, subscriptions, and future provider-neutral history surfaces.
 
 ```bash
 uv run dispatch history
@@ -727,9 +752,10 @@ uv run dispatch list
 ```
 
 `sync --full` scans the whole current source file and marks the cache complete for that
-file identity. It is still an index refresh, not a write to the Codex thread. `tail`
-continues to use official `thread/read(includeTurns:true)` persisted history when you want
-App Server turn summaries.
+file identity. It is still an index refresh, not a write to the Codex thread. `history`,
+`tail`, and transcript-inclusive `get` continue to use official
+`thread/read(includeTurns:true)` when they need transcript turns, and those reads
+feed the normalized local history index as a side effect.
 
 When referring to a Codex thread in docs or prompts, prefer a readable handle with a URI:
 

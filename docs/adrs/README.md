@@ -31,3 +31,4 @@ Files are `NNNN-slug.md`. Copy [`template.md`](template.md) to start one. Keep t
 | [0020](0020-live-use-trust-contracts.md) | Live-Use Trust Contracts | Accepted |
 | [0021](0021-lane-inbox-and-delivery.md) | Lane Inbox and Delivery | Proposed |
 | [0022](0022-event-subscriptions.md) | Event Subscriptions | Proposed |
+| [0023](0023-provider-event-log-and-history-index.md) | Provider Event Log and History Index | Proposed |

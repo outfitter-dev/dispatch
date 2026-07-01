@@ -20,6 +20,7 @@ from outfitter.dispatch.client.events import (
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.registry.models import EventWhen
 
+from .event_index import index_codex_lane_event
 from .queue import drain_next_queued_message
 from .subscriptions import process_event_subscriptions
 from .triggers import TriggerRunner, resolve_lane
@@ -42,6 +43,7 @@ class Reactor:
         lane = await registry.find_lane(event.lane_id)
         if lane is None:
             return  # an event for a thread dispatch does not track
+        await index_codex_lane_event(registry, lane, event)
 
         if isinstance(event, TurnStarted):
             await registry.record_turn_started(lane.id, event.turn_id)

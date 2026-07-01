@@ -52,14 +52,16 @@ the message body so the recipient and the human can open the thread directly.
 
 ## Message Shape
 
-Send one small request with a one-line envelope:
+Send one small request with `dispatch send --intro` so Dispatch appends the
+standard visible attribution footer and includes the reply hint:
 
 ```text
-From <sender Markdown thread link> to <target Markdown thread link> via $dm:
-
 <freeform message>
 
 Contract: read-only, brief answer, reply in this lane unless asked otherwise.
+
+dispatch (dm): [@Sender](codex://threads/<thread-id>) `<ref>`
+↳ reply `dispatch send <ref> "..."`
 ```
 
 Then deliver it:
@@ -70,9 +72,10 @@ uv run dispatch send <target-ref> '<message>' --intro
 
 Keep DMs conversational and bounded. Prefer one ask. Include only the context
 needed for the target lane to answer without reading the sender's full
-transcript. If the current Codex thread is not managed by dispatch, omit
-`--intro` and include the sender link manually. Do not use `$dm` to smuggle in
-broad implementation work.
+transcript. Add Codex thread links inside the freeform message when the recipient
+or human needs a direct desktop link. If the current Codex thread is not managed
+by dispatch, omit `--intro` and include the sender link manually. Do not use
+`$dm` to smuggle in broad implementation work.
 
 ## Harvesting
 
@@ -84,10 +87,12 @@ uv run dispatch get <target-ref>
 uv run dispatch daemon log --limit 10
 ```
 
-Important v0 limitation: `dispatch get` is thread metadata, not a transcript
-reader. Use `dispatch tail <target-ref> --limit 50` for persisted history when
-the lane is non-ephemeral, or open the Codex thread link. Do not pretend
-dispatch harvested text it cannot currently read.
+Important v0 limitation: `dispatch get` is thread metadata unless the CLI
+surface requests transcript output. Use `dispatch tail <target-ref> --limit 50`
+for persisted history when the lane is non-ephemeral, or open the Codex thread
+link. `tail` and `history` read App Server transcript history and backfill
+Dispatch's local history index; do not pretend a DM harvested text you did not
+actually read.
 
 ## Optional Contract Lines
 

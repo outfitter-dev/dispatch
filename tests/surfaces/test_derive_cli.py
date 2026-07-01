@@ -82,6 +82,7 @@ def test_subscribe_command_maps_compact_spec_and_caller_thread(
             "tail": 1,
             "once": True,
             "ack": "auto",
+            "attribution": True,
             "state": "active",
             "created_at": "2026-06-03T12:00:00+00:00",
             "updated_at": "2026-06-03T12:00:00+00:00",
@@ -102,8 +103,44 @@ def test_subscribe_command_maps_compact_spec_and_caller_thread(
         "tail": None,
         "once": None,
         "ack": None,
+        "attribution": None,
         "caller_thread_id": "subscriber-thread",
     }
+
+
+def test_subscribe_command_maps_no_attribution(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setenv("CODEX_THREAD_ID", "subscriber-thread")
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        captured["op"] = op_id
+        captured["params"] = params
+        return {
+            "id": "sub_1",
+            "target_ref": "0target",
+            "target_lane": "target",
+            "subscriber_ref": "0sub",
+            "subscriber_lane": "subscriber",
+            "when": "done",
+            "delivery": "turn",
+            "deliver": "idle",
+            "tail": 1,
+            "once": True,
+            "ack": "auto",
+            "attribution": False,
+            "state": "active",
+            "created_at": "2026-06-03T12:00:00+00:00",
+            "updated_at": "2026-06-03T12:00:00+00:00",
+        }
+
+    app = derive_cli(REGISTRY, invoke)
+    result = runner.invoke(app, ["subscribe", "@worker", "--no-attribution"])
+
+    assert result.exit_code == 0
+    assert captured["op"] == "subscribe"
+    params = captured["params"]
+    assert isinstance(params, dict)
+    assert params["attribution"] is False
 
 
 def test_inbox_commands_map_to_contracts(monkeypatch: pytest.MonkeyPatch) -> None:

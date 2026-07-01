@@ -20,6 +20,7 @@ from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.registry.models import Lane, Subscription
 
 from . import queue
+from .message_attribution import codex_thread_link, render_dispatch_message
 
 SubscriptionEvent = Literal["completed", "failed", "idle", "approval", "activity"]
 
@@ -138,18 +139,30 @@ async def _tail_text(ctx: Ctx, lane: Lane, tail: int) -> str | None:
 def _message_body(
     target: Lane, subscription: Subscription, event: SubscriptionEventInfo, tail: str | None
 ) -> str:
-    lines = [
-        f"[dispatch] Subscription update for {target.handle} ({target.ref})",
-        f"Event: {event.name}",
-        f"When: {subscription.when}",
-    ]
+    lines: list[str] = []
     if event.turn_id:
         lines.append(f"Turn: {event.turn_id}")
     if event.detail:
         lines.append(f"Detail: {event.detail}")
     if tail:
         lines.extend(["", "Latest message:", tail])
-    return "\n".join(lines)
+    body = "\n".join(lines)
+    if not subscription.attribution:
+        plain = [
+            f"[dispatch] Subscription update for {target.handle} ({target.ref})",
+            f"Event: {event.name}",
+            f"When: {subscription.when}",
+        ]
+        if body:
+            plain.extend(["", body])
+        return "\n".join(plain)
+    return render_dispatch_message(
+        body=body,
+        kind="sub",
+        source=codex_thread_link(target.handle, target.id),
+        ref=target.ref,
+        details=(event.name, subscription.when),
+    )
 
 
 def _extract_texts(value: object) -> list[str]:

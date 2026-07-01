@@ -392,6 +392,12 @@ class SubscribeInput(BaseModel):
     tail: int | None = Field(default=None, ge=0, description="Final messages to include.")
     once: bool | None = Field(default=None, description="Auto-complete after first match.")
     ack: SubscriptionAckPolicy | None = Field(default=None, description="Acknowledgement policy.")
+    attribution: bool | None = Field(
+        default=None,
+        description=(
+            "Append the standard Dispatch attribution to turn-delivered subscription updates."
+        ),
+    )
     caller_thread_id: str | None = Field(
         default=None,
         exclude=True,
@@ -558,6 +564,7 @@ class SubscriptionView(BaseModel):
     tail: int
     once: bool
     ack: SubscriptionAckPolicy
+    attribution: bool
     state: SubscriptionState
     created_at: str
     updated_at: str

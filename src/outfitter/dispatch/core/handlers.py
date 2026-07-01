@@ -42,6 +42,7 @@ from outfitter.dispatch.registry.models import (
     LaneSource,
     LaneStatus,
     LaneSync,
+    MessageReceipt,
     ModelCatalogEntry,
     ServiceTierSource,
     Subscription,
@@ -54,7 +55,9 @@ from outfitter.dispatch.registry.models import (
 
 from . import queue
 from .history import detect_worktree, history_items_from_thread, summarize_history
+from .history_index import index_codex_thread_read
 from .launch import ResolvedLaunch, resolve_launch
+from .message_attribution import codex_thread_link, render_dispatch_message
 from .model_registry import refresh_model_catalog, resolve_model_settings
 from .models import (
     ActionAck,
@@ -145,8 +148,6 @@ from .turn_settings import (
 )
 from .workspace import plan_workspace, prepare_workspace
 
-_INTRO_TEMPLATE = '[dispatch] From {handle} ({ref}). Use `dispatch send {ref} "..."` to reply.'
-
 # Bound attach metadata reads: if the app-server is wedged, fail clearly and never
 # half-register (the registry write only follows a successful metadata read).
 _ATTACH_METADATA_TIMEOUT_S = 10.0
@@ -177,6 +178,7 @@ class _SubscriptionSettings(TypedDict):
     tail: int
     once: bool
     ack: SubscriptionAckPolicy
+    attribution: bool
 
 
 _ATTACHED_WRITE_LOCK_REASON = (
@@ -276,8 +278,13 @@ async def _apply_send_intro(inp: SendInput, ctx: Ctx) -> str:
     if sender is None:
         raise ValidationError("--intro requires the current Codex thread to be managed by dispatch")
 
-    intro = _INTRO_TEMPLATE.format(handle=sender.handle, ref=sender.ref)
-    return f"{intro}\n\n{inp.text}"
+    return render_dispatch_message(
+        body=inp.text,
+        kind="dm",
+        source=codex_thread_link(sender.handle, sender.id),
+        ref=sender.ref,
+        details=(f'reply `dispatch send {sender.ref} "..."`',),
+    )
 
 
 def _sync_view(sync: LaneSync | None) -> LaneSyncView:
@@ -679,6 +686,7 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
             )
         except (DispatchError, ClientError) as exc:
             await ctx.registry.record_turn_request_failed(lane.id, str(exc))
+            await _record_direct_send_receipt(ctx, lane, status="failed", error=str(exc))
             await ctx.registry.log_action(
                 "send",
                 lane=lane.id,
@@ -686,6 +694,7 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
                 outcome=project_error(exc).code,
             )
             raise
+        await _record_direct_send_receipt(ctx, lane, status="sent")
         await ctx.registry.log_action("send", lane=lane.id, detail=settings.text[:120])
         message_accepted = True
     subscription = None
@@ -878,6 +887,46 @@ def _metadata_sync(
     )
 
 
+async def _record_direct_send_receipt(
+    ctx: Ctx, lane: Lane, *, status: str, error: str | None = None
+) -> None:
+    now = ctx.registry.now_iso()
+    await ctx.registry.upsert_message_receipt(
+        MessageReceipt(
+            lane=lane.id,
+            provider="codex",
+            provider_thread_id=lane.id,
+            status=status,  # type: ignore[arg-type]
+            error=error,
+            created_at=now,
+            sent_at=now if status == "sent" else None,
+            failed_at=now if status == "failed" else None,
+            updated_at=now,
+        )
+    )
+
+
+async def _record_queue_receipt(
+    ctx: Ctx, lane: Lane, queued_message_id: int, *, status: str, error: str | None = None
+) -> None:
+    now = ctx.registry.now_iso()
+    await ctx.registry.upsert_message_receipt(
+        MessageReceipt(
+            lane=lane.id,
+            queued_message_id=queued_message_id,
+            provider="codex",
+            provider_thread_id=lane.id,
+            dispatch_message_id=f"queue:{queued_message_id}",
+            status=status,  # type: ignore[arg-type]
+            error=error,
+            created_at=now,
+            sent_at=now if status == "sent" else None,
+            failed_at=now if status == "failed" else None,
+            updated_at=now,
+        )
+    )
+
+
 async def send(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
     lane = await _resolve(ctx, inp.lane)
     _require_writable(lane, ctx)
@@ -901,10 +950,12 @@ async def send(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
         )
     except (DispatchError, ClientError) as exc:
         await ctx.registry.record_turn_request_failed(lane.id, str(exc))
+        await _record_direct_send_receipt(ctx, lane, status="failed", error=str(exc))
         await ctx.registry.log_action(
             "send", lane=lane.id, detail=inp.text[:120], outcome=project_error(exc).code
         )
         raise
+    await _record_direct_send_receipt(ctx, lane, status="sent")
     await ctx.registry.log_action("send", lane=lane.id, detail=inp.text[:120])
     return ActionAck(**_managed_identity(lane, ctx), op="send")
 
@@ -944,16 +995,19 @@ async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
                 )
             except (DispatchError, ClientError) as exc:
                 await ctx.registry.record_turn_request_failed(lane.id, str(exc))
+                await _record_direct_send_receipt(ctx, lane, status="failed", error=str(exc))
                 await ctx.registry.log_action(
                     "send", lane=lane.id, detail=text[:120], outcome=project_error(exc).code
                 )
                 raise
+            await _record_direct_send_receipt(ctx, lane, status="sent")
             await ctx.registry.log_action("send", lane=lane.id, detail=text[:120])
             return ActionAck(**_managed_identity(lane, ctx), op="interject")
         case "queue":
             lane = await _resolve(ctx, inp.lane)
             _require_writable(lane, ctx)
             message = await ctx.registry.enqueue_message(lane=lane.id, text=text)
+            await _record_queue_receipt(ctx, lane, message.id, status="created")
             await ctx.registry.log_action("queue", lane=lane.id, detail=text[:120])
             if lane.status == "idle":
                 await queue.drain_next_queued_message(ctx, lane.id)
@@ -1047,6 +1101,7 @@ async def _subscription_view(subscription: Subscription, ctx: Ctx) -> Subscripti
         tail=subscription.tail,
         once=subscription.once,
         ack=subscription.ack,
+        attribution=subscription.attribution,
         state=subscription.state,
         created_at=subscription.created_at.isoformat(),
         updated_at=subscription.updated_at.isoformat(),
@@ -1122,6 +1177,7 @@ async def subscribe(inp: SubscribeInput, ctx: Ctx) -> SubscriptionView:
         tail=settings["tail"],
         once=settings["once"],
         ack=settings["ack"],
+        attribution=settings["attribution"],
         created_at=now,
         updated_at=now,
     )
@@ -1162,6 +1218,7 @@ def _subscription_settings(inp: SubscribeInput) -> _SubscriptionSettings:
         "tail": 1,
         "once": True,
         "ack": "auto",
+        "attribution": True,
     }
     spec = inp.spec
     if spec and spec not in {"true", "default", "all"}:
@@ -1190,6 +1247,8 @@ def _subscription_settings(inp: SubscribeInput) -> _SubscriptionSettings:
         settings["once"] = inp.once
     if inp.ack is not None:
         settings["ack"] = inp.ack
+    if inp.attribution is not None:
+        settings["attribution"] = inp.attribution
     return settings
 
 
@@ -1222,6 +1281,8 @@ def _set_subscription_setting(settings: _SubscriptionSettings, key: str, value: 
             settings["once"] = cast(bool, value)
         case "ack":
             settings["ack"] = cast(SubscriptionAckPolicy, value)
+        case "attribution":
+            settings["attribution"] = cast(bool, value)
 
 
 def _parse_subscription_value(key: str, value: str) -> object:
@@ -1253,13 +1314,13 @@ def _parse_subscription_value(key: str, value: str) -> object:
         if tail < 0:
             raise ValidationError("subscription tail must be >= 0")
         return tail
-    if key == "once":
+    if key in {"once", "attribution"}:
         normalized = value.lower()
         if normalized in {"1", "true", "yes", "on"}:
             return True
         if normalized in {"0", "false", "no", "off"}:
             return False
-        raise ValidationError("subscription once must be true or false")
+        raise ValidationError(f"subscription {key} must be true or false")
     return value
 
 
@@ -1273,6 +1334,7 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
     transcript: list[TranscriptItem] = []
     if inp.include_transcript:
         result = await ctx.client.thread_read(lane.id, include_turns=True)
+        await index_codex_thread_read(ctx.registry, lane, result)
         transcript = _transcript_from_thread(result, limit=inp.max_items)
     return LaneDetail(
         **_ref(lane, ctx).model_dump(),
@@ -1356,6 +1418,7 @@ async def transcript(inp: TranscriptInput, ctx: Ctx) -> TranscriptOutput:
         raise NotFoundError(f"no managed thread {inp.lane!r}")
     lane = resolved.lane
     result = await ctx.client.thread_read(lane.id, include_turns=True)
+    await index_codex_thread_read(ctx.registry, lane, result)
     return TranscriptOutput(
         **_managed_identity(lane, ctx),
         items=_transcript_from_thread(result, limit=inp.limit),
@@ -1435,6 +1498,7 @@ async def _history_summary_for_lane(lane: Lane, ctx: Ctx) -> HistoryThreadSummar
 async def _history_details(
     lane: Lane, result: dict[str, object], ctx: Ctx
 ) -> tuple[HistoryThreadSummary, list[HistoryItem], list[HistoryToolStat], list[HistoryFileStat]]:
+    await index_codex_thread_read(ctx.registry, lane, result)
     sync = await ctx.registry.get_lane_sync(lane.id)
     worktree = await detect_worktree(lane.cwd)
     return summarize_history(result, lane=lane, sync=sync, worktree=worktree)

@@ -10,6 +10,7 @@ from __future__ import annotations
 from outfitter.dispatch.client.errors import ClientError
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.contracts.errors import DispatchError, project_error
+from outfitter.dispatch.registry.models import Lane, MessageReceipt, QueuedMessage
 
 from .turn_settings import load_turn_start_settings
 
@@ -50,6 +51,7 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
     except (DispatchError, ClientError) as exc:
         projected = project_error(exc)
         await ctx.registry.fail_queued_message(message.id, projected.code)
+        await _record_queue_receipt(ctx, lane, message, status="failed", error=str(exc))
         await ctx.registry.record_turn_request_failed(lane.id, str(exc))
         await ctx.registry.log_action(
             "queue",
@@ -58,10 +60,37 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
             outcome=projected.code,
         )
         return True
+    await _record_queue_receipt(ctx, lane, message, status="sent")
     await ctx.registry.complete_queued_message(message.id)
     await ctx.registry.mark_inbox_delivered_for_queue(message.id, ack=True)
     await ctx.registry.log_action("send", lane=lane.id, detail=message.text[:120], outcome="queued")
     return True
+
+
+async def _record_queue_receipt(
+    ctx: Ctx,
+    lane: Lane,
+    message: QueuedMessage,
+    *,
+    status: str,
+    error: str | None = None,
+) -> None:
+    now = ctx.registry.now_iso()
+    await ctx.registry.upsert_message_receipt(
+        MessageReceipt(
+            lane=lane.id,
+            queued_message_id=message.id,
+            provider="codex",
+            provider_thread_id=lane.id,
+            dispatch_message_id=f"queue:{message.id}",
+            status=status,  # type: ignore[arg-type]
+            error=error,
+            created_at=message.created_at.isoformat(),
+            sent_at=now if status == "sent" else None,
+            failed_at=now if status == "failed" else None,
+            updated_at=now,
+        )
+    )
 
 
 async def drain_idle_queues(ctx: Ctx) -> int:

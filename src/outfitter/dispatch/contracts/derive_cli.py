@@ -425,7 +425,10 @@ def _send_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., No
         ] = False,
         intro: Annotated[
             bool,
-            typer.Option("--intro", help="Prepend dispatch sender intro from CODEX_THREAD_ID."),
+            typer.Option(
+                "--intro",
+                help="Append dispatch attribution and reply hint from CODEX_THREAD_ID.",
+            ),
         ] = False,
         json: Annotated[
             bool, typer.Option("--json", help="Render machine-readable JSON output.")
@@ -715,6 +718,13 @@ def _subscribe_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..
         ack: Annotated[
             str | None, typer.Option("--ack", help="Acknowledgement policy: auto or manual.")
         ] = None,
+        attribution: Annotated[
+            bool | None,
+            typer.Option(
+                "--attribution/--no-attribution",
+                help="Append dispatch attribution to turn-delivered subscription updates.",
+            ),
+        ] = None,
         json: Annotated[
             bool, typer.Option("--json", help="Render machine-readable JSON output.")
         ] = False,
@@ -729,6 +739,7 @@ def _subscribe_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..
             "tail": tail,
             "once": once,
             "ack": ack,
+            "attribution": attribution,
             "caller_thread_id": os.environ.get("CODEX_THREAD_ID"),
         }
         result = invoke(op.id, params)

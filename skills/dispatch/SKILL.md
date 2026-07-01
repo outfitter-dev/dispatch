@@ -253,7 +253,10 @@ uv run dispatch sync <dispatch-ref-or-thread-id> --full
 
 Sync indexes source identity, sync state, latest event time, latest turn id, and
 bounded top+tail JSONL facts when Codex exposes a rollout path. It does not copy
-the full transcript by default.
+the full transcript by default. Transcript reads through `tail`, `history`, or
+transcript-inclusive `get` still use App Server `thread/read(includeTurns:true)`
+as the canonical source, and those reads backfill Dispatch's normalized local
+history index with turns, items, and refs.
 
 ## Discover Sessions
 
@@ -318,7 +321,15 @@ the lane is idle.
 
 Use `--intro` when you are sending from one managed Codex thread to another and
 want the recipient to know how to reply through dispatch. It derives the sender
-from `CODEX_THREAD_ID`, so the current thread must already be managed.
+from `CODEX_THREAD_ID`, so the current thread must already be managed. Intro
+messages append the standard visible Dispatch attribution footer:
+
+```text
+<message>
+
+dispatch (dm): [@Sender](codex://threads/<thread-id>) `<ref>`
+↳ reply `dispatch send <ref> "..."`
+```
 
 Use `stop` to cancel the active turn without replacement text:
 
@@ -343,12 +354,12 @@ uv run dispatch new --name worker --cwd /repo --text "Do it." --subscribe-spec w
 ```
 
 Default subscription settings are `when:done,to:self,delivery:turn,deliver:idle,
-tail:1,once:true,ack:auto` when the subscriber is writable. If the subscriber is
-an attached/read-only lane, the default falls back to `delivery:inbox`; explicit
-`delivery:turn` still fails unless attached writes are enabled. `self` is
-derived from `CODEX_THREAD_ID`, so the calling thread must already be managed by
-dispatch. Use explicit `--to <ref>` when one managed lane is subscribing on
-behalf of another.
+tail:1,once:true,ack:auto,attribution:true` when the subscriber is writable. If the
+subscriber is an attached/read-only lane, the default falls back to
+`delivery:inbox`; explicit `delivery:turn` still fails unless attached writes are
+enabled. `self` is derived from `CODEX_THREAD_ID`, so the calling thread must
+already be managed by dispatch. Use explicit `--to <ref>` when one managed lane
+is subscribing on behalf of another.
 
 Useful `when` buckets:
 
@@ -357,6 +368,11 @@ Useful `when` buckets:
 - `approval` / `needs-attention`: approval requests.
 - `idle`: idle status events.
 - `activity`: any tracked lane event.
+
+Turn-delivered subscription updates use the same visible Dispatch attribution
+footer by default, with source thread link, ref, event, and when bucket.
+Use `attribution:false` in the compact spec or `--no-attribution` when a subscriber
+needs the older compact body without the footer.
 
 Use inbox-only delivery when you want durable collection without waking the
 subscriber:
@@ -400,7 +416,7 @@ uv run dispatch tail <dispatch-ref> --limit 50
 ```
 
 `tail` uses App Server `includeTurns`, which is not available for ephemeral
-threads.
+threads. It also feeds the normalized local history index for the lane.
 
 Use `history` for transcript inspection and rollups. Bare `history` summarizes
 managed lanes; passing a selector drills into one thread and can show summary,
@@ -419,7 +435,9 @@ Bare `history` includes transcript size, estimated tokens, active dates, deduped
 tools, visible subagent thread ids, worktree identity, and dirty changed-file
 names from each lane cwd. Overview filters include `--cwd`, `--source`,
 `--status`, `--has-tool`, `--changed/--clean`, and `--min-bytes`. Item views use
-`--type`, `--tool`, `--grep`, and optional `--raw`.
+`--type`, `--tool`, `--grep`, and optional `--raw`. History reads backfill the
+normalized local history index while still rendering from the App Server
+transcript payload.
 
 Use `watch` for a bounded live event sample. It returns raw App
 Server method/params until a limit or timeout, and it is not an infinite tail:

@@ -17,7 +17,13 @@ from outfitter.dispatch.registry.store import SCHEMA_VERSION, Registry
 from tests.fixtures.registry.builders import (
     lane_model_settings,
     lane_runtime_settings,
+    lane_runtime_state,
+    message_receipt,
     model_catalog_entry,
+    provider_event,
+    thread_item,
+    thread_item_ref,
+    thread_turn,
 )
 
 
@@ -258,12 +264,124 @@ async def test_model_catalog_and_lane_model_settings_roundtrip(store: Registry) 
     assert got == refreshed.model_copy(update={"first_seen_at": now})
     assert await store.list_model_catalog() == [got]
 
+
+async def test_lane_model_settings_roundtrip(store: Registry) -> None:
+    now = store.now_iso()
     lane = await store.add_lane(id="L1", handle="@alpha", source="own")
     settings = lane_model_settings(lane=lane.id, updated_at=now)
+
     await store.upsert_lane_model_settings(settings)
 
     assert await store.get_lane_model_settings(lane.id) == settings
     assert await store.get_lane_model_settings_many([lane.id, "missing"]) == {lane.id: settings}
+
+
+async def test_provider_event_history_index_roundtrips_and_dedupes(store: Registry) -> None:
+    await store.add_lane(id="L1", handle="@lane", source="own", status="idle")
+
+    first = await store.record_provider_event(provider_event())
+    duplicate = await store.record_provider_event(
+        provider_event(event_type="turn/started", received_at="2026-06-11T12:00:05+00:00")
+    )
+
+    assert first.id == duplicate.id
+    assert first.summary == {"status": "started"}
+    assert first.payload == {"method": "turn/started", "params": {"turnId": "turn-1"}}
+    listed = await store.list_provider_events(lane="L1")
+    assert [event.id for event in listed] == [first.id]
+
+    started = await store.upsert_thread_turn(thread_turn())
+    completed = await store.upsert_thread_turn(
+        started.model_copy(
+            update={
+                "status": "completed",
+                "completed_at": "2026-06-11T12:00:10+00:00",
+                "completion_source": "codex-event",
+                "updated_at": "2026-06-11T12:00:10+00:00",
+            }
+        )
+    )
+    assert completed.status == "completed"
+    assert (await store.list_thread_turns(lane="L1")) == [completed]
+
+    item = await store.upsert_thread_item(
+        thread_item(),
+        refs=[thread_item_ref(), thread_item_ref(ref_type="file", ref_value="README.md")],
+    )
+    refs = await store.list_thread_item_refs(item)
+    assert [ref.ref_type for ref in refs] == ["file", "tool"]
+    assert (await store.list_thread_items(lane="L1", turn_id="turn-1")) == [item]
+
+    created = await store.upsert_message_receipt(message_receipt())
+    accepted = await store.upsert_message_receipt(
+        created.model_copy(
+            update={
+                "status": "accepted",
+                "accepted_at": "2026-06-11T12:00:03+00:00",
+                "turn_id": "turn-1",
+                "updated_at": "2026-06-11T12:00:03+00:00",
+            }
+        )
+    )
+    assert created.id == accepted.id
+    assert accepted.status == "accepted"
+    assert (await store.list_message_receipts(lane="L1")) == [accepted]
+
+    runtime = await store.upsert_lane_runtime_state(lane_runtime_state())
+    assert runtime.status == "busy"
+    assert runtime.latest_turn_status == "started"
+    assert await store.get_lane_runtime_state("L1") == runtime
+
+
+async def test_v10_registry_migration_adds_provider_history_tables(tmp_path: Path) -> None:
+    db = tmp_path / "registry-v10.db"
+    conn = await aiosqlite.connect(db)
+    await conn.executescript(
+        """
+        CREATE TABLE lanes (
+            id TEXT PRIMARY KEY,
+            ref TEXT NOT NULL UNIQUE,
+            ref_source TEXT NOT NULL,
+            ref_payload TEXT NOT NULL,
+            ref_mixer TEXT NOT NULL,
+            handle TEXT NOT NULL,
+            role TEXT,
+            cwd TEXT,
+            source TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'unknown',
+            pinned INTEGER NOT NULL DEFAULT 0,
+            active_turn_id TEXT,
+            latest_turn_id TEXT,
+            latest_turn_status TEXT,
+            latest_error TEXT,
+            latest_error_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_event_at TEXT
+        );
+        INSERT INTO lanes (
+            id, ref, ref_source, ref_payload, ref_mixer, handle, source, status,
+            pinned, created_at, updated_at
+        ) VALUES (
+            'L1', '0abc1', '0', 'abc', '1', '@lane', 'own', 'idle', 0,
+            '2026-06-03T12:00:01+00:00', '2026-06-03T12:00:01+00:00'
+        );
+        PRAGMA user_version = 10;
+        """
+    )
+    await conn.commit()
+    await conn.close()
+
+    migrated = await Registry.open(db, now=_clock)
+    try:
+        saved = await migrated.record_provider_event(provider_event())
+        assert saved.lane == "L1"
+        async with migrated._conn.execute("PRAGMA user_version") as cur:
+            row = await cur.fetchone()
+        assert row is not None
+        assert int(row[0]) == SCHEMA_VERSION
+    finally:
+        await migrated.close()
 
 
 async def test_lane_runtime_settings_roundtrip(store: Registry) -> None:
@@ -496,10 +614,12 @@ async def test_subscriptions_roundtrip_and_once_match(store: Registry) -> None:
             tail=1,
             once=True,
             ack="auto",
+            attribution=False,
             created_at=now,
             updated_at=now,
         )
     )
+    assert subscription.attribution is False
     message = await store.add_inbox_message(
         recipient_lane="subscriber",
         source_lane="target",
@@ -513,6 +633,97 @@ async def test_subscriptions_roundtrip_and_once_match(store: Registry) -> None:
     assert matched.state == "done"
     assert matched.last_inbox_message_id == message.id
     assert matched.last_matched_at == _clock()
+
+
+async def test_v9_migration_adds_subscription_attribution_column(tmp_path: Path) -> None:
+    db = tmp_path / "registry-v9-subscriptions.db"
+    conn = await aiosqlite.connect(db)
+    await conn.executescript(
+        """
+        CREATE TABLE lanes (
+            id TEXT PRIMARY KEY,
+            ref TEXT NOT NULL UNIQUE,
+            ref_source TEXT NOT NULL,
+            ref_payload TEXT NOT NULL,
+            ref_mixer TEXT NOT NULL,
+            handle TEXT NOT NULL,
+            role TEXT,
+            cwd TEXT,
+            source TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'unknown',
+            pinned INTEGER NOT NULL DEFAULT 0,
+            active_turn_id TEXT,
+            latest_turn_id TEXT,
+            latest_turn_status TEXT,
+            latest_error TEXT,
+            latest_error_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_event_at TEXT
+        );
+        INSERT INTO lanes (
+            id, ref, ref_source, ref_payload, ref_mixer, handle, source, status,
+            pinned, created_at, updated_at
+        ) VALUES
+            ('target', '0aaa1', '0', 'aaa', '1', '@target', 'own', 'idle', 0,
+             '2026-06-03T12:00:01+00:00', '2026-06-03T12:00:01+00:00'),
+            ('subscriber', '0bbb1', '0', 'bbb', '1', '@subscriber', 'own', 'idle', 0,
+             '2026-06-03T12:00:01+00:00', '2026-06-03T12:00:01+00:00');
+        CREATE TABLE inbox_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recipient_lane TEXT NOT NULL,
+            source_lane TEXT,
+            subscription_id TEXT,
+            kind TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            body TEXT NOT NULL,
+            payload TEXT NOT NULL DEFAULT '{}',
+            state TEXT NOT NULL DEFAULT 'pending',
+            delivery TEXT NOT NULL DEFAULT 'inbox',
+            queued_message_id INTEGER,
+            created_at TEXT NOT NULL,
+            delivered_at TEXT,
+            acked_at TEXT
+        );
+        CREATE TABLE subscriptions (
+            id TEXT PRIMARY KEY,
+            target_lane TEXT NOT NULL,
+            subscriber_lane TEXT NOT NULL,
+            when_spec TEXT NOT NULL,
+            delivery TEXT NOT NULL,
+            deliver_policy TEXT NOT NULL,
+            tail INTEGER NOT NULL DEFAULT 1,
+            once INTEGER NOT NULL DEFAULT 1,
+            ack_policy TEXT NOT NULL DEFAULT 'auto',
+            state TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_matched_at TEXT,
+            last_inbox_message_id INTEGER
+        );
+        INSERT INTO subscriptions (
+            id, target_lane, subscriber_lane, when_spec, delivery, deliver_policy,
+            tail, once, ack_policy, state, created_at, updated_at
+        ) VALUES (
+            'sub_1', 'target', 'subscriber', 'done', 'turn', 'idle',
+            1, 1, 'auto', 'active',
+            '2026-06-03T12:00:01+00:00', '2026-06-03T12:00:01+00:00'
+        );
+        PRAGMA user_version = 9;
+        """
+    )
+    await conn.commit()
+    await conn.close()
+
+    migrated = await Registry.open(db, now=_clock)
+    try:
+        subscription = await migrated.get_subscription("sub_1")
+        assert subscription.attribution is True
+        async with migrated._conn.execute("PRAGMA table_info(subscriptions)") as cur:
+            rows = await cur.fetchall()
+        assert "attribution" in {row["name"] for row in rows}
+    finally:
+        await migrated.close()
 
 
 async def test_lane_sync_roundtrip_and_many_lookup(store: Registry) -> None:

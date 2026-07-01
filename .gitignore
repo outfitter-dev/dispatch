@@ -1,5 +1,6 @@
 # Agent working notes (local only). Plans (.agents/plans) ARE tracked.
 .agents/notes/
+.agents/goals/*/tmp/
 
 # Python
 __pycache__/

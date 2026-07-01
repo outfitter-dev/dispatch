@@ -71,6 +71,7 @@ from outfitter.dispatch.core.reactor import Reactor
 from outfitter.dispatch.core.triggers import TriggerRunner
 from outfitter.dispatch.registry.store import Registry
 from tests.fakes import FakeLaneClient, make_ctx
+from tests.fixtures.registry.builders import thread_turn
 
 
 @pytest_asyncio.fixture
@@ -91,6 +92,9 @@ async def test_open_then_send_owned_lane(store: Registry) -> None:
     ack = await handlers.send(LaneTextInput(lane="lane-1", text="ping"), ctx)
     assert ack.accepted is True
     assert any(name == "turn_start" and kw["thread_id"] == "lane-1" for name, kw in client.calls)
+    receipts = await store.list_message_receipts(lane="lane-1")
+    assert len(receipts) == 1
+    assert receipts[0].status == "sent"
 
 
 async def test_subscribe_defaults_to_current_thread_and_inbox_ack(store: Registry) -> None:
@@ -662,7 +666,7 @@ async def test_send_modes_context_and_interject(store: Registry) -> None:
     assert (await store.get_lane("lane-1")).status == "busy"
 
 
-async def test_send_intro_prepends_managed_sender_from_codex_thread_id(
+async def test_send_intro_appends_managed_sender_from_codex_thread_id(
     store: Registry, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     client = FakeLaneClient()
@@ -677,8 +681,9 @@ async def test_send_intro_prepends_managed_sender_from_codex_thread_id(
     assert ack.lane == "lane-1"
     sent = next(kw["text"] for name, kw in client.calls if name == "turn_start")
     assert sent == (
-        f'[dispatch] From @Dispatch ({sender.ref}). Use `dispatch send {sender.ref} "..."` '
-        "to reply.\n\nhello"
+        "hello\n\n"
+        f"dispatch (dm): [@Dispatch](codex://threads/{sender.id}) `{sender.ref}`\n"
+        f'↳ reply `dispatch send {sender.ref} "..."`'
     )
 
 
@@ -722,8 +727,10 @@ async def test_send_intro_applies_to_queued_delivery(
     assert ack.op == "queue"
     queued = await store.next_pending_message("lane-1")
     assert queued is not None
-    assert queued.text.startswith(f"[dispatch] From @Dispatch ({sender.ref}).")
-    assert queued.text.endswith("\n\nlater")
+    assert queued.text.startswith("later\n\ndispatch (dm): ")
+    assert f"[@Dispatch](codex://threads/{sender.id})" in queued.text
+    assert f"`{sender.ref}`" in queued.text
+    assert queued.text.endswith(f'↳ reply `dispatch send {sender.ref} "..."`')
 
 
 async def test_send_queue_persists_when_lane_is_busy(store: Registry) -> None:
@@ -740,6 +747,10 @@ async def test_send_queue_persists_when_lane_is_busy(store: Registry) -> None:
     assert queued is not None
     assert queued.text == "later"
     assert not any(name == "turn_start" and kw["text"] == "later" for name, kw in client.calls)
+    receipts = await store.list_message_receipts(lane="lane-1")
+    assert len(receipts) == 1
+    assert receipts[0].queued_message_id == queued.id
+    assert receipts[0].status == "created"
 
 
 async def test_send_queue_starts_immediately_when_lane_is_idle(store: Registry) -> None:
@@ -755,6 +766,10 @@ async def test_send_queue_starts_immediately_when_lane_is_idle(store: Registry) 
     assert (await store.get_lane("lane-1")).status == "busy"
     sent = await store.get_queued_message(1)
     assert sent.status == "sent"
+    receipts = await store.list_message_receipts(lane="lane-1")
+    assert len(receipts) == 1
+    assert receipts[0].queued_message_id == sent.id
+    assert receipts[0].status == "sent"
     assert any(name == "turn_start" and kw["text"] == "now" for name, kw in client.calls)
 
 
@@ -950,6 +965,15 @@ async def test_history_thread_views_filter_items_and_rollups(store: Registry) ->
     }
     ctx = make_ctx(store, client)
     await handlers.open_lane(OpenInput(name="alpha"), ctx)
+    await store.upsert_thread_turn(
+        thread_turn(
+            lane="lane-1",
+            provider_thread_id="lane-1",
+            turn_id="t1",
+            status="completed",
+            updated_at="2026-06-03T12:00:00+00:00",
+        )
+    )
 
     summary = await handlers.history(HistoryInput(lane="@alpha"), ctx)
     tools = await handlers.history(HistoryInput(lane="@alpha", view="tools"), ctx)
@@ -966,6 +990,18 @@ async def test_history_thread_views_filter_items_and_rollups(store: Registry) ->
     assert len(items.items) == 1
     assert items.items[0].tool == "bash"
     assert items.items[0].raw is not None
+    indexed_turns = await store.list_thread_turns(lane="lane-1")
+    assert len(indexed_turns) == 1
+    assert indexed_turns[0].turn_id == "t1"
+    assert indexed_turns[0].status == "completed"
+    assert indexed_turns[0].completion_source is None
+    indexed_items = await store.list_thread_items(lane="lane-1", turn_id="t1")
+    assert [item.item_id for item in reversed(indexed_items)] == ["a1", "b1", "p1"]
+    refs = await store.list_thread_item_refs(await store.get_thread_item("codex", "lane-1", "p1"))
+    assert [(ref.ref_type, ref.ref_value) for ref in refs] == [
+        ("file", "src/app.py"),
+        ("tool", "apply_patch"),
+    ]
 
 
 async def test_watch_collects_bounded_raw_events(store: Registry) -> None:
