@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -339,6 +340,66 @@ async def test_provider_event_history_index_roundtrips_and_dedupes(store: Regist
     assert runtime.status == "busy"
     assert runtime.latest_turn_status == "started"
     assert await store.get_lane_runtime_state("L1") == runtime
+
+
+async def test_thread_history_snapshot_batches_rows_prunes_and_summarizes(
+    store: Registry,
+) -> None:
+    await store.add_lane(id="L1", handle="@lane", source="own", status="idle")
+    await store.upsert_thread_turn(thread_turn(turn_id="stale-turn"))
+    stale = await store.upsert_thread_item(thread_item(item_id="stale-item"))
+
+    turn = thread_turn(status="completed")
+    item = thread_item(item_id="item-1", position=1)
+    await store.upsert_thread_history_snapshot(
+        turns=[turn],
+        items=[
+            (
+                item,
+                [
+                    thread_item_ref(item_id="item-1", ref_type="tool", ref_value="bash"),
+                    thread_item_ref(item_id="item-1", ref_type="file", ref_value="README.md"),
+                ],
+            )
+        ],
+        provider="codex",
+        provider_thread_id="thread-1",
+        turn_ids={"turn-1"},
+        item_ids={"item-1"},
+    )
+
+    with pytest.raises(NotFoundError):
+        await store.get_thread_item(stale.provider, stale.provider_thread_id, stale.item_id)
+    assert [found.turn_id for found in await store.list_thread_turns(lane="L1")] == ["turn-1"]
+    assert [found.item_id for found in await store.list_thread_items(lane="L1")] == ["item-1"]
+    refs_by_item = await store.list_thread_item_refs_many([item])
+    assert [(ref.ref_type, ref.ref_value) for ref in refs_by_item["item-1"]] == [
+        ("file", "README.md"),
+        ("tool", "bash"),
+    ]
+    stats = await store.get_thread_history_summary_stats(lane="L1")
+    assert stats.turns == 1
+    assert stats.items == 1
+    assert stats.tool_calls == 1
+    assert [tool.tool for tool in stats.tools] == ["bash"]
+    assert [(file.path, file.count) for file in stats.files] == [("README.md", 1)]
+
+
+async def test_concurrent_lane_sync_writes_are_serialized(store: Registry) -> None:
+    await store.add_lane(id="L1", handle="@lane", source="attached")
+
+    await asyncio.gather(
+        *(
+            store.upsert_lane_sync(
+                LaneSync(lane="L1", state="metadata", display_name=f"Lane {index}")
+            )
+            for index in range(8)
+        )
+    )
+
+    sync = await store.get_lane_sync("L1")
+    assert sync is not None
+    assert sync.display_name is not None
 
 
 async def test_provider_event_payload_is_stored_compactly(store: Registry) -> None:

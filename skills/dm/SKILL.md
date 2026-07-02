@@ -90,9 +90,10 @@ uv run dispatch daemon log --limit 10
 Important v0 limitation: `dispatch get` is thread metadata unless the CLI
 surface requests transcript output. Use `dispatch tail <target-ref> --limit 50`
 for persisted history when the lane is non-ephemeral, or open the Codex thread
-link. `tail` and `history` read App Server transcript history and backfill
-Dispatch's local history index; do not pretend a DM harvested text you did not
-actually read.
+link. `tail` and selector-scoped `history` read App Server transcript history
+and backfill Dispatch's local history index for that thread; bare `history` is
+only an indexed overview. Do not pretend a DM harvested text you did not actually
+read.
 
 ## Optional Contract Lines
 

@@ -1492,7 +1492,7 @@ async def history(inp: HistoryInput, ctx: Ctx) -> HistoryOutput:
             raise ValidationError("history overview does not accept a thread selector")
         summaries: list[HistoryThreadSummary] = []
         for lane in await ctx.registry.list_lanes():
-            summary = await _history_summary_for_lane(lane, ctx)
+            summary = await _history_summary_from_index(lane, ctx)
             if _history_summary_matches(summary, inp):
                 summaries.append(summary)
             if len(summaries) >= inp.limit:
@@ -1561,10 +1561,30 @@ def _history_summary_matches(summary: HistoryThreadSummary, inp: HistoryInput) -
     )
 
 
-async def _history_summary_for_lane(lane: Lane, ctx: Ctx) -> HistoryThreadSummary:
-    result = await ctx.client.thread_read(lane.id, include_turns=True)
-    summary, _items, _tools, _files = await _history_details(lane, result, ctx)
-    return summary
+async def _history_summary_from_index(lane: Lane, ctx: Ctx) -> HistoryThreadSummary:
+    stats = await ctx.registry.get_thread_history_summary_stats(lane=lane.id)
+    worktree = await detect_worktree(lane.cwd)
+    transcript_bytes = stats.transcript_bytes
+    return HistoryThreadSummary(
+        ref=lane.ref,
+        id=lane.id,
+        handle=lane.handle,
+        source=lane.source,
+        status=lane.status,
+        cwd=lane.cwd,
+        first_event_at=stats.first_event_at,
+        last_event_at=stats.last_event_at,
+        turns=stats.turns,
+        items=stats.items,
+        messages=stats.messages,
+        tool_calls=stats.tool_calls,
+        unique_tools=sorted(tool.tool for tool in stats.tools),
+        files_changed_count=stats.files_changed_count,
+        files_changed=[HistoryFileStat(path=file.path, count=file.count) for file in stats.files],
+        transcript_bytes=transcript_bytes,
+        estimated_tokens=(transcript_bytes // 4) if transcript_bytes is not None else None,
+        worktree=worktree,
+    )
 
 
 async def _history_details(
@@ -1577,7 +1597,7 @@ async def _history_details(
         result, lane=lane, sync=sync, worktree=worktree
     )
     indexed_items = await ctx.registry.list_thread_items(lane=lane.id, limit=None)
-    refs = {item.item_id: await ctx.registry.list_thread_item_refs(item) for item in indexed_items}
+    refs = await ctx.registry.list_thread_item_refs_many(indexed_items)
     tools, files = history_rollups_from_indexed(indexed_items, refs)
     return summary, _IndexedHistory(indexed=indexed_items, refs=refs), tools, files
 

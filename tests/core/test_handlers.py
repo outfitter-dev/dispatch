@@ -72,7 +72,7 @@ from outfitter.dispatch.core.reactor import Reactor
 from outfitter.dispatch.core.triggers import TriggerRunner
 from outfitter.dispatch.registry.store import Registry
 from tests.fakes import FakeLaneClient, make_ctx
-from tests.fixtures.registry.builders import thread_turn
+from tests.fixtures.registry.builders import thread_item, thread_item_ref, thread_turn
 
 
 @pytest_asyncio.fixture
@@ -892,36 +892,48 @@ async def test_transcript_reads_persisted_turn_items(store: Registry) -> None:
 
 async def test_history_overview_summarizes_managed_threads(store: Registry) -> None:
     client = FakeLaneClient()
-    client.read_result = {
-        "thread": {
-            "id": "lane-1",
-            "turns": [
-                {
-                    "id": "t1",
-                    "items": [
-                        {"id": "u1", "type": "userMessage", "text": "run status"},
-                        {
-                            "id": "tool-1",
-                            "type": "toolCall",
-                            "toolName": "bash",
-                            "text": "git status",
-                        },
-                        {
-                            "id": "file-1",
-                            "type": "fileChange",
-                            "path": "src/app.py",
-                            "text": "edited app",
-                        },
-                    ],
-                }
-            ],
-        }
-    }
     ctx = make_ctx(store, client)
     await handlers.open_lane(OpenInput(name="alpha", cwd="/tmp/no-such-history-worktree"), ctx)
+    await store.upsert_thread_turn(
+        thread_turn(lane="lane-1", provider_thread_id="lane-1", turn_id="t1")
+    )
+    await store.upsert_thread_item(
+        thread_item(
+            lane="lane-1", provider_thread_id="lane-1", turn_id="t1", item_id="u1"
+        ).model_copy(
+            update={
+                "item_type": "userMessage",
+                "role": "user",
+                "text": "run status",
+                "tool": None,
+            }
+        )
+    )
+    await store.upsert_thread_item(
+        thread_item(lane="lane-1", provider_thread_id="lane-1", turn_id="t1", item_id="tool-1"),
+        refs=[thread_item_ref(provider_thread_id="lane-1", item_id="tool-1", ref_value="bash")],
+    )
+    await store.upsert_thread_item(
+        thread_item(
+            lane="lane-1",
+            provider_thread_id="lane-1",
+            turn_id="t1",
+            item_id="file-1",
+            position=2,
+        ).model_copy(update={"item_type": "fileChange", "text": "edited app", "tool": None}),
+        refs=[
+            thread_item_ref(
+                provider_thread_id="lane-1",
+                item_id="file-1",
+                ref_type="file",
+                ref_value="src/app.py",
+            )
+        ],
+    )
 
     out = await handlers.history(HistoryInput(), ctx)
 
+    assert not any(name == "thread_read" for name, _ in client.calls)
     assert out.mode == "overview"
     assert len(out.threads) == 1
     summary = out.threads[0]
@@ -1720,10 +1732,12 @@ class _HistoryReadClient(FakeLaneClient):
         return self.results[thread_id]
 
 
-def _thread_history(*, tool: str, path: str = "src/app.py") -> dict[str, object]:
+def _thread_history(
+    *, thread_id: str = "thread", tool: str, path: str = "src/app.py"
+) -> dict[str, object]:
     return {
         "thread": {
-            "id": "thread",
+            "id": thread_id,
             "turns": [
                 {
                     "id": "turn-1",
@@ -1758,14 +1772,18 @@ async def test_history_overview_filters_by_tool_and_changed_worktree(
     )
     client = _HistoryReadClient(
         {
-            dirty.id: _thread_history(tool="bash", path="README.md"),
-            clean.id: _thread_history(tool="python", path="src/app.py"),
+            dirty.id: _thread_history(thread_id=dirty.id, tool="bash", path="README.md"),
+            clean.id: _thread_history(thread_id=clean.id, tool="python", path="src/app.py"),
         }
     )
     ctx = make_ctx(store, client)
+    await handlers.history(HistoryInput(lane="@dirty"), ctx)
+    await handlers.history(HistoryInput(lane="@clean"), ctx)
+    client.calls.clear()
 
     out = await handlers.history(HistoryInput(has_tool="bash", changed=True), ctx)
 
+    assert not any(name == "thread_read" for name, _ in client.calls)
     assert out.mode == "overview"
     assert [thread.id for thread in out.threads] == ["dirty-lane"]
     assert out.threads[0].worktree.dirty is True
