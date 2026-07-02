@@ -82,6 +82,16 @@ async def test_unknown_op_is_method_not_found(socket_path: Path) -> None:
     assert _error(resp)["code"] == -32601
 
 
+async def test_control_metadata_reports_version_and_supported_ops(socket_path: Path) -> None:
+    resp = await _call(socket_path, "__dispatch/metadata", {})
+    result = _result(resp)
+    assert result["protocol_version"] == 1
+    assert isinstance(result["version"], str)
+    supported_ops = result["supported_ops"]
+    assert isinstance(supported_ops, list)
+    assert "query" in supported_ops
+
+
 def _result(message: dict[str, object]) -> dict[str, object]:
     result = message["result"]
     assert isinstance(result, dict)

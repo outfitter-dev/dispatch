@@ -18,9 +18,12 @@ from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.contracts.errors import project_error
 from outfitter.dispatch.contracts.execute import execute
 from outfitter.dispatch.contracts.registry import OpRegistry
+from outfitter.dispatch.version import package_version
 
 _METHOD_NOT_FOUND = -32601
 _INVALID_REQUEST = -32600
+_CONTROL_META_METHOD = "__dispatch/metadata"
+_CONTROL_PROTOCOL_VERSION = 1
 
 
 class ControlServer:
@@ -36,6 +39,15 @@ class ControlServer:
         method = message.get("method")
         if not isinstance(method, str):
             return _error(mid, _INVALID_REQUEST, "missing 'method'")
+        if method == _CONTROL_META_METHOD:
+            return {
+                "id": mid,
+                "result": {
+                    "protocol_version": _CONTROL_PROTOCOL_VERSION,
+                    "version": package_version(),
+                    "supported_ops": self._registry.ids(),
+                },
+            }
         raw_params = message.get("params")
         params = raw_params if isinstance(raw_params, dict) else {}
         try:

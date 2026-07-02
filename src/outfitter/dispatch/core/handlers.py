@@ -2377,10 +2377,14 @@ def _lane_status(thread: ThreadInfo) -> LaneStatus:
 async def status(inp: StatusInput, ctx: Ctx) -> StatusOutput:
     lanes = await ctx.registry.list_lanes()
     triggers = await ctx.registry.list_triggers()
+    busy = sum(1 for lane in lanes if lane.status == "busy")
+    waiting_approval = sum(1 for lane in lanes if lane.status == "waiting_approval")
     return StatusOutput(
         lanes=len(lanes),
         idle=sum(1 for lane in lanes if lane.status == "idle"),
-        busy=sum(1 for lane in lanes if lane.status == "busy"),
+        busy=busy,
+        waiting_approval=waiting_approval,
+        active=busy + waiting_approval,
         triggers=len(triggers),
         triggers_enabled=sum(1 for trigger in triggers if trigger.enabled),
     )

@@ -1077,6 +1077,8 @@ class StatusOutput(BaseModel):
     lanes: int
     idle: int
     busy: int
+    waiting_approval: int = 0
+    active: int = 0
     triggers: int
     triggers_enabled: int
 

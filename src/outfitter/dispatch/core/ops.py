@@ -804,7 +804,15 @@ STATUS = define_op(
         Example(
             "empty",
             input={},
-            output={"lanes": 0, "idle": 0, "busy": 0, "triggers": 0, "triggers_enabled": 0},
+            output={
+                "lanes": 0,
+                "idle": 0,
+                "busy": 0,
+                "waiting_approval": 0,
+                "active": 0,
+                "triggers": 0,
+                "triggers_enabled": 0,
+            },
         )
     ],
 )

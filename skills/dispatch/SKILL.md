@@ -52,6 +52,11 @@ uv run dispatch daemon status
 uv run dispatch daemon log --limit 10
 ```
 
+If a command fails because the running daemon does not support a current CLI op,
+dispatch treats that as daemon/client skew. It restarts an idle daemon and retries
+once. If the daemon has active work, it refuses to restart automatically; wait or
+run `uv run dispatch down`, then `uv run dispatch up --json` when it is safe.
+
 Use `uv run dispatch doctor` before relying on live thread operations in a new or
 untrusted environment. It checks PATH visibility, Codex CLI/auth footprint,
 daemon socket/pidfile state, registry schema/integrity, packaged skills/plugin

@@ -1717,6 +1717,8 @@ async def test_status_and_log_reflect_activity(store: Registry) -> None:
     status = await handlers.status(StatusInput(), ctx)
     assert status.lanes == 1
     assert status.busy == 1
+    assert status.active == 1
+    assert status.waiting_approval == 0
     log = await handlers.show_log(LogInput(limit=10), ctx)
     ops = [a.op for a in log.actions]
     assert "open" in ops
