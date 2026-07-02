@@ -75,6 +75,14 @@ The boundary should let Dispatch answer these questions with tests:
 The boundary should be justified by actual call sites. If it starts to look like
 a framework, it is probably too broad.
 
+The first completed step is deliberately narrower than the full boundary:
+Dispatch now has an importable SQL compatibility probe for representative
+registry/history writes. The normal test suite exercises that probe with
+stdlib SQLite, while the opt-in Turso/libSQL spike runs the same contract
+against `pyturso` and `libsql`. That gives future storage work a checked
+portability target before the registry itself is split behind a broader
+connection or transaction interface.
+
 ### 2. Concurrent Event Ingestion
 
 Dispatch should measure event ingestion before changing engines.
@@ -197,8 +205,9 @@ Work in milestones, with review after each:
    - Review for architectural contradictions and stale docs.
 
 2. Storage boundary
+   - Promote the representative SQL compatibility probe into a tested contract.
    - Add the smallest testable connection/transaction boundary or document why
-     the current store needs a smaller pre-step.
+     the current store needs another smaller pre-step.
    - Keep SQLite/`aiosqlite` default.
    - Run selected compatibility checks against `pyturso`/`libsql` where cheap.
 

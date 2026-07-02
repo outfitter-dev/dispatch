@@ -376,6 +376,8 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 {_PROVIDER_HISTORY_SCHEMA}
 """
 
+REGISTRY_SCHEMA_SQL = _SCHEMA
+
 
 class Registry:
     """The lane/trigger/audit store."""

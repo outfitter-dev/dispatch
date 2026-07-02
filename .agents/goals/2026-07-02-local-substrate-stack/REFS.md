@@ -22,6 +22,8 @@
 - `src/outfitter/dispatch/registry/store.py` - current registry/store implementation.
 - `tests/registry/` - storage behavior tests.
 - `spikes/06_turso_libsql_storage_probe.py` - current backend compatibility probe.
+- `src/outfitter/dispatch/registry/sql_compat.py` - representative registry SQL compatibility contract.
+- `tests/registry/test_sql_compat.py` - stdlib SQLite compatibility tests.
 
 ## Docs / ADRs / Notes
 
@@ -38,12 +40,15 @@
 - `uv run ruff format --check .`
 - `uv run python -m pytest tests/registry -q`
 - `uv run --with pyturso --with libsql python spikes/06_turso_libsql_storage_probe.py`
+- `uv run pytest tests/registry/test_sql_compat.py -q`
 - `just check`
 
 ## PRs / Branches
 
 - `feat/local-substrate-roadmap` - current working branch.
+- `dis-21-storage-boundary-contracts` - storage compatibility contract branch.
 
 ## Review Reports
 
 - `.agents/goals/2026-07-02-local-substrate-stack/tmp/reviews/milestone-1-docs.json` - milestone 1 local review, 5/5 clean, no P0/P1/P2.
+- `.agents/goals/2026-07-02-local-substrate-stack/tmp/reviews/milestone-2-storage.json` - milestone 2 local review, 5/5 clean, no P0/P1/P2.

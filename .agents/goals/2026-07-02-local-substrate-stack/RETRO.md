@@ -13,10 +13,10 @@ Refs: `.agents/goals/2026-07-02-local-substrate-stack/REFS.md`
 - Objective: Land as much of the local substrate stack as safely possible.
 - Completion horizon: merged.
 - Authority used: Created Linear issues and branch `feat/local-substrate-roadmap`.
-- Outcome: pending.
-- Tracker/PR/source-control state: Linear `DIS-20` through `DIS-25` created; PR not opened yet.
-- Verification: packet checks, ruff check, and format check passed.
-- Review state: milestone 1 local review clean, 5/5, no P0/P1/P2.
+- Outcome: active; milestone 1 submitted, milestone 2 in progress.
+- Tracker/PR/source-control state: Linear `DIS-20` through `DIS-25` created; PR #59 opened for milestone 1.
+- Verification: packet checks, lint/format, registry tests, mypy, and SQL compatibility spike passed.
+- Review state: milestone 1 and milestone 2 local reviews clean, 5/5, no P0/P1/P2.
 - Remaining risks: scope sprawl, storage abstraction overreach, semantic privacy risk, and gateway/log boundary drift.
 
 ## Readiness
@@ -27,7 +27,7 @@ Refs: `.agents/goals/2026-07-02-local-substrate-stack/REFS.md`
 - Verification blockers: none known.
 - Tracker blockers: none known.
 - Authority blockers: no release/publish, default backend migration, live data, cloud credentials, or paid API authority.
-- Next action: commit and submit milestone 1, then start DIS-21 if the branch/PR is clean.
+- Next action: finish milestone 2 local review, commit, submit stacked PR, and continue if safe.
 
 ## Execution Log
 
@@ -37,6 +37,14 @@ Refs: `.agents/goals/2026-07-02-local-substrate-stack/REFS.md`
 - Verified: `check-goal-prompt --no-placeholders` passed; `goal-loop-doctor` passed; `uv run ruff check .` passed; `uv run ruff format --check .` passed; milestone 1 local review clean 5/5.
 - Result: Milestone 1 ready to submit.
 - Next: Commit, push/open PR, update Linear, and continue to DIS-21 if safe.
+- Blockers: None known.
+
+2026-07-02 TBD - Milestone 2 storage compatibility contract
+- Changed: Promoted the representative registry/history SQL compatibility probe into `outfitter.dispatch.registry.sql_compat`; rewired the Turso/libSQL spike to reuse it; added stdlib SQLite contract tests.
+- Verified: `uv run pytest tests/registry/test_sql_compat.py -q` passed; `uv run pytest tests/registry -q` passed; `uv run mypy src tests/registry/test_sql_compat.py` passed; focused ruff check/format passed; `uv run --with pyturso --with libsql python spikes/06_turso_libsql_storage_probe.py` passed for sqlite3, pyturso, and libsql.
+- Reviewed: milestone 2 local review clean 5/5; no P0/P1/P2.
+- Result: Storage work now has a checked SQL portability target without changing the default SQLite/aiosqlite registry path.
+- Next: Commit, submit stacked PR, and update DIS-21.
 - Blockers: None known.
 ```
 
@@ -51,6 +59,7 @@ Refs: `.agents/goals/2026-07-02-local-substrate-stack/REFS.md`
 | Round | Scope | Report | Score | State | Open P0-P2 | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | milestone-1-docs | roadmap, gateway boundary, goal packet | `.agents/goals/2026-07-02-local-substrate-stack/tmp/reviews/milestone-1-docs.json` | 5/5 | clean | 0 | Docs/tracker milestone only; implementation milestones pending. |
+| milestone-2-storage | SQL compatibility contract | `.agents/goals/2026-07-02-local-substrate-stack/tmp/reviews/milestone-2-storage.json` | 5/5 | clean | 0 | Contract probe only; full storage boundary still requires concrete call-site need. |
 
 ## Verification Log
 
@@ -60,6 +69,10 @@ Refs: `.agents/goals/2026-07-02-local-substrate-stack/REFS.md`
 | `goal-loop-doctor` | goal packet | pass | Packet OK. |
 | `uv run ruff check .` | repo lint | pass | All checks passed. |
 | `uv run ruff format --check .` | formatting | pass | 112 files already formatted. |
+| `uv run pytest tests/registry/test_sql_compat.py -q` | storage compatibility contract | pass | 3 passed. |
+| `uv run pytest tests/registry -q` | registry tests | pass | 37 passed. |
+| `uv run mypy src tests/registry/test_sql_compat.py` | typecheck | pass | Success, no issues found. |
+| `uv run --with pyturso --with libsql python spikes/06_turso_libsql_storage_probe.py` | optional backend spike | pass | sqlite3 PASS; pyturso PASS; libsql PASS. |
 
 ## Prompt / Goal Alignment
 
@@ -81,7 +94,7 @@ Refs: `.agents/goals/2026-07-02-local-substrate-stack/REFS.md`
 
 ## Follow-Ups
 
-- pending.
+- Continue beyond the SQL compatibility contract only if the next storage boundary step has a concrete call-site need. Do not introduce a broad storage framework for its own sake.
 
 ## Final State
 
