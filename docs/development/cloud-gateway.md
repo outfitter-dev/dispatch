@@ -33,9 +33,11 @@ Add an optional Cloudflare-hosted Dispatch Gateway:
   queues, delivery state, audit, and a small configuration UI.
 - Local `dispatchd` instances connect outbound to the gateway, pull or receive
   queued requests, authorize them locally, execute Dispatch ops, and report
-  events back.
+  compact delivery/status updates back.
 - The gateway never directly controls Codex App Server, local filesystems,
   local shells, or local credentials.
+- The gateway is not the default store for agent logs, transcripts, raw provider
+  events, debug payloads, or detailed local history.
 
 In short: the gateway routes intent; local Dispatch executes authority.
 
@@ -395,7 +397,8 @@ the only layer that knows where that repo lives on that machine.
 8. Local policy validates the request against machine and repo config.
 9. Local `dispatchd` executes the derived Dispatch op through its normal control
    path.
-10. Local events/results are reported back to the gateway.
+10. Compact local status/results are reported back to the gateway according to
+    route policy.
 11. The gateway renders updates to Slack, Linear, the UI, and/or Dispatch inbox
     destinations.
 
@@ -418,6 +421,9 @@ high-signal Dispatch events:
 
 Slack can render these as thread replies, assistant status, or compact updates.
 Linear can render them as issue comments, agent activity, or status updates,
+but neither surface should receive raw provider event logs, full transcripts,
+debug payloads, or large tool outputs unless an operator explicitly exports a
+bounded artifact.
 depending on what the integration supports.
 
 Streaming can be added later per route, but should be opt-in.
