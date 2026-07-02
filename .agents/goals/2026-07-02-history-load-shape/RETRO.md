@@ -1,8 +1,8 @@
 # Execution Retro: history-load-shape
 
 Date started: 2026-07-02
-Date finalized: pending
-Status: Ready
+Date finalized: 2026-07-02
+Status: Complete
 Spec: `.agents/goals/2026-07-02-history-load-shape/SPEC.md`
 Goal: `.agents/goals/2026-07-02-history-load-shape/GOAL.md`
 Prompt: `.agents/goals/2026-07-02-history-load-shape/PROMPT.md`
@@ -13,15 +13,14 @@ Refs: `.agents/goals/2026-07-02-history-load-shape/REFS.md`
 - Objective: Fix Dispatch history/observe load shape before Turso spike.
 - Completion horizon: `merged`.
 - Authority used: Linear issue creation; source-control execution.
-- Outcome: first implementation milestone completed; PR/merge pending.
+- Outcome: completed and merged via PR #55.
 - Tracker/PR/source-control state: DIS-14 parent and DIS-15..DIS-19 children
-  created; branch `dis-14-stabilize-history-and-observe-load-before-turso-spike`
-  started.
+  created and updated; PR #55 merged to `main` at `29e4e13`.
 - Verification: `check-goal-prompt`, `goal-loop-doctor`, focused
   history/registry checks, CLI schema/help smokes, and `just check` passed.
 - Review state: round 1 local review passed 5/5 after fixing one P2.
-- Remaining risks: safe observe/dogfood proof and final PR/merge review still
-  need completion.
+- Remaining risks: Turso/libSQL remains deferred; no live broad `~/.codex`
+  dogfood was run for this slice by design.
 
 ## Readiness
 
@@ -31,7 +30,8 @@ Refs: `.agents/goals/2026-07-02-history-load-shape/REFS.md`
 - Verification blockers: none known.
 - Tracker blockers: none known.
 - Authority blockers: none known.
-- Next action: commit first milestone and continue final review/PR flow.
+- Next action: Turso/libSQL spike can start separately after this stabilized
+  SQLite/history shape.
 
 ## Goal Amendments
 
@@ -64,6 +64,16 @@ Refs: `.agents/goals/2026-07-02-history-load-shape/REFS.md`
   final review/PR proof.
 - Next: commit, run final full-stack review, submit PR, and merge.
 - Blockers: none.
+
+2026-07-02 10:43 America/New_York - PR and merge
+- Changed: Submitted Graphite PR #55, replaced generated PR metadata with a
+  root-cause/fix/checks/risk description, marked ready after CI passed, and
+  merged through Graphite.
+- Verified: GitHub `check`, CodeQL `Analyze (actions)`, CodeQL
+  `Analyze (python)`, CodeQL summary, and Graphite mergeability all passed.
+- Result: Merge commit `29e4e13` is on `main`.
+- Next: sync local `main` and stop this goal.
+- Blockers: none.
 ```
 
 ## Review Log
@@ -84,6 +94,7 @@ Refs: `.agents/goals/2026-07-02-history-load-shape/REFS.md`
 | `uv run dispatch schema history` | CLI schema smoke | passed | history schema rendered with indexed overview descriptions |
 | `uv run dispatch schema sync` | CLI schema smoke | passed | sync schema rendered |
 | `just check` | repo gate | passed | ruff, format, mypy, 385 tests, build, package contents |
+| `gh pr view 55 --json state,mergedAt,isDraft,mergeCommit,statusCheckRollup` | PR final state | passed | merged at 2026-07-02T14:42:51Z, merge commit `29e4e13`, all checks successful |
 
 ## Prompt / Goal Alignment
 
@@ -97,24 +108,31 @@ Refs: `.agents/goals/2026-07-02-history-load-shape/REFS.md`
 
 | Item | State | Notes |
 | --- | --- | --- |
-| DIS-14 | In Progress | Parent issue for SQLite/history load-shape stabilization. |
-| DIS-15 | In Progress | DB-only history overview implemented; tracker update pending. |
-| DIS-16 | In Progress | Batched transcript indexing implemented; tracker update pending. |
-| DIS-17 | In Progress | Registry transaction/WAL/cancellation safety implemented; tracker update pending. |
-| DIS-18 | In Progress | Bounded sync/backfill semantics preserved and documented; tracker update pending. |
-| DIS-19 | In Progress | Safe regression tests cover the load shape; tracker update pending. |
+| DIS-14 | Implemented | Parent issue commented with commit, checks, review, and PR summary. |
+| DIS-15 | Implemented | DB-only history overview implemented and commented. |
+| DIS-16 | Implemented | Batched transcript indexing implemented and commented. |
+| DIS-17 | Implemented | Registry transaction/WAL/cancellation safety implemented and commented. |
+| DIS-18 | Implemented | Bounded sync/backfill semantics preserved, documented, and commented. |
+| DIS-19 | Implemented | Safe regression tests cover the load shape; commented. |
 
 ## Follow-Ups
 
-- Turso/libSQL spike remains tracked separately by DIS-8 and should start only
-  after this goal lands.
+- Turso/libSQL spike remains tracked separately by DIS-8 and can start after
+  this stabilized SQLite/history shape.
 
 ## Final State
 
-- Completion proof: pending.
-- Prompt length: pending.
-- Review report summary: pending.
-- Verification summary: pending.
-- Forbidden actions audit: pending.
-- Remaining P3s / risks: pending.
-- Final transcript proof: pending.
+- Completion proof: PR #55 merged to `main` at `29e4e13`.
+- Prompt length: 3971/4000 characters.
+- Review report summary: local review round 1 was 5/5 clean after fixing one
+  P2 (`files_changed_count` needed total distinct count, not sample length).
+- Verification summary: `just check`, focused history/registry/corpus tests,
+  CLI help/schema smokes, and GitHub CI/CodeQL all passed.
+- Forbidden actions audit: no Turso implementation, no PyPI release, no
+  destructive live registry cleanup, no broad live `~/.codex` backfill, no
+  secrets, no unrelated repo changes.
+- Remaining P3s / risks: overview transcript byte counts are indexed/searchable
+  text size rather than full App Server transcript JSON size; documented as
+  indexed transcript size. Turso remains a follow-up spike.
+- Final transcript proof: this RETRO plus Linear DIS-14..DIS-19 comments and
+  PR #55 description/checks are the durable handoff.
