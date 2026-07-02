@@ -22,6 +22,7 @@ from outfitter.dispatch.client.events import (
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.registry.models import EventWhen
 
+from .capture import bound_text
 from .event_index import index_codex_lane_event
 from .queue import drain_next_queued_message
 from .subscriptions import process_event_subscriptions
@@ -45,7 +46,7 @@ class Reactor:
         lane = await registry.find_lane(event.lane_id)
         if lane is None:
             return  # an event for a thread dispatch does not track
-        await index_codex_lane_event(registry, lane, event)
+        await index_codex_lane_event(registry, lane, event, self._ctx.capture)
 
         if isinstance(event, TurnStarted):
             await registry.record_turn_started(lane.id, event.turn_id)
@@ -57,7 +58,12 @@ class Reactor:
             await self._fire_event(lane.id, "turn_completed")
             await drain_next_queued_message(self._ctx, lane.id)
         elif isinstance(event, TurnFailed):
-            await registry.record_turn_failed(lane.id, event.turn_id, event.message)
+            message = bound_text(event.message, self._ctx.capture)
+            await registry.record_turn_failed(
+                lane.id,
+                event.turn_id,
+                message.text if message is not None else None,
+            )
             await registry.touch_lane_event(lane.id)
             await process_event_subscriptions(self._ctx, lane, event)
         elif isinstance(event, LaneIdle):

@@ -14,8 +14,10 @@ from outfitter.dispatch.client.events import (
     ThreadUnarchived,
     TokenUsageUpdated,
     TurnCompleted,
+    TurnFailed,
     TurnStarted,
 )
+from outfitter.dispatch.config import CapturePolicy
 from outfitter.dispatch.core.reactor import Reactor
 from outfitter.dispatch.core.scheduler import Scheduler
 from outfitter.dispatch.core.triggers import TriggerRunner
@@ -200,6 +202,53 @@ async def test_reactor_turn_lifecycle_updates_lane_state(store: Registry) -> Non
     assert runtime.status == "idle"
     assert runtime.latest_turn_id == "turn-1"
     assert runtime.latest_turn_status == "completed"
+
+
+async def test_reactor_indexes_bounded_standard_event_summaries(store: Registry) -> None:
+    ctx = make_ctx(store, capture=CapturePolicy(max_text_bytes=8))
+    reactor = Reactor(ctx, TriggerRunner(ctx, lambda: _T0))
+    await store.add_lane(id="L1", handle="@x", source="own", status="idle")
+
+    await reactor.handle(TurnFailed("L1", "turn-1", "failure message that is too long"))
+
+    [event] = await store.list_provider_events(lane="L1")
+    assert event.event_type == "turn/failed"
+    assert event.provider_turn_id == "turn-1"
+    assert event.payload is None
+    assert event.raw_retained is False
+    assert event.summary == {
+        "status": "failed",
+        "turn_id": "turn-1",
+        "message": "failure ",
+        "message_original_bytes": 32,
+        "message_truncated": True,
+    }
+    [turn] = await store.list_thread_turns(lane="L1")
+    assert turn.error == "failure "
+    lane = await store.get_lane("L1")
+    assert lane.latest_error == "failure "
+    runtime = await store.get_lane_runtime_state("L1")
+    assert runtime is not None
+    assert runtime.attention_detail == "failure "
+
+
+async def test_reactor_dedupes_stable_live_events_on_replay(store: Registry) -> None:
+    ctx = make_ctx(store)
+    reactor = Reactor(ctx, TriggerRunner(ctx, lambda: _T0))
+    await store.add_lane(id="L1", handle="@x", source="own", status="idle")
+
+    await reactor.handle(TurnStarted("L1", "turn-1"))
+    await reactor.handle(TurnCompleted("L1", "turn-1"))
+    await reactor.handle(TurnStarted("L1", "turn-1"))
+    await reactor.handle(TurnCompleted("L1", "turn-1"))
+
+    events = list(reversed(await store.list_provider_events(lane="L1")))
+    assert [event.event_type for event in events] == ["turn/started", "turn/completed"]
+    assert [event.provider_event_id is not None for event in events] == [True, True]
+    turns = await store.list_thread_turns(lane="L1")
+    assert len(turns) == 1
+    assert turns[0].turn_id == "turn-1"
+    assert turns[0].status == "completed"
 
 
 async def test_reactor_appends_events_without_stable_provider_ids(store: Registry) -> None:

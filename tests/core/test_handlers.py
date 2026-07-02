@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -26,7 +27,7 @@ from outfitter.dispatch.client.models import (
     ThreadSearchResult,
     ThreadStatus,
 )
-from outfitter.dispatch.config import RuntimePolicy
+from outfitter.dispatch.config import CapturePolicy, RuntimePolicy
 from outfitter.dispatch.contracts.errors import (
     AppServerError,
     AuthorityError,
@@ -997,11 +998,184 @@ async def test_history_thread_views_filter_items_and_rollups(store: Registry) ->
     assert indexed_turns[0].completion_source is None
     indexed_items = await store.list_thread_items(lane="lane-1", turn_id="t1")
     assert [item.item_id for item in reversed(indexed_items)] == ["a1", "b1", "p1"]
+    assert all(item.payload is None for item in indexed_items)
+    assert all(item.raw_retained is False for item in indexed_items)
     refs = await store.list_thread_item_refs(await store.get_thread_item("codex", "lane-1", "p1"))
     assert [(ref.ref_type, ref.ref_value) for ref in refs] == [
         ("file", "src/app.py"),
         ("tool", "apply_patch"),
     ]
+
+
+async def test_history_index_honors_error_only_raw_retention(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.read_result = {
+        "thread": {
+            "id": "lane-1",
+            "turns": [
+                {
+                    "id": "t1",
+                    "status": "failed",
+                    "error": "failed because provider exploded",
+                    "items": [
+                        {
+                            "id": "err1",
+                            "type": "toolError",
+                            "toolName": "bash",
+                            "text": "command failed",
+                            "error": "exit 1",
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+    ctx = make_ctx(store, client, capture=CapturePolicy(raw_payload_retention="errors"))
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+
+    await handlers.history(HistoryInput(lane="@alpha"), ctx)
+
+    [turn] = await store.list_thread_turns(lane="lane-1")
+    assert turn.error == "failed because provider exploded"
+    [item] = await store.list_thread_items(lane="lane-1", turn_id="t1")
+    assert item.text == "command failed"
+    assert item.raw_retained is True
+    assert item.payload is not None
+    assert item.payload["error"] == "exit 1"
+
+
+@pytest.mark.parametrize(
+    ("capture", "expected_retained"),
+    [
+        (CapturePolicy(mode="debug", raw_payload_retention="debug", max_payload_bytes=80), True),
+        (CapturePolicy(raw_payload_retention="all", max_payload_bytes=80), True),
+        (
+            CapturePolicy(mode="standard", raw_payload_retention="debug", max_payload_bytes=80),
+            False,
+        ),
+    ],
+)
+async def test_history_index_bounds_debug_and_all_raw_retention(
+    store: Registry, capture: CapturePolicy, expected_retained: bool
+) -> None:
+    client = FakeLaneClient()
+    client.read_result = {
+        "thread": {
+            "id": "lane-1",
+            "turns": [
+                {
+                    "id": "t1",
+                    "items": [
+                        {
+                            "id": "m1",
+                            "type": "agentMessage",
+                            "text": "visible",
+                            "metadata": {"blob": "x" * 400},
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+    ctx = make_ctx(store, client, capture=capture)
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+
+    await handlers.history(HistoryInput(lane="@alpha"), ctx)
+
+    [item] = await store.list_thread_items(lane="lane-1", turn_id="t1")
+    assert item.raw_retained is expected_retained
+    if expected_retained:
+        assert item.payload is not None
+        assert item.payload["truncated"] is True
+        retained_bytes = len(json.dumps(item.payload, separators=(",", ":")).encode("utf-8"))
+        assert retained_bytes <= capture.max_payload_bytes
+    else:
+        assert item.payload is None
+
+
+@pytest.mark.parametrize("entrypoint", ["history", "transcript", "show"])
+async def test_thread_read_entrypoints_use_ctx_capture_policy(
+    store: Registry, entrypoint: str
+) -> None:
+    client = FakeLaneClient()
+    client.read_result = {
+        "thread": {
+            "id": "lane-1",
+            "turns": [
+                {
+                    "id": "t1",
+                    "items": [{"id": "m1", "type": "agentMessage", "text": "abcdef"}],
+                }
+            ],
+        }
+    }
+    ctx = make_ctx(store, client, capture=CapturePolicy(max_text_bytes=4))
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+
+    if entrypoint == "history":
+        await handlers.history(HistoryInput(lane="@alpha"), ctx)
+    elif entrypoint == "transcript":
+        await handlers.transcript(TranscriptInput(lane="@alpha"), ctx)
+    else:
+        await handlers.show(ShowInput(lane="@alpha", include_transcript=True), ctx)
+
+    [item] = await store.list_thread_items(lane="lane-1", turn_id="t1")
+    assert item.text == "abcd"
+    assert item.payload is None
+    assert item.raw_retained is False
+
+
+async def test_history_index_minimal_capture_skips_thread_items(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.read_result = {
+        "thread": {
+            "id": "lane-1",
+            "turns": [
+                {
+                    "id": "t1",
+                    "items": [
+                        {
+                            "id": "m1",
+                            "type": "agentMessage",
+                            "text": "do not persist searchable text",
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+    ctx = make_ctx(store, client, capture=CapturePolicy(mode="minimal"))
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+
+    await handlers.history(HistoryInput(lane="@alpha"), ctx)
+
+    [turn] = await store.list_thread_turns(lane="lane-1")
+    assert turn.turn_id == "t1"
+    assert await store.list_thread_items(lane="lane-1", turn_id="t1") == []
+
+
+async def test_history_index_bounds_searchable_thread_text(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.read_result = {
+        "thread": {
+            "id": "lane-1",
+            "turns": [
+                {
+                    "id": "t1",
+                    "items": [{"id": "m1", "type": "agentMessage", "text": "abcdef"}],
+                }
+            ],
+        }
+    }
+    ctx = make_ctx(store, client, capture=CapturePolicy(max_text_bytes=4))
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+
+    await handlers.history(HistoryInput(lane="@alpha"), ctx)
+
+    [item] = await store.list_thread_items(lane="lane-1", turn_id="t1")
+    assert item.text == "abcd"
+    assert item.payload is None
+    assert item.raw_retained is False
 
 
 async def test_watch_collects_bounded_raw_events(store: Registry) -> None:

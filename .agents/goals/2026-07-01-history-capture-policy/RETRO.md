@@ -19,18 +19,19 @@ Refs: `.agents/goals/2026-07-01-history-capture-policy/REFS.md`
 - Authority: commit, push, PR, mark ready, tracker updates, bounded subagents,
   and isolated local scenarios are allowed; merge, release, publish, storage
   default changes, and live user state mutation are not allowed.
-- Current state: preparation complete; implementation not started.
+- Current state: Milestone 1 is complete and Milestone 2 implementation is
+  ready for local review.
 
 ## Readiness
 
 - Prompt checked: passed at 3873 characters.
 - Goal/prompt alignment checked: passed.
-- Review blockers: none known before implementation.
-- Verification blockers: none known before implementation.
+- Review blockers: Milestone 2 local review pending.
+- Verification blockers: none known.
 - Tracker blockers: none known before implementation.
 - Authority blockers: merge/release/publish/storage-default changes require
   explicit approval and are out of scope.
-- Next action: start the direct goal from `PROMPT.md`.
+- Next action: commit Milestone 2 and run standing plus targeted local review.
 
 ## Goal Amendments
 
@@ -92,14 +93,52 @@ Refs: `.agents/goals/2026-07-01-history-capture-policy/REFS.md`
 - Next: Create `feat/history-standard-capture` and begin standard capture
   expansion.
 - Blockers: None known.
+
+2026-07-01 America/New_York - Milestone 2 standard capture expansion
+- Changed: Created `feat/history-standard-capture` above
+  `feat/history-capture-policy`. Wired live provider-event indexing and
+  `thread/read` backfill through `Ctx.capture`; enriched compact event
+  summaries; bounded provider failure text in event, turn, and runtime-state
+  reductions; stopped default transcript backfill from retaining raw item
+  payloads; retained bounded raw item payloads only when the policy allows it
+  for error/debug/all modes; updated README, usage docs, and the dispatch skill.
+- Verified: focused handler/reactor/capture/config/doctor tests plus relevant
+  registry/fixture tests passed; ruff check, ruff format check, and mypy passed
+  on touched code/tests.
+- Result: Milestone 2 implementation is ready for local review.
+- Next: Commit the milestone and run standing plus targeted reducer/storage
+  review.
+- Blockers: None known.
+
+2026-07-01 America/New_York - Milestone 2 review fixes
+- Changed: Fixed standing P2 LR-201 by bounding live `TurnFailed` text before
+  writing `lanes.latest_error`; also bounded direct/queued turn-request failure
+  errors before writing lane latest-error state and message receipts. Closed
+  targeted P2 coverage gaps with tests for debug/all oversized raw-retention
+  storage, reactor-level live-event dedupe, and `history`/`transcript`/`show`
+  capture-policy wiring.
+- Verified: focused reactor/handler tests passed; broader milestone tests
+  passed; ruff check, ruff format check, and mypy passed on touched code/tests.
+- Result: Milestone 2 review findings are fixed locally.
+- Next: Amend the milestone commit and rerun standing plus targeted re-review.
+- Blockers: None known.
+
+2026-07-01 America/New_York - Milestone 2 closed
+- Changed: Standing and targeted re-reviews both passed clean after the
+  review-fix amend.
+- Verified: Standing re-review clean 5/5 with 0 open P0-P2; targeted
+  reducer/storage re-review clean 5/5 with 0 open P0-P2.
+- Result: Milestone 2 standard capture expansion is complete.
+- Next: Create `feat/history-debug-capture` and begin debug payload retention.
+- Blockers: None known.
 ```
 
 ## Branch / PR Log
 
 | Branch | Base | PR | State | Notes |
 | --- | --- | --- | --- | --- |
-| `feat/history-capture-policy` | `docs/history-capture-policy-goal` | pending | not started | Capture policy foundation. |
-| `feat/history-standard-capture` | `feat/history-capture-policy` | pending | not started | Standard Tier 1/Tier 2 capture. |
+| `feat/history-capture-policy` | `docs/history-capture-policy-goal` | pending | local milestone complete | Capture policy foundation. |
+| `feat/history-standard-capture` | `feat/history-capture-policy` | pending | local milestone complete | Standard Tier 1/Tier 2 capture. |
 | `feat/history-debug-capture` | `feat/history-standard-capture` | pending | not started | Debug retention mode. |
 | `feat/db-backed-history-surfaces` | `feat/history-debug-capture` | pending | not started | DB-backed history/search/status surfaces. |
 
@@ -111,6 +150,9 @@ Refs: `.agents/goals/2026-07-01-history-capture-policy/REFS.md`
 | milestone-1 round-1 | capture policy foundation | `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-1/standing.json`; `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-1/targeted-config-privacy.json` | 3 / 3 | changes_requested | 4 | Four unique P2s fixed locally; re-review pending. |
 | milestone-1 round-2 | capture policy foundation | `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-1/standing-rereview.json`; `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-1/targeted-config-privacy-rereview.json` | 5 / 3 | changes_requested | 1 | Standing clean; targeted found Ruff format P2, fixed locally. |
 | milestone-1 final | capture policy foundation | `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-1/targeted-config-privacy-final.json` | 5 | clean | 0 | Milestone 1 closed. |
+| milestone-2 pre-review | standard capture expansion | not applicable | not scored | implementation ready | 0 | Review requests pending. |
+| milestone-2 round-1 | standard capture expansion | `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-2/standing.json`; `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-2/targeted-reducer-storage.json` | 3 / 3 | changes_requested | 4 | Standing found one P2 bounded-error bypass; targeted found three P2 test gaps. All fixed locally; re-review pending. |
+| milestone-2 final | standard capture expansion | `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-2/standing-rereview.json`; `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-2/targeted-reducer-storage-rereview.json` | 5 / 5 | clean | 0 | Milestone 2 closed. |
 
 ## Verification Log
 
@@ -131,6 +173,16 @@ Refs: `.agents/goals/2026-07-01-history-capture-policy/REFS.md`
 | `DISPATCH_HOME=/tmp/dispatch-capture-invalid DISPATCH_CAPTURE_MAX_PAYLOAD_BYTES=0 uv run dispatch doctor --no-app-server --json \| jq '.checks[] \| select(.name == "capture_policy")'` | invalid-cap doctor smoke | passed | Reported capture policy failure with `history.max_payload_bytes must be a positive integer`. |
 | `uv run ruff format src/outfitter/dispatch/config.py src/outfitter/dispatch/core/capture.py tests/test_config.py tests/test_doctor.py` | milestone 1 format fix | passed | 4 files reformatted. |
 | `uv run ruff check ... && uv run ruff format --check ...` | milestone 1 format recheck | passed | All checks passed; 4 files already formatted. |
+| `uv run pytest tests/core/test_triggers.py tests/core/test_handlers.py tests/core/test_capture.py tests/test_config.py tests/test_doctor.py -q` | milestone 2 focused tests | passed | 145 passed. |
+| `uv run pytest tests/core/test_triggers.py tests/core/test_handlers.py tests/core/test_capture.py tests/test_config.py tests/test_doctor.py tests/registry/test_store.py tests/fixtures/test_corpus.py -q` | milestone 2 broader tests | passed | 179 passed. |
+| `uv run ruff check src/outfitter/dispatch/core/event_index.py src/outfitter/dispatch/core/history_index.py src/outfitter/dispatch/core/reactor.py src/outfitter/dispatch/core/handlers.py tests/core/test_triggers.py tests/core/test_handlers.py` | milestone 2 lint | passed | All checks passed. |
+| `uv run ruff format --check src/outfitter/dispatch/core/event_index.py src/outfitter/dispatch/core/history_index.py src/outfitter/dispatch/core/reactor.py src/outfitter/dispatch/core/handlers.py tests/core/test_triggers.py tests/core/test_handlers.py` | milestone 2 format | passed | 6 files already formatted. |
+| `uv run mypy src/outfitter/dispatch/core/event_index.py src/outfitter/dispatch/core/history_index.py src/outfitter/dispatch/core/reactor.py src/outfitter/dispatch/core/handlers.py tests/core/test_triggers.py tests/core/test_handlers.py` | milestone 2 types | passed | No issues found. |
+| `uv run pytest tests/core/test_triggers.py tests/core/test_handlers.py -q` | milestone 2 review-fix focused tests | passed | 125 passed. |
+| `uv run pytest tests/core/test_triggers.py tests/core/test_handlers.py tests/core/test_capture.py tests/test_config.py tests/test_doctor.py tests/registry/test_store.py tests/fixtures/test_corpus.py -q` | milestone 2 review-fix broader tests | passed | 186 passed. |
+| `uv run ruff check src/outfitter/dispatch/core/event_index.py src/outfitter/dispatch/core/history_index.py src/outfitter/dispatch/core/reactor.py src/outfitter/dispatch/core/handlers.py src/outfitter/dispatch/core/queue.py tests/core/test_triggers.py tests/core/test_handlers.py` | milestone 2 review-fix lint | passed | All checks passed. |
+| `uv run ruff format --check src/outfitter/dispatch/core/event_index.py src/outfitter/dispatch/core/history_index.py src/outfitter/dispatch/core/reactor.py src/outfitter/dispatch/core/handlers.py src/outfitter/dispatch/core/queue.py tests/core/test_triggers.py tests/core/test_handlers.py` | milestone 2 review-fix format | passed | 7 files already formatted. |
+| `uv run mypy src/outfitter/dispatch/core/event_index.py src/outfitter/dispatch/core/history_index.py src/outfitter/dispatch/core/reactor.py src/outfitter/dispatch/core/handlers.py src/outfitter/dispatch/core/queue.py tests/core/test_triggers.py tests/core/test_handlers.py` | milestone 2 review-fix types | passed | No issues found. |
 
 ## Prompt / Goal Alignment
 

@@ -35,6 +35,7 @@ from outfitter.dispatch.contracts.errors import (
     ValidationError,
     project_error,
 )
+from outfitter.dispatch.core.capture import bound_text
 from outfitter.dispatch.registry.models import (
     InboxMessage,
     Lane,
@@ -685,8 +686,9 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
                 personality=settings.personality,
             )
         except (DispatchError, ClientError) as exc:
-            await ctx.registry.record_turn_request_failed(lane.id, str(exc))
-            await _record_direct_send_receipt(ctx, lane, status="failed", error=str(exc))
+            error = _bounded_error(exc, ctx)
+            await ctx.registry.record_turn_request_failed(lane.id, error)
+            await _record_direct_send_receipt(ctx, lane, status="failed", error=error)
             await ctx.registry.log_action(
                 "send",
                 lane=lane.id,
@@ -913,6 +915,11 @@ async def _record_direct_send_receipt(
     )
 
 
+def _bounded_error(exc: BaseException, ctx: Ctx) -> str:
+    bounded = bound_text(str(exc), ctx.capture)
+    return bounded.text if bounded is not None else ""
+
+
 async def _record_queue_receipt(
     ctx: Ctx, lane: Lane, queued_message_id: int, *, status: str, error: str | None = None
 ) -> None:
@@ -956,8 +963,9 @@ async def send(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
             personality=turn_settings.personality,
         )
     except (DispatchError, ClientError) as exc:
-        await ctx.registry.record_turn_request_failed(lane.id, str(exc))
-        await _record_direct_send_receipt(ctx, lane, status="failed", error=str(exc))
+        error = _bounded_error(exc, ctx)
+        await ctx.registry.record_turn_request_failed(lane.id, error)
+        await _record_direct_send_receipt(ctx, lane, status="failed", error=error)
         await ctx.registry.log_action(
             "send", lane=lane.id, detail=inp.text[:120], outcome=project_error(exc).code
         )
@@ -1001,8 +1009,9 @@ async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
                     personality=turn_settings.personality,
                 )
             except (DispatchError, ClientError) as exc:
-                await ctx.registry.record_turn_request_failed(lane.id, str(exc))
-                await _record_direct_send_receipt(ctx, lane, status="failed", error=str(exc))
+                error = _bounded_error(exc, ctx)
+                await ctx.registry.record_turn_request_failed(lane.id, error)
+                await _record_direct_send_receipt(ctx, lane, status="failed", error=error)
                 await ctx.registry.log_action(
                     "send", lane=lane.id, detail=text[:120], outcome=project_error(exc).code
                 )
@@ -1341,7 +1350,7 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
     transcript: list[TranscriptItem] = []
     if inp.include_transcript:
         result = await ctx.client.thread_read(lane.id, include_turns=True)
-        await index_codex_thread_read(ctx.registry, lane, result)
+        await index_codex_thread_read(ctx.registry, lane, result, ctx.capture)
         transcript = _transcript_from_thread(result, limit=inp.max_items)
     return LaneDetail(
         **_ref(lane, ctx).model_dump(),
@@ -1455,7 +1464,7 @@ async def transcript(inp: TranscriptInput, ctx: Ctx) -> TranscriptOutput:
         raise NotFoundError(f"no managed thread {inp.lane!r}")
     lane = resolved.lane
     result = await ctx.client.thread_read(lane.id, include_turns=True)
-    await index_codex_thread_read(ctx.registry, lane, result)
+    await index_codex_thread_read(ctx.registry, lane, result, ctx.capture)
     return TranscriptOutput(
         **_managed_identity(lane, ctx),
         items=_transcript_from_thread(result, limit=inp.limit),
@@ -1535,7 +1544,7 @@ async def _history_summary_for_lane(lane: Lane, ctx: Ctx) -> HistoryThreadSummar
 async def _history_details(
     lane: Lane, result: dict[str, object], ctx: Ctx
 ) -> tuple[HistoryThreadSummary, list[HistoryItem], list[HistoryToolStat], list[HistoryFileStat]]:
-    await index_codex_thread_read(ctx.registry, lane, result)
+    await index_codex_thread_read(ctx.registry, lane, result, ctx.capture)
     sync = await ctx.registry.get_lane_sync(lane.id)
     worktree = await detect_worktree(lane.cwd)
     return summarize_history(result, lane=lane, sync=sync, worktree=worktree)

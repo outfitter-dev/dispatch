@@ -6,6 +6,8 @@ import json
 import re
 from typing import Any, Literal
 
+from outfitter.dispatch.config import CapturePolicy
+from outfitter.dispatch.core.capture import bound_payload, bound_text
 from outfitter.dispatch.registry.models import Lane, ThreadItem, ThreadItemRef, ThreadTurn
 from outfitter.dispatch.registry.store import Registry
 
@@ -14,10 +16,14 @@ _TURN_STATUSES: set[str] = {"started", "completed", "failed", "unknown"}
 
 
 async def index_codex_thread_read(
-    registry: Registry, lane: Lane, result: dict[str, object]
+    registry: Registry,
+    lane: Lane,
+    result: dict[str, object],
+    capture: CapturePolicy | None = None,
 ) -> None:
     """Backfill normalized turn/item rows from a Codex thread/read payload."""
 
+    policy = capture or CapturePolicy()
     thread = result.get("thread")
     if not isinstance(thread, dict):
         return
@@ -32,6 +38,7 @@ async def index_codex_thread_read(
         turn_id = _string(raw_turn.get("id")) or f"turn-{turn_index}"
         status = _turn_status(raw_turn.get("status"))
         created_at = _timestamp(raw_turn)
+        turn_error = bound_text(_string(raw_turn.get("error")), policy)
         await registry.upsert_thread_turn(
             ThreadTurn(
                 provider=_CODEX_PROVIDER,
@@ -42,7 +49,7 @@ async def index_codex_thread_read(
                 started_at=created_at,
                 completed_at=now if status == "completed" else None,
                 failed_at=now if status == "failed" else None,
-                error=_string(raw_turn.get("error")),
+                error=turn_error.text if turn_error is not None else None,
                 completion_source="thread-read" if status != "unknown" else None,
                 updated_at=now,
             )
@@ -50,10 +57,14 @@ async def index_codex_thread_read(
         raw_items = raw_turn.get("items")
         if not isinstance(raw_items, list):
             continue
+        if policy.mode == "minimal":
+            continue
         for item_index, raw_item in enumerate(raw_items):
             if not isinstance(raw_item, dict):
                 continue
             item_id = _string(raw_item.get("id")) or f"{turn_id}:item-{item_index}"
+            item_text = bound_text(_item_text(raw_item), policy)
+            payload = _retained_payload(raw_item, policy, is_error=_is_error_item(raw_item, status))
             item = ThreadItem(
                 provider=_CODEX_PROVIDER,
                 provider_thread_id=provider_thread_id,
@@ -62,12 +73,12 @@ async def index_codex_thread_read(
                 turn_id=turn_id,
                 item_type=_string(raw_item.get("type")) or "unknown",
                 role=_string(raw_item.get("role")),
-                text=_item_text(raw_item),
+                text=item_text.text if item_text is not None else None,
                 tool=_tool_name(raw_item),
                 created_at=_timestamp(raw_item),
                 inserted_at=now,
-                payload=_compact_payload(raw_item),
-                raw_retained=True,
+                payload=payload,
+                raw_retained=payload is not None,
             )
             await registry.upsert_thread_item(item, refs=_item_refs(item, raw_item))
 
@@ -159,6 +170,25 @@ def _collect_paths(value: object, found: list[str]) -> None:
 
 def _compact_payload(item: dict[str, object]) -> dict[str, object]:
     return {key: _json_safe(value) for key, value in item.items()}
+
+
+def _retained_payload(
+    item: dict[str, object], policy: CapturePolicy, *, is_error: bool
+) -> dict[str, object] | None:
+    if not policy.should_retain_raw_payload(is_error=is_error):
+        return None
+    return bound_payload(_compact_payload(item), policy).payload
+
+
+def _is_error_item(
+    item: dict[str, object], turn_status: Literal["started", "completed", "failed", "unknown"]
+) -> bool:
+    if turn_status == "failed":
+        return True
+    if item.get("error") is not None:
+        return True
+    item_type = _string(item.get("type"))
+    return item_type is not None and "error" in item_type.casefold()
 
 
 def _json_safe(value: object) -> object:

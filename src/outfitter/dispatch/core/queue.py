@@ -12,6 +12,7 @@ from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.contracts.errors import DispatchError, project_error
 from outfitter.dispatch.registry.models import Lane, MessageReceipt, QueuedMessage
 
+from .capture import bound_text
 from .turn_settings import load_turn_start_settings
 
 
@@ -50,9 +51,10 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
         )
     except (DispatchError, ClientError) as exc:
         projected = project_error(exc)
+        error = _bounded_error(exc, ctx)
         await ctx.registry.fail_queued_message(message.id, projected.code)
-        await _record_queue_receipt(ctx, lane, message, status="failed", error=str(exc))
-        await ctx.registry.record_turn_request_failed(lane.id, str(exc))
+        await _record_queue_receipt(ctx, lane, message, status="failed", error=error)
+        await ctx.registry.record_turn_request_failed(lane.id, error)
         await ctx.registry.log_action(
             "queue",
             lane=lane.id,
@@ -65,6 +67,11 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
     await ctx.registry.mark_inbox_delivered_for_queue(message.id, ack=True)
     await ctx.registry.log_action("send", lane=lane.id, detail=message.text[:120], outcome="queued")
     return True
+
+
+def _bounded_error(exc: BaseException, ctx: Ctx) -> str:
+    bounded = bound_text(str(exc), ctx.capture)
+    return bounded.text if bounded is not None else ""
 
 
 async def _record_queue_receipt(
