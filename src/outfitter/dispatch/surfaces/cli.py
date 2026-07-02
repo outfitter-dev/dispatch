@@ -28,6 +28,7 @@ CLI_SURFACE_CONTROL_PATHS: tuple[tuple[str, ...], ...] = (
     ("down",),
     ("registry", "migrate"),
 )
+_METHOD_NOT_FOUND = -32601
 
 
 def _recv_line(sock: socket.socket) -> bytes:
@@ -40,10 +41,44 @@ def _recv_line(sock: socket.socket) -> bytes:
     return bytes(buffer)
 
 
-def invoke_daemon(socket_path: Path, op_id: str, params: dict[str, object]) -> dict[str, object]:
+def invoke_daemon(
+    socket_path: Path,
+    current_ops: frozenset[str],
+    op_id: str,
+    params: dict[str, object],
+    *,
+    retry_on_stale: bool = True,
+) -> dict[str, object]:
     """Send one control request and return its result, or exit with the projected
     code on error (the CLI's projection of the DispatchError taxonomy)."""
-    request = json.dumps({"id": 1, "method": op_id, "params": params}) + "\n"
+    message = _control_request(socket_path, op_id, params)
+    error = message.get("error")
+    if isinstance(error, dict):
+        if (
+            retry_on_stale
+            and op_id in current_ops
+            and _is_method_not_found(error)
+            and _restart_stale_daemon_if_idle(socket_path, op_id)
+        ):
+            return invoke_daemon(
+                socket_path,
+                current_ops,
+                op_id,
+                params,
+                retry_on_stale=False,
+            )
+        data = error.get("data")
+        exit_code = data.get("exitCode") if isinstance(data, dict) else None
+        typer.secho(f"dispatch: {error.get('message')}", fg="red", err=True)
+        raise typer.Exit(code=exit_code if isinstance(exit_code, int) else 1)
+    result = message.get("result")
+    return result if isinstance(result, dict) else {}
+
+
+def _control_request(
+    socket_path: Path, method: str, params: dict[str, object]
+) -> dict[str, object]:
+    request = json.dumps({"id": 1, "method": method, "params": params}) + "\n"
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(30.0)  # never hang on a dead/half-writing daemon (mirrors MCP)
@@ -67,14 +102,89 @@ def invoke_daemon(socket_path: Path, op_id: str, params: dict[str, object]) -> d
     if not isinstance(message, dict):
         typer.secho("dispatch: malformed response from daemon", fg="red", err=True)
         raise typer.Exit(code=1)
-    error = message.get("error")
-    if isinstance(error, dict):
-        data = error.get("data")
-        exit_code = data.get("exitCode") if isinstance(data, dict) else None
-        typer.secho(f"dispatch: {error.get('message')}", fg="red", err=True)
-        raise typer.Exit(code=exit_code if isinstance(exit_code, int) else 1)
-    result = message.get("result")
-    return result if isinstance(result, dict) else {}
+    return message
+
+
+def _is_method_not_found(error: dict[str, object]) -> bool:
+    return error.get("code") == _METHOD_NOT_FOUND
+
+
+def _restart_stale_daemon_if_idle(socket_path: Path, op_id: str) -> bool:
+    idle, reason = _daemon_idle_for_restart(socket_path)
+    if not idle:
+        typer.secho(
+            (
+                f"dispatch: daemon does not support current CLI op {op_id!r}; "
+                f"not restarting automatically because {reason}. "
+                "Run `dispatch down && dispatch up`, then retry."
+            ),
+            fg="red",
+            err=True,
+        )
+        raise typer.Exit(code=8)
+
+    from outfitter.dispatch.daemon import lifecycle
+
+    pidfile = config.pidfile_path()
+    try:
+        stopped = lifecycle.stop_daemon(socket_path, pidfile)
+        if not stopped:
+            typer.secho(
+                (
+                    f"dispatch: daemon does not support current CLI op {op_id!r}; "
+                    "could not identify a live daemon process to restart safely. "
+                    "Run `dispatch down && dispatch up`, then retry."
+                ),
+                fg="red",
+                err=True,
+            )
+            raise typer.Exit(code=8)
+        lifecycle.start_detached(socket_path, pidfile)
+    except typer.Exit:
+        raise
+    except (RuntimeError, TimeoutError, OSError) as exc:
+        typer.secho(
+            (
+                f"dispatch: daemon does not support current CLI op {op_id!r}; "
+                f"restart failed ({exc}). Run `dispatch down && dispatch up`, then retry."
+            ),
+            fg="red",
+            err=True,
+        )
+        raise typer.Exit(code=8) from exc
+    typer.secho(
+        f"dispatch: restarted idle stale daemon for current CLI op {op_id!r}; retrying.",
+        fg="yellow",
+        err=True,
+    )
+    return True
+
+
+def _daemon_idle_for_restart(socket_path: Path) -> tuple[bool, str]:
+    try:
+        status_message = _control_request(socket_path, "status", {})
+    except typer.Exit:
+        return False, "daemon status could not be read"
+    if isinstance(status_message.get("error"), dict):
+        return False, "daemon status could not be read"
+    result = status_message.get("result")
+    if not isinstance(result, dict):
+        return False, "daemon status response was malformed"
+
+    active = result.get("active")
+    if isinstance(active, int):
+        return (active == 0, "daemon has active work" if active else "daemon is idle")
+
+    lanes = result.get("lanes")
+    idle = result.get("idle")
+    busy = result.get("busy")
+    if isinstance(lanes, int) and isinstance(idle, int) and isinstance(busy, int):
+        if busy > 0:
+            return False, "daemon has busy lanes"
+        if lanes == idle:
+            return True, "daemon is idle"
+        return False, "daemon has non-idle lanes"
+    return False, "daemon activity is unknown"
 
 
 def _version_callback(value: bool) -> None:
@@ -88,7 +198,8 @@ def build_cli(socket_path: Path | None = None) -> typer.Typer:
     # Import the registry lazily so this module stays a thin surface.
     from outfitter.dispatch.core.ops import REGISTRY
 
-    app = derive_cli(REGISTRY, partial(invoke_daemon, path))
+    current_ops = frozenset(REGISTRY.ids())
+    app = derive_cli(REGISTRY, partial(invoke_daemon, path, current_ops))
 
     @app.callback()
     def _root(

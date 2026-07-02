@@ -85,6 +85,18 @@ uv run dispatch up
 uv run dispatch daemon status
 ```
 
+After an upgrade, a running daemon may be older than the current CLI. If the CLI
+requests an op that the daemon does not know, dispatch treats that as
+daemon/client skew. When `dispatch daemon status` proves the daemon is idle, the
+CLI restarts it automatically and retries the command once. If any lane is busy
+or waiting on approval, dispatch leaves the daemon alone and asks you to restart
+manually:
+
+```bash
+uv run dispatch down
+uv run dispatch up
+```
+
 For foreground debugging, run the daemon directly:
 
 ```bash
@@ -149,6 +161,9 @@ Common recovery paths:
   for auth material; it does not print or parse credentials.
 - Stale socket or pidfile: run `dispatch down`, then `dispatch up`. If you are using
   isolated state, confirm `DISPATCH_HOME`, `DISPATCH_SOCKET`, and `DISPATCH_PIDFILE`.
+- Stale daemon/client op mismatch: dispatch restarts and retries once when the
+  daemon is idle. If it reports active work, wait for the work to finish or
+  explicitly run `dispatch down`, then `dispatch up`.
 - Registry schema newer than the installed binary: upgrade with
   `uv tool upgrade outfitter-dispatch` before starting the daemon.
 - Registry schema older than the installed binary: run `dispatch down`, then
