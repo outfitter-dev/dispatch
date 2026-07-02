@@ -50,9 +50,10 @@
 
 ## PRs / Branches
 
-- `feat/local-substrate-roadmap` - current working branch.
-- `dis-21-storage-boundary-contracts` - storage compatibility contract branch.
-- `dis-22-event-ingestion-harness` - synthetic event-ingestion harness branch.
+- `feat/local-substrate-roadmap` - PR #59, merged.
+- `dis-21-storage-boundary-contracts` - PR #60, merged.
+- `dis-22-event-ingestion-harness` - PR #61, merged.
+- `docs/finalize-local-substrate-retro` - final retro cleanup branch.
 
 ## Review Reports
 
