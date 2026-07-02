@@ -734,8 +734,11 @@ the desktop app still cannot be gated by Dispatch's advisory lock.
 Dispatch keeps a local SQLite registry and normalized history index. The default
 history capture mode is `standard`: capture operational state and bounded
 searchable facts by default, but do not retain raw provider payloads unless the
-raw retention policy allows it. Use `minimal` for a smaller footprint and
-`debug` while developing reducers, search, or provider adapters.
+raw retention policy allows it. Live App Server events are stored as compact
+summaries; transcript reads index bounded turns, item text, tool names, and
+file/thread refs. Use `minimal` for a smaller footprint that keeps turn-level
+state but skips item-level transcript rows; use `debug` while developing
+reducers, search, or provider adapters.
 
 Configure capture in `~/.dispatch/config.toml`:
 

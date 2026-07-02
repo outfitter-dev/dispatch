@@ -269,8 +269,11 @@ reconciliation, or event indexing.
 
 Dispatch captures normalized history into its local SQLite registry. Default
 `standard` capture keeps operational facts and bounded searchable history facts.
-Raw provider payloads stay gated by retention policy. Use debug capture only
-when developing or diagnosing reducers/search/provider adapters:
+Live App Server events are stored as compact summaries; transcript reads index
+bounded turns, item text, tool names, and file/thread refs. Raw provider payloads
+stay gated by retention policy. Minimal capture keeps turn-level state but skips
+item-level transcript rows. Use debug capture only when developing or diagnosing
+reducers/search/provider adapters:
 
 ```toml
 [history]

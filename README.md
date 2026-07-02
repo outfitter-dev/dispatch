@@ -69,8 +69,12 @@ as the canonical source and backfill Dispatch's normalized local history index.
 
 History capture is configurable in `~/.dispatch/config.toml`. The default
 `standard` mode captures operational facts and bounded searchable history
-metadata while keeping raw provider payloads gated. Use `debug` only for
-development with bounded temp state:
+metadata while keeping raw provider payloads gated. Live App Server events are
+stored as compact summaries; transcript reads index bounded turns, item text,
+tool names, and file/thread refs without retaining raw item payloads unless the
+retention policy allows it. Minimal capture keeps turn-level state but skips
+item-level transcript rows. Use `debug` only for development with bounded temp
+state:
 
 ```toml
 [history]
