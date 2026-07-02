@@ -52,6 +52,9 @@ from Slack, Linear, another laptop, or a remote machine.
   proves representative registry/history SQL can run on SQLite, `pyturso`, and
   `libsql` after a small portability hardening, while keeping SQLite as the
   default.
+- [Turso/libSQL Decision Memo](../research/turso-libsql-decision.md)
+  keeps SQLite/`aiosqlite` as the default backend and defines the evidence
+  needed before reopening the default-backend decision.
 - [Semantic History Search](semantic-history-search.md) defines the current
   local keyword-search slice plus the retention and embedding boundary.
 - [Event Ingestion Baselines](../research/event-ingestion-baselines.md)

@@ -53,6 +53,19 @@ Status: active
 - Confirmed exact totals for provider events, thread turns, thread items, and
   message receipts in every profile.
 - Local review clean after fixing two small P3 evidence-shape issues.
+
+2026-07-02 - Milestone 3 Turso/libSQL decision memo
+- Added `docs/research/turso-libsql-decision.md`.
+- Decision: keep SQLite/`aiosqlite` as Dispatch's default local backend for the
+  next release; keep Turso/libSQL as a future optional backend candidate behind a
+  small storage boundary.
+- Evidence cited: local keyword search works over existing SQLite tables;
+  ingestion baselines did not show an urgent storage-engine cliff; Turso/libSQL
+  compatibility is promising but still synchronous from Dispatch's perspective
+  and lacks full registry behavior-suite parity.
+- Added explicit reopen conditions and guardrails for credentials, remote sync,
+  raw payloads, embeddings, and packaging.
+- Local review clean with no P0/P1/P2 findings.
 ```
 
 ## Goal Amendments
@@ -74,6 +87,7 @@ Status: active
 | --- | --- | --- | --- | --- | --- | --- |
 | milestone-1 | DIS-23 local managed-history search | `.agents/goals/2026-07-02-search-baselines-turso/tmp/reviews/milestone-1-local-search.json` | 5 | clean | 0 | One P2 mypy/test-interface finding fixed before commit; no open P0-P2. |
 | milestone-2 | DIS-26 event-ingestion baselines | `.agents/goals/2026-07-02-search-baselines-turso/tmp/reviews/milestone-2-ingestion-baselines.json` | 5 | clean | 0 | Two P3 evidence-shape issues fixed locally; no open P0-P2. |
+| milestone-3 | DIS-27 Turso/libSQL decision memo | `.agents/goals/2026-07-02-search-baselines-turso/tmp/reviews/milestone-3-turso-decision.json` | 5 | clean | 0 | Explicit keep-SQLite-default recommendation; no open P0-P2. |
 
 ## Verification Log
 
@@ -92,6 +106,7 @@ Status: active
 | `uv run python scripts/measure_event_ingestion.py --events 500 --lanes 4 --concurrency 8 --json` | DIS-26 baseline | pass | 550.824 events/s; 115 reader samples; exact totals. |
 | `uv run python scripts/measure_event_ingestion.py --events 500 --lanes 4 --concurrency 8 --no-reader --json` | DIS-26 baseline | pass | 716.953 events/s; no reader samples; exact totals. |
 | `uv run python scripts/measure_event_ingestion.py --events 250 --lanes 4 --concurrency 8 --raw-retained --json` | DIS-26 baseline | pass | 546.005 events/s; 58 reader samples; exact totals. |
+| `git diff --check` | DIS-27 docs review | pass | No whitespace errors. |
 
 ## Tracker / PR Log
 
@@ -99,7 +114,7 @@ Status: active
 | --- | --- | --- |
 | DIS-23 | local implementation ready | Local keyword-search substrate and retention/embedding policy complete locally; PR pending. |
 | DIS-26 | local implementation ready | Baseline note complete locally; PR pending. |
-| DIS-27 | todo | Turso/libSQL decision memo. |
+| DIS-27 | local implementation ready | Decision memo complete locally; PR pending. |
 
 ## Final State
 

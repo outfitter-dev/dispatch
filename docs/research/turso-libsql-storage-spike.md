@@ -3,6 +3,8 @@
 Date: 2026-07-02
 Status: current recommendation
 
+Follow-up decision: [Turso/libSQL Decision Memo](turso-libsql-decision.md).
+
 ## Summary
 
 Dispatch should not move its default registry/history store from SQLite/`aiosqlite` to Turso/libSQL yet.
