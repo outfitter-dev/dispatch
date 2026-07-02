@@ -2173,6 +2173,84 @@ async def test_search_can_filter_unmanaged_threads(store: Registry) -> None:
     assert out.matches[0].source == "unmanaged"
 
 
+async def test_local_search_reads_indexed_managed_history_without_app_server_search(
+    store: Registry, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    lane = await store.add_lane(id="L1", handle="@local", source="own", cwd=str(repo))
+    await store.upsert_thread_turn(
+        thread_turn(lane=lane.id, provider_thread_id=lane.id, turn_id="turn-1")
+    )
+    await store.upsert_thread_item(
+        thread_item(
+            lane=lane.id,
+            provider_thread_id=lane.id,
+            turn_id="turn-1",
+            item_id="item-1",
+        ).model_copy(update={"text": "local needle lives in normalized history"}),
+        refs=[
+            thread_item_ref(
+                provider_thread_id=lane.id,
+                item_id="item-1",
+                ref_type="file",
+                ref_value="src/local.py",
+            )
+        ],
+    )
+
+    out = await handlers.search(SearchInput(query="needle", local=True, repo=str(repo)), ctx)
+
+    assert out.experimental is False
+    assert out.scanned == 1
+    assert [match.ref for match in out.matches] == [lane.ref]
+    assert out.matches[0].handle == "@local"
+    assert "local needle lives" in out.matches[0].snippet
+    assert "src/local.py" in out.matches[0].snippet
+    assert not any(name == "thread_search" for name, _ in client.calls)
+    assert not any(name == "thread_read" for name, _ in client.calls)
+
+
+async def test_local_search_rejects_unmanaged_filter(store: Registry) -> None:
+    ctx = make_ctx(store)
+
+    with pytest.raises(ValidationError, match="local search only includes managed"):
+        await handlers.search(SearchInput(query="needle", local=True, unmanaged=True), ctx)
+
+
+async def test_local_search_archived_filter_matches_app_server_semantics(
+    store: Registry,
+) -> None:
+    ctx = make_ctx(store)
+    active = await store.add_lane(id="active", handle="@active", source="own")
+    archived = await store.add_lane(
+        id="archived", handle="@archived", source="own", status="archived"
+    )
+    for lane in (active, archived):
+        await store.upsert_thread_turn(
+            thread_turn(lane=lane.id, provider_thread_id=lane.id, turn_id=f"{lane.id}-turn")
+        )
+        await store.upsert_thread_item(
+            thread_item(
+                lane=lane.id,
+                provider_thread_id=lane.id,
+                turn_id=f"{lane.id}-turn",
+                item_id=f"{lane.id}-item",
+            ).model_copy(update={"text": "needle in local history"})
+        )
+
+    active_out = await handlers.search(SearchInput(query="needle", local=True), ctx)
+    archived_out = await handlers.search(
+        SearchInput(query="needle", local=True, archived=True), ctx
+    )
+
+    assert [match.ref for match in active_out.matches] == [active.ref]
+    assert [match.ref for match in archived_out.matches] == [archived.ref]
+
+
 async def test_lane_search_reads_one_thread_transcript(store: Registry) -> None:
     client = FakeLaneClient()
     client.read_result = {

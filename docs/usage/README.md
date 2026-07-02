@@ -661,6 +661,7 @@ Use `search` to search Codex thread history without first attaching every thread
 
 ```bash
 uv run dispatch search "schema drift"
+uv run dispatch search "schema drift" --local
 uv run dispatch search "schema drift" --managed
 uv run dispatch search "schema drift" --unmanaged
 uv run dispatch search "schema drift" --thread <dispatch-ref>
@@ -670,10 +671,14 @@ uv run dispatch search "schema drift" --since 2026-06-01 --until 2026-06-05
 ```
 
 Broad search uses the App Server experimental `thread/search` primitive, then applies
-dispatch-side filters for managed/unmanaged state, repo/directory, and date bounds. Lane
-focused search reads that one thread with `thread/read(includeTurns:true)` and performs a
-local substring scan. Date bounds accept ISO dates or datetimes and default to filtering
-`updated_at`; use `--date-field created_at` when creation time matters.
+dispatch-side filters for managed/unmanaged state, repo/directory, and date bounds.
+Use `--local` to search Dispatch's normalized local history index for managed threads
+without calling App Server search. Local search only includes threads that Dispatch
+manages and has indexed through sync, history, tail, watch, live events, or other capture
+paths; it rejects `--unmanaged`. Lane-focused search without `--local` reads that one
+thread with `thread/read(includeTurns:true)` and performs a local substring scan. Date
+bounds accept ISO dates or datetimes and default to filtering lane `updated_at`; use
+`--date-field created_at` when creation time matters.
 
 ## Discover Sessions
 

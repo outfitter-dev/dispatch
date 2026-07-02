@@ -29,6 +29,7 @@ dispatch owns one `codex app-server` subprocess (stdio JSONL, shared `~/.codex`)
 ## Project docs
 
 - `docs/development/design.md` — approved design spec.
+- `docs/development/semantic-history-search.md` — local history search and future embedding policy.
 - `docs/adrs/` — architecture decision records (start from `template.md`; index in `README.md`).
 - `docs/research/` — App Server verification + orchestration thesis (the findings dispatch is built on).
 - `docs/usage/` — operator docs for the CLI, MCP, triggers, and plugin setup.

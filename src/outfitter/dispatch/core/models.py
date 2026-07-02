@@ -205,6 +205,10 @@ class LaneRenameInput(BaseModel):
 
 class SearchInput(BaseModel):
     query: str = Field(description="Substring/full-text query for Codex thread search.")
+    local: bool = Field(
+        default=False,
+        description="Search Dispatch's local managed-history index instead of App Server search.",
+    )
     lane: str | None = Field(default=None, description="Limit search to one thread selector.")
     directory: str | None = Field(
         default=None, description="Only include threads whose cwd is inside this directory."
@@ -228,7 +232,7 @@ class SearchInput(BaseModel):
     max_scan: int = Field(
         default=200,
         ge=1,
-        description="Max App Server matches to scan while applying dispatch-side filters.",
+        description="Max search matches/items to scan while applying dispatch-side filters.",
     )
 
 

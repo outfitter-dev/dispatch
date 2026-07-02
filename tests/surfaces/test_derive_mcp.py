@@ -55,6 +55,10 @@ def test_action_schema_and_annotations_from_op() -> None:
     assert lane_read.annotations is not None
     assert lane_read.annotations.readOnlyHint is True
     assert lane_read.annotations.idempotentHint is True
+    search_schema = next(
+        s for s in lane_read.inputSchema["oneOf"] if s["properties"]["op"]["const"] == "search"
+    )
+    assert "local" in search_schema["properties"]
     assert {s["properties"]["op"]["const"] for s in lane_read.inputSchema["oneOf"]} >= {
         "transcript",
         "watch",

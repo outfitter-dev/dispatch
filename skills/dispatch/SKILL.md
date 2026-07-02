@@ -327,6 +327,7 @@ Use `search` before attaching when you need to find the right existing thread:
 
 ```bash
 uv run dispatch search "schema drift"
+uv run dispatch search "schema drift" --local
 uv run dispatch search "schema drift" --managed
 uv run dispatch search "schema drift" --unmanaged
 uv run dispatch search "schema drift" --thread <dispatch-ref>
@@ -336,10 +337,12 @@ uv run dispatch search "schema drift" --since 2026-06-01 --until 2026-06-05
 ```
 
 Broad search uses experimental App Server `thread/search` plus dispatch-side
-filters. Lane-focused search reads one thread transcript and scans locally.
-Sync is separate for managed lanes: it refreshes dispatch's local index and
-does not grant write authority. For a raw unmanaged Codex id, `sync` is also the
-explicit registration step.
+filters. Use `--local` when you want Dispatch's normalized local managed-history
+index instead; it does not call App Server search and rejects `--unmanaged`.
+Lane-focused search without `--local` reads one thread transcript and scans
+locally. Sync is separate for managed lanes: it refreshes dispatch's local index
+and does not grant write authority. For a raw unmanaged Codex id, `sync` is also
+the explicit registration step.
 
 ## Message Verbs
 

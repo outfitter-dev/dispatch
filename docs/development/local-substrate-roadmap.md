@@ -52,6 +52,8 @@ from Slack, Linear, another laptop, or a remote machine.
   proves representative registry/history SQL can run on SQLite, `pyturso`, and
   `libsql` after a small portability hardening, while keeping SQLite as the
   default.
+- [Semantic History Search](semantic-history-search.md) defines the current
+  local keyword-search slice plus the retention and embedding boundary.
 - [Dispatch Cloud Gateway](cloud-gateway.md) sketches the always-on ingress and
   routing plane.
 
@@ -112,6 +114,11 @@ milestone is meant to find before a storage-engine decision.
 ### 3. Semantic Search
 
 Semantic search should index derived artifacts, not raw logs by default.
+
+The first completed slice is intentionally pre-semantic: `dispatch search --local`
+queries the normalized local `thread_items` index for managed threads and leaves
+broad App Server search as the default. This proves the local search contract, filters,
+and retention boundaries before introducing embeddings or vector storage.
 
 Good initial index candidates:
 
@@ -228,8 +235,10 @@ Work in milestones, with review after each:
 
 4. Semantic search substrate
    - Define artifacts, retention, and exclusion policy.
-   - Add a fake-data prototype only if it does not require real embeddings or
-     secrets.
+   - Add the first local indexed keyword-search path over normalized managed
+     history.
+   - Prototype embeddings only if it does not require paid calls, real transcript
+     embedding, or secrets.
 
 5. Multi-machine sync design
    - Update ADR-0013/0014 or add a focused note that classifies selected state,

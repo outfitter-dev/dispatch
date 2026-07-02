@@ -219,6 +219,7 @@ def test_cli_composed_routes_invoke_canonical_ops() -> None:
             "search",
             {
                 "query": "needle",
+                "local": False,
                 "lane": None,
                 "directory": None,
                 "repo": None,
