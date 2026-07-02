@@ -20,6 +20,7 @@
 - `docs/adrs/0018-top-level-thread-actions-and-search.md`
 - `docs/adrs/0023-provider-event-log-and-history-index.md`
 - `docs/research/event-ingestion-baselines.md`
+- `docs/research/turso-libsql-decision.md`
 - `docs/research/turso-libsql-storage-spike.md`
 - `src/outfitter/dispatch/core/handlers.py`
 - `src/outfitter/dispatch/core/models.py`
