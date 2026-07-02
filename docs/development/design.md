@@ -182,6 +182,18 @@ The client supports the full responder loop. v1 surfaces `waiting_on_approval` a
 - `model_catalog`: provider/model rows refreshed from App Server `model/list`, including reasoning efforts, service tiers, aliases, and first/last seen timestamps.
 - `lane_model_settings`: per-lane model/provider/reasoning/service-tier provenance, distinguishing Dispatch-authored settings from configured defaults and observed metadata.
 - `lane_runtime_settings`: per-lane turn-start defaults such as sandbox, approval policy, reviewer, model/effort/tier, structured output schema, and personality; follow-up sends reuse these settings.
+- `provider_events`: append-only provider event records, starting with Codex
+  `LaneEvent` projections from the reactor.
+- `thread_turns`: normalized provider turn lifecycle facts backfilled from live
+  events and `thread/read(includeTurns:true)`.
+- `thread_items`: normalized transcript/history items, with compact retained
+  provider payloads for inspected App Server history.
+- `thread_item_refs`: extracted query refs for tools, file paths, related
+  threads, and similar indexed references.
+- `message_receipts`: Dispatch-originated message lifecycle records for direct
+  and queued sends.
+- `lane_runtime_state`: compact reducer state fed by provider events for future
+  DB-backed status, subscriptions, and watch surfaces.
 - `queued_messages`: lane, text, delivery status, timestamps, and error for durable `send --queue` delivery; rows are tied to lanes and cascade with lane deletion.
 - `triggers`: id, name, lane selector, when-spec (json), action-spec (json), guard-spec (json), enabled, last_fired_at.
 - `actions_log`: id, ts, lane, op, trigger_id?, request/decision, outcome — full audit of every send/action.

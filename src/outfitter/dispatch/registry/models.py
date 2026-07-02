@@ -19,9 +19,22 @@ from outfitter.dispatch.client.models import (
 LaneSource = Literal["own", "attached"]
 LaneStatus = Literal["idle", "busy", "waiting_approval", "archived", "error", "unknown"]
 TurnRuntimeStatus = Literal["started", "completed", "failed"]
+ProviderTurnStatus = Literal["started", "completed", "failed", "unknown"]
 SyncState = Literal["unknown", "metadata", "partial", "complete", "error"]
 QueuedMessageStatus = Literal["pending", "sending", "sent", "error"]
+MessageReceiptStatus = Literal["created", "sent", "accepted", "completed", "failed", "timed_out"]
 ServiceTierSource = Literal["dispatch", "configured_default", "observed", "unknown"]
+InboxMessageState = Literal["pending", "acked", "archived"]
+InboxMessageKind = Literal[
+    "subscription_update", "direct_message", "system_notice", "trigger_result", "reminder"
+]
+SubscriptionWhen = Literal[
+    "done", "completed", "failed", "needs-attention", "approval", "idle", "activity"
+]
+SubscriptionDelivery = Literal["turn", "inbox"]
+SubscriptionDeliverPolicy = Literal["idle", "now"]
+SubscriptionAckPolicy = Literal["auto", "manual"]
+SubscriptionState = Literal["active", "done", "paused"]
 
 
 class ServiceTierEntry(BaseModel):
@@ -73,6 +86,106 @@ class LaneRuntimeSettings(BaseModel):
     updated_at: str
 
 
+class ProviderEvent(BaseModel):
+    """Append-only provider lifecycle event captured at the registry boundary."""
+
+    id: int | None = None
+    provider: str
+    provider_thread_id: str
+    lane: str | None = None
+    event_type: str
+    provider_event_id: str | None = None
+    provider_turn_id: str | None = None
+    provider_item_id: str | None = None
+    correlation_id: str | None = None
+    provider_ts: str | None = None
+    received_at: str
+    summary: dict[str, object] = Field(default_factory=dict)
+    payload: dict[str, object] | None = None
+    raw_retained: bool = False
+
+
+class ThreadTurn(BaseModel):
+    """Normalized turn lifecycle facts derived from provider events/history."""
+
+    provider: str
+    provider_thread_id: str
+    turn_id: str
+    lane: str | None = None
+    status: ProviderTurnStatus = "unknown"
+    started_at: str | None = None
+    completed_at: str | None = None
+    failed_at: str | None = None
+    error: str | None = None
+    completion_source: str | None = None
+    updated_at: str
+
+
+class ThreadItem(BaseModel):
+    """Normalized history item indexed from provider transcript/history data."""
+
+    provider: str
+    provider_thread_id: str
+    item_id: str
+    lane: str | None = None
+    turn_id: str | None = None
+    item_type: str
+    role: str | None = None
+    text: str | None = None
+    tool: str | None = None
+    created_at: str | None = None
+    inserted_at: str
+    payload: dict[str, object] | None = None
+    raw_retained: bool = False
+
+
+class ThreadItemRef(BaseModel):
+    """Queryable reference extracted from a normalized history item."""
+
+    provider: str
+    provider_thread_id: str
+    item_id: str
+    ref_type: str
+    ref_value: str
+
+
+class MessageReceipt(BaseModel):
+    """Lifecycle of a Dispatch-originated message as providers accept/finish it."""
+
+    id: int | None = None
+    lane: str | None = None
+    queued_message_id: int | None = None
+    provider: str
+    provider_thread_id: str
+    dispatch_message_id: str | None = None
+    status: MessageReceiptStatus = "created"
+    turn_id: str | None = None
+    error: str | None = None
+    created_at: str
+    sent_at: str | None = None
+    accepted_at: str | None = None
+    completed_at: str | None = None
+    failed_at: str | None = None
+    updated_at: str
+
+
+class LaneRuntimeState(BaseModel):
+    """Compact derived runtime state fed by provider events and reducers."""
+
+    lane: str
+    provider: str
+    provider_thread_id: str
+    status: LaneStatus = "unknown"
+    active_turn_id: str | None = None
+    latest_turn_id: str | None = None
+    latest_turn_status: TurnRuntimeStatus | None = None
+    needs_attention: bool = False
+    attention_kind: str | None = None
+    attention_detail: str | None = None
+    updated_at: str
+    last_event_at: str | None = None
+
+
 class Lane(BaseModel):
     """A managed Codex thread — one row of the ``lanes`` table."""
 
@@ -119,6 +232,45 @@ class QueuedMessage(BaseModel):
     created_at: datetime
     updated_at: datetime
     error: str | None = None
+
+
+class InboxMessage(BaseModel):
+    """A durable recipient-facing coordination message."""
+
+    id: int
+    recipient_lane: str
+    source_lane: str | None = None
+    subscription_id: str | None = None
+    kind: InboxMessageKind = "system_notice"
+    subject: str
+    body: str
+    payload: dict[str, object] = Field(default_factory=dict)
+    state: InboxMessageState = "pending"
+    delivery: SubscriptionDelivery = "inbox"
+    queued_message_id: int | None = None
+    created_at: datetime
+    delivered_at: datetime | None = None
+    acked_at: datetime | None = None
+
+
+class Subscription(BaseModel):
+    """A durable event-to-inbox binding."""
+
+    id: str
+    target_lane: str
+    subscriber_lane: str
+    when: SubscriptionWhen = "done"
+    delivery: SubscriptionDelivery = "turn"
+    deliver: SubscriptionDeliverPolicy = "idle"
+    tail: int = Field(default=1, ge=0)
+    once: bool = True
+    ack: SubscriptionAckPolicy = "auto"
+    attribution: bool = True
+    state: SubscriptionState = "active"
+    created_at: datetime
+    updated_at: datetime
+    last_matched_at: datetime | None = None
+    last_inbox_message_id: int | None = None
 
 
 class LaneSync(BaseModel):

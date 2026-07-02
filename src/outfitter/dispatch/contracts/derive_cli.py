@@ -45,6 +45,9 @@ _CUSTOM_ROUTES: tuple[CliRoute, ...] = (
     CliRoute(("search",), "search", ("query",)),
     CliRoute(("history",), "history"),
     CliRoute(("list",), "roster"),
+    CliRoute(("subscribe",), "subscribe", ("target", "spec")),
+    CliRoute(("inbox", "list"), "inbox-list"),
+    CliRoute(("inbox", "ack"), "inbox-ack", ("id",)),
     CliRoute(("trigger", "list"), "trigger-list"),
     CliRoute(("goal", "set"), "goal-set", ("lane", "objective")),
 )
@@ -59,6 +62,9 @@ _SIMPLE_ROUTES: tuple[CliRoute, ...] = (
     CliRoute(("archive",), "archive", ("target",)),
     CliRoute(("restore",), "restore", ("target",)),
     CliRoute(("models",), "models"),
+    CliRoute(("inbox", "read"), "inbox-read", ("id",)),
+    CliRoute(("subscriptions",), "subscription-list"),
+    CliRoute(("unsubscribe",), "unsubscribe", ("id",)),
     CliRoute(("goal", "status"), "goal-get", ("lane",)),
     CliRoute(("goal", "clear"), "goal-clear", ("lane",)),
     CliRoute(("trigger", "add"), "trigger-add"),
@@ -101,7 +107,12 @@ def derive_cli(
     renderer = render if render is not None else _default_render
     groups: dict[str, typer.Typer] = {}
 
-    _register_command(app, ("new",), _new_command(registry, invoke, renderer))
+    _register_command(
+        app,
+        ("new",),
+        _new_command(registry, invoke, renderer),
+        context_settings={"allow_extra_args": True},
+    )
     _register_command(app, ("send",), _send_command(registry.get("send"), invoke, renderer))
     _register_command(app, ("stop",), _stop_command(registry.get("stop"), invoke, renderer))
     _register_command(app, ("search",), _search_command(registry.get("search"), invoke, renderer))
@@ -109,6 +120,23 @@ def derive_cli(
         app, ("history",), _history_command(registry.get("history"), invoke, renderer)
     )
     _register_command(app, ("list",), _list_command(registry, invoke, renderer))
+    _register_command(
+        app,
+        ("subscribe",),
+        _subscribe_command(registry.get("subscribe"), invoke, renderer),
+    )
+    _register_command(
+        app,
+        ("inbox", "list"),
+        _inbox_list_command(registry.get("inbox-list"), invoke, renderer),
+        groups,
+    )
+    _register_command(
+        app,
+        ("inbox", "ack"),
+        _inbox_ack_command(registry.get("inbox-ack"), invoke, renderer),
+        groups,
+    )
     _register_command(
         app,
         ("trigger", "list"),
@@ -138,9 +166,12 @@ def _register_command(
     path: tuple[str, ...],
     callback: Callable[..., None],
     groups: dict[str, typer.Typer] | None = None,
+    context_settings: dict[str, object] | None = None,
 ) -> None:
     if len(path) == 1:
-        app.command(name=path[0], help=callback.__doc__)(callback)
+        app.command(name=path[0], help=callback.__doc__, context_settings=context_settings)(
+            callback
+        )
         return
     group_name, command_name = path
     if groups is None:
@@ -150,7 +181,9 @@ def _register_command(
         group = typer.Typer(no_args_is_help=True, add_completion=False)
         groups[group_name] = group
         app.add_typer(group, name=group_name)
-    group.command(name=command_name, help=callback.__doc__)(callback)
+    group.command(name=command_name, help=callback.__doc__, context_settings=context_settings)(
+        callback
+    )
 
 
 def _op_command(
@@ -256,6 +289,20 @@ def _new_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Cal
     new_op = registry.get("new")
     plan_op = registry.get("new-plan")
     parameters = _parameters(new_op)
+    parameters = [_new_subscribe_parameter(param) for param in parameters]
+    parameters.insert(
+        len(parameters) - 1,  # before the trailing --json option
+        inspect.Parameter(
+            "subscribe_spec",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=typer.Option(
+                None,
+                "--subscribe-spec",
+                help="Explicit compact subscription spec for --subscribe.",
+            ),
+            annotation=str | None,
+        ),
+    )
     parameters.insert(
         len(parameters) - 1,  # before the trailing --json option
         inspect.Parameter(
@@ -267,12 +314,19 @@ def _new_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Cal
             annotation=bool,
         ),
     )
+    parameters.insert(
+        0,
+        inspect.Parameter("ctx", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=typer.Context),
+    )
 
-    def command(**kwargs: object) -> None:
+    def command(ctx: typer.Context, **kwargs: object) -> None:
         json_requested = bool(kwargs.pop("json", False))
         dry_run = bool(kwargs.pop("dry_run", False))
+        _resolve_new_subscribe(ctx, kwargs)
         _resolve_new_stdin(kwargs)
         _absolutize_new_paths(kwargs)
+        if kwargs.get("subscribe") is not None:
+            kwargs["caller_thread_id"] = os.environ.get("CODEX_THREAD_ID")
         op = plan_op if dry_run else new_op
         result = invoke(op.id, kwargs)
         render(op, result)
@@ -282,6 +336,47 @@ def _new_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Cal
     command.__name__ = "new"
     command.__doc__ = new_op.summary
     return command
+
+
+def _new_subscribe_parameter(param: inspect.Parameter) -> inspect.Parameter:
+    if param.name != "subscribe":
+        return param
+    return inspect.Parameter(
+        "subscribe",
+        inspect.Parameter.KEYWORD_ONLY,
+        default=typer.Option(
+            False,
+            "--subscribe",
+            help="Create a default subscription to the new lane; optionally followed by a spec.",
+        ),
+        annotation=bool,
+    )
+
+
+def _resolve_new_subscribe(ctx: typer.Context, kwargs: dict[str, object]) -> None:
+    subscribe = bool(kwargs.pop("subscribe", False))
+    subscribe_spec = kwargs.pop("subscribe_spec", None)
+    extras = list(ctx.args)
+    if extras:
+        if not subscribe:
+            typer.secho(
+                f"dispatch: unexpected argument(s): {' '.join(extras)}",
+                fg="red",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        if len(extras) > 1:
+            typer.secho("dispatch: provide at most one --subscribe spec", fg="red", err=True)
+            raise typer.Exit(code=2)
+        if subscribe_spec is not None:
+            typer.secho(
+                "dispatch: use either --subscribe <spec> or --subscribe-spec, not both",
+                fg="red",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        subscribe_spec = extras[0]
+    kwargs["subscribe"] = (subscribe_spec or "default") if subscribe or subscribe_spec else None
 
 
 def _resolve_new_stdin(kwargs: dict[str, object]) -> None:
@@ -330,7 +425,10 @@ def _send_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., No
         ] = False,
         intro: Annotated[
             bool,
-            typer.Option("--intro", help="Prepend dispatch sender intro from CODEX_THREAD_ID."),
+            typer.Option(
+                "--intro",
+                help="Append dispatch attribution and reply hint from CODEX_THREAD_ID.",
+            ),
         ] = False,
         json: Annotated[
             bool, typer.Option("--json", help="Render machine-readable JSON output.")
@@ -591,6 +689,124 @@ def _list_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Ca
         _ignore_json(json)
 
     command.__doc__ = "List managed threads, or unmanaged discoverable sessions."
+    return command
+
+
+def _subscribe_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., None]:
+    def command(
+        target: Annotated[str, typer.Argument(help="Target thread selector.")],
+        spec: Annotated[
+            str | None,
+            typer.Argument(help="Compact spec: when:done,to:self,delivery:turn."),
+        ] = None,
+        when: Annotated[str | None, typer.Option("--when", help="Subscription condition.")] = None,
+        to: Annotated[
+            str | None, typer.Option("--to", help="Subscriber thread selector or self.")
+        ] = None,
+        delivery: Annotated[
+            str | None, typer.Option("--delivery", help="Delivery mode: turn or inbox.")
+        ] = None,
+        deliver: Annotated[
+            str | None, typer.Option("--deliver", help="Delivery policy: idle or now.")
+        ] = None,
+        tail: Annotated[int | None, typer.Option("--tail", help="Latest messages to include.")] = (
+            None
+        ),
+        once: Annotated[
+            bool | None, typer.Option("--once/--repeat", help="Complete after first match.")
+        ] = None,
+        ack: Annotated[
+            str | None, typer.Option("--ack", help="Acknowledgement policy: auto or manual.")
+        ] = None,
+        attribution: Annotated[
+            bool | None,
+            typer.Option(
+                "--attribution/--no-attribution",
+                help="Append dispatch attribution to turn-delivered subscription updates.",
+            ),
+        ] = None,
+        json: Annotated[
+            bool, typer.Option("--json", help="Render machine-readable JSON output.")
+        ] = False,
+    ) -> None:
+        params: dict[str, object] = {
+            "target": target,
+            "spec": spec,
+            "when": when,
+            "to": to,
+            "delivery": delivery,
+            "deliver": deliver,
+            "tail": tail,
+            "once": once,
+            "ack": ack,
+            "attribution": attribution,
+            "caller_thread_id": os.environ.get("CODEX_THREAD_ID"),
+        }
+        result = invoke(op.id, params)
+        render(op, result)
+        _ignore_json(json)
+
+    command.__doc__ = op.summary
+    return command
+
+
+def _inbox_list_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., None]:
+    def command(
+        lane: Annotated[
+            str | None,
+            typer.Option("--lane", "--thread", help="Recipient thread selector."),
+        ] = None,
+        state: Annotated[str | None, typer.Option("--state", help="Inbox state filter.")] = (
+            "pending"
+        ),
+        kind: Annotated[str | None, typer.Option("--kind", help="Inbox message kind.")] = None,
+        limit: Annotated[int, typer.Option("--limit", help="Max messages to return.")] = 50,
+        json: Annotated[
+            bool, typer.Option("--json", help="Render machine-readable JSON output.")
+        ] = False,
+    ) -> None:
+        result = invoke(
+            op.id,
+            {
+                "lane": lane,
+                "state": state,
+                "kind": kind,
+                "limit": limit,
+                "caller_thread_id": os.environ.get("CODEX_THREAD_ID"),
+            },
+        )
+        render(op, result)
+        _ignore_json(json)
+
+    command.__doc__ = op.summary
+    return command
+
+
+def _inbox_ack_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., None]:
+    def command(
+        id: Annotated[int | None, typer.Argument(help="Inbox message id.")] = None,
+        all: Annotated[bool, typer.Option("--all", help="Ack all pending messages.")] = False,
+        lane: Annotated[
+            str | None,
+            typer.Option("--lane", "--thread", help="Recipient thread selector for --all."),
+        ] = None,
+        json: Annotated[
+            bool, typer.Option("--json", help="Render machine-readable JSON output.")
+        ] = False,
+    ) -> None:
+        result = invoke(
+            op.id,
+            {
+                "id": id,
+                "all": all,
+                "lane": lane,
+                "caller_thread_id": os.environ.get("CODEX_THREAD_ID"),
+            },
+        )
+        render(op, result)
+        _ignore_json(json)
+
+    command.__doc__ = op.summary
     return command
 
 

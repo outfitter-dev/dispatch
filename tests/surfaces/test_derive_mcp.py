@@ -10,6 +10,9 @@ def test_grouped_tools_are_agent_oriented_not_one_per_op() -> None:
     projection = derive_mcp_projection(REGISTRY)
     assert [t.name for t in projection.tools] == [
         "dispatch_thread_read",
+        "dispatch_inbox_read",
+        "dispatch_inbox_write",
+        "dispatch_inbox_destroy",
         "dispatch_thread_write",
         "dispatch_thread_destroy",
         "dispatch_trigger_read",

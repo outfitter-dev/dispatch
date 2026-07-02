@@ -1,0 +1,72 @@
+{
+  "description": "CLI smoke cases for dispatch new subscription spellings.",
+  "env": {
+    "CODEX_THREAD_ID": "launcher-thread"
+  },
+  "cases": [
+    {
+      "name": "bare subscribe defaults",
+      "argv": ["new", "--name", "worker", "--cwd", "/work", "--subscribe"],
+      "op": "new",
+      "subscribe": "default",
+      "caller_thread_id": "launcher-thread"
+    },
+    {
+      "name": "inline compact subscribe spec",
+      "argv": [
+        "new",
+        "--name",
+        "worker",
+        "--cwd",
+        "/work",
+        "--subscribe",
+        "when:done,delivery:inbox"
+      ],
+      "op": "new",
+      "subscribe": "when:done,delivery:inbox",
+      "caller_thread_id": "launcher-thread"
+    },
+    {
+      "name": "explicit subscribe spec option",
+      "argv": [
+        "new",
+        "--name",
+        "worker",
+        "--cwd",
+        "/work",
+        "--subscribe-spec",
+        "when:approval,delivery:inbox"
+      ],
+      "op": "new",
+      "subscribe": "when:approval,delivery:inbox",
+      "caller_thread_id": "launcher-thread"
+    },
+    {
+      "name": "dry run keeps subscribe defaults",
+      "argv": ["new", "--name", "worker", "--cwd", "/work", "--subscribe", "--dry-run"],
+      "op": "new-plan",
+      "subscribe": "default",
+      "caller_thread_id": "launcher-thread"
+    }
+  ],
+  "rejects": [
+    {
+      "name": "stray spec without subscribe",
+      "argv": ["new", "--name", "worker", "when:done"],
+      "stderr_contains": "unexpected argument"
+    },
+    {
+      "name": "ambiguous dual specs",
+      "argv": [
+        "new",
+        "--name",
+        "worker",
+        "--subscribe",
+        "when:done",
+        "--subscribe-spec",
+        "when:failed"
+      ],
+      "stderr_contains": "either --subscribe <spec> or --subscribe-spec"
+    }
+  ]
+}

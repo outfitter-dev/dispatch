@@ -20,22 +20,30 @@ from .models import (
     ActionAdapter,
     ActionRecord,
     Guard,
+    InboxMessage,
     Lane,
     LaneModelSettings,
     LaneRuntimeSettings,
+    LaneRuntimeState,
     LaneSource,
     LaneStatus,
     LaneSync,
+    MessageReceipt,
     ModelCatalogEntry,
+    ProviderEvent,
     QueuedMessage,
     ServiceTierEntry,
+    Subscription,
+    ThreadItem,
+    ThreadItemRef,
+    ThreadTurn,
     Trigger,
     WhenAdapter,
 )
 from .refs import BASE58BTC_ALPHABET, CODEX_REF_SOURCE, codex_ref_payload, make_ref
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 11
 
 _QUEUED_MESSAGES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS queued_messages (
@@ -46,6 +54,128 @@ CREATE TABLE IF NOT EXISTS queued_messages (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     error TEXT,
+    FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
+);
+"""
+
+_PROVIDER_HISTORY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS provider_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL,
+    provider_thread_id TEXT NOT NULL,
+    lane TEXT,
+    event_type TEXT NOT NULL,
+    provider_event_id TEXT,
+    provider_turn_id TEXT,
+    provider_item_id TEXT,
+    correlation_id TEXT,
+    provider_ts TEXT,
+    received_at TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '{}',
+    payload TEXT,
+    raw_retained INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE SET NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_events_provider_event_id
+ON provider_events(provider, provider_event_id)
+WHERE provider_event_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_provider_events_thread_received
+ON provider_events(provider, provider_thread_id, received_at);
+CREATE INDEX IF NOT EXISTS idx_provider_events_lane_received
+ON provider_events(lane, received_at);
+
+CREATE TABLE IF NOT EXISTS thread_turns (
+    provider TEXT NOT NULL,
+    provider_thread_id TEXT NOT NULL,
+    turn_id TEXT NOT NULL,
+    lane TEXT,
+    status TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    failed_at TEXT,
+    error TEXT,
+    completion_source TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(provider, provider_thread_id, turn_id),
+    FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thread_turns_lane_updated
+ON thread_turns(lane, updated_at);
+
+CREATE TABLE IF NOT EXISTS thread_items (
+    provider TEXT NOT NULL,
+    provider_thread_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    lane TEXT,
+    turn_id TEXT,
+    item_type TEXT NOT NULL,
+    role TEXT,
+    text TEXT,
+    tool TEXT,
+    created_at TEXT,
+    inserted_at TEXT NOT NULL,
+    payload TEXT,
+    raw_retained INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(provider, provider_thread_id, item_id),
+    FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thread_items_lane_inserted
+ON thread_items(lane, inserted_at);
+CREATE INDEX IF NOT EXISTS idx_thread_items_turn
+ON thread_items(provider, provider_thread_id, turn_id);
+
+CREATE TABLE IF NOT EXISTS thread_item_refs (
+    provider TEXT NOT NULL,
+    provider_thread_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    ref_type TEXT NOT NULL,
+    ref_value TEXT NOT NULL,
+    PRIMARY KEY(provider, provider_thread_id, item_id, ref_type, ref_value),
+    FOREIGN KEY(provider, provider_thread_id, item_id)
+        REFERENCES thread_items(provider, provider_thread_id, item_id)
+        ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_thread_item_refs_lookup
+ON thread_item_refs(ref_type, ref_value);
+
+CREATE TABLE IF NOT EXISTS message_receipts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lane TEXT,
+    queued_message_id INTEGER,
+    provider TEXT NOT NULL,
+    provider_thread_id TEXT NOT NULL,
+    dispatch_message_id TEXT,
+    status TEXT NOT NULL,
+    turn_id TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    sent_at TEXT,
+    accepted_at TEXT,
+    completed_at TEXT,
+    failed_at TEXT,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE SET NULL,
+    FOREIGN KEY(queued_message_id) REFERENCES queued_messages(id) ON DELETE SET NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_message_receipts_dispatch_message_id
+ON message_receipts(dispatch_message_id)
+WHERE dispatch_message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_message_receipts_lane_updated
+ON message_receipts(lane, updated_at);
+
+CREATE TABLE IF NOT EXISTS lane_runtime_state (
+    lane TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    provider_thread_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'unknown',
+    active_turn_id TEXT,
+    latest_turn_id TEXT,
+    latest_turn_status TEXT,
+    needs_attention INTEGER NOT NULL DEFAULT 0,
+    attention_kind TEXT,
+    attention_detail TEXT,
+    updated_at TEXT NOT NULL,
+    last_event_at TEXT,
     FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
 );
 """
@@ -172,6 +302,46 @@ CREATE TABLE IF NOT EXISTS lane_runtime_settings (
     updated_at TEXT NOT NULL,
     FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS inbox_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient_lane TEXT NOT NULL,
+    source_lane TEXT,
+    subscription_id TEXT,
+    kind TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{{}}',
+    state TEXT NOT NULL DEFAULT 'pending',
+    delivery TEXT NOT NULL DEFAULT 'inbox',
+    queued_message_id INTEGER,
+    created_at TEXT NOT NULL,
+    delivered_at TEXT,
+    acked_at TEXT,
+    FOREIGN KEY(recipient_lane) REFERENCES lanes(id) ON DELETE CASCADE,
+    FOREIGN KEY(source_lane) REFERENCES lanes(id) ON DELETE SET NULL,
+    FOREIGN KEY(queued_message_id) REFERENCES queued_messages(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS subscriptions (
+    id TEXT PRIMARY KEY,
+    target_lane TEXT NOT NULL,
+    subscriber_lane TEXT NOT NULL,
+    when_spec TEXT NOT NULL,
+    delivery TEXT NOT NULL,
+    deliver_policy TEXT NOT NULL,
+    tail INTEGER NOT NULL DEFAULT 1,
+    once INTEGER NOT NULL DEFAULT 1,
+    ack_policy TEXT NOT NULL DEFAULT 'auto',
+    attribution INTEGER NOT NULL DEFAULT 1,
+    state TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_matched_at TEXT,
+    last_inbox_message_id INTEGER,
+    FOREIGN KEY(target_lane) REFERENCES lanes(id) ON DELETE CASCADE,
+    FOREIGN KEY(subscriber_lane) REFERENCES lanes(id) ON DELETE CASCADE,
+    FOREIGN KEY(last_inbox_message_id) REFERENCES inbox_messages(id) ON DELETE SET NULL
+);
+{_PROVIDER_HISTORY_SCHEMA}
 """
 
 
@@ -239,6 +409,12 @@ class Registry:
             await self._ensure_lane_runtime_settings_table()
         if user_version < 8:
             await self._allow_nullable_lane_runtime_policy()
+        if user_version < 9:
+            await self._ensure_inbox_subscription_tables()
+        if user_version < 10:
+            await self._ensure_subscription_attribution_column()
+        if user_version < 11:
+            await self._ensure_provider_history_tables()
 
     async def _ensure_ref_columns(self) -> None:
         async with self._conn.execute("PRAGMA table_info(lanes)") as cur:
@@ -356,6 +532,63 @@ class Registry:
             """
         )
 
+    async def _ensure_inbox_subscription_tables(self) -> None:
+        await self._conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS inbox_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                recipient_lane TEXT NOT NULL,
+                source_lane TEXT,
+                subscription_id TEXT,
+                kind TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                body TEXT NOT NULL,
+                payload TEXT NOT NULL DEFAULT '{}',
+                state TEXT NOT NULL DEFAULT 'pending',
+                delivery TEXT NOT NULL DEFAULT 'inbox',
+                queued_message_id INTEGER,
+                created_at TEXT NOT NULL,
+                delivered_at TEXT,
+                acked_at TEXT,
+                FOREIGN KEY(recipient_lane) REFERENCES lanes(id) ON DELETE CASCADE,
+                FOREIGN KEY(source_lane) REFERENCES lanes(id) ON DELETE SET NULL,
+                FOREIGN KEY(queued_message_id) REFERENCES queued_messages(id) ON DELETE SET NULL
+            );
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                id TEXT PRIMARY KEY,
+                target_lane TEXT NOT NULL,
+                subscriber_lane TEXT NOT NULL,
+                when_spec TEXT NOT NULL,
+                delivery TEXT NOT NULL,
+                deliver_policy TEXT NOT NULL,
+                tail INTEGER NOT NULL DEFAULT 1,
+                once INTEGER NOT NULL DEFAULT 1,
+                ack_policy TEXT NOT NULL DEFAULT 'auto',
+                attribution INTEGER NOT NULL DEFAULT 1,
+                state TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_matched_at TEXT,
+                last_inbox_message_id INTEGER,
+                FOREIGN KEY(target_lane) REFERENCES lanes(id) ON DELETE CASCADE,
+                FOREIGN KEY(subscriber_lane) REFERENCES lanes(id) ON DELETE CASCADE,
+                FOREIGN KEY(last_inbox_message_id) REFERENCES inbox_messages(id) ON DELETE SET NULL
+            );
+            """
+        )
+
+    async def _ensure_subscription_attribution_column(self) -> None:
+        async with self._conn.execute("PRAGMA table_info(subscriptions)") as cur:
+            rows = await cur.fetchall()
+        columns = {str(row["name"]) for row in rows}
+        if "attribution" not in columns:
+            await self._conn.execute(
+                "ALTER TABLE subscriptions ADD COLUMN attribution INTEGER NOT NULL DEFAULT 1"
+            )
+
+    async def _ensure_provider_history_tables(self) -> None:
+        await self._conn.executescript(_PROVIDER_HISTORY_SCHEMA)
+
     async def _prune_orphan_lane_children(self) -> None:
         for table in (
             "lane_sync_sources",
@@ -363,12 +596,19 @@ class Registry:
             "lane_model_settings",
             "lane_runtime_settings",
             "queued_messages",
+            "inbox_messages",
+            "subscriptions",
         ):
+            lane_column = "lane"
+            if table == "inbox_messages":
+                lane_column = "recipient_lane"
+            elif table == "subscriptions":
+                lane_column = "target_lane"
             await self._conn.execute(
                 f"""
                 DELETE FROM {table}
                 WHERE NOT EXISTS (
-                    SELECT 1 FROM lanes WHERE lanes.id = {table}.lane
+                    SELECT 1 FROM lanes WHERE lanes.id = {table}.{lane_column}
                 )
                 """
             )
@@ -748,6 +988,212 @@ class Registry:
         await self._conn.commit()
         return cur.rowcount
 
+    # --- inbox messages -------------------------------------------------------
+
+    async def add_inbox_message(
+        self,
+        *,
+        recipient_lane: str,
+        subject: str,
+        body: str,
+        source_lane: str | None = None,
+        subscription_id: str | None = None,
+        kind: str = "system_notice",
+        payload: dict[str, object] | None = None,
+        delivery: str = "inbox",
+    ) -> InboxMessage:
+        now = self._now().isoformat()
+        cur = await self._conn.execute(
+            "INSERT INTO inbox_messages (recipient_lane, source_lane, subscription_id, kind, "
+            "subject, body, payload, state, delivery, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+            (
+                recipient_lane,
+                source_lane,
+                subscription_id,
+                kind,
+                subject,
+                body,
+                json.dumps(payload or {}, separators=(",", ":")),
+                delivery,
+                now,
+            ),
+        )
+        await self._conn.commit()
+        message_id = cur.lastrowid
+        if message_id is None:
+            raise RuntimeError("inbox message insert did not return an id")
+        return await self.get_inbox_message(message_id)
+
+    async def get_inbox_message(self, message_id: int) -> InboxMessage:
+        async with self._conn.execute(
+            "SELECT * FROM inbox_messages WHERE id = ?", (message_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            raise NotFoundError(f"no inbox message {message_id!r}")
+        return _row_to_inbox_message(row)
+
+    async def list_inbox_messages(
+        self,
+        *,
+        lane: str | None = None,
+        state: str | None = None,
+        kind: str | None = None,
+        limit: int = 50,
+    ) -> list[InboxMessage]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if lane is not None:
+            clauses.append("recipient_lane = ?")
+            params.append(lane)
+        if state is not None:
+            clauses.append("state = ?")
+            params.append(state)
+        if kind is not None:
+            clauses.append("kind = ?")
+            params.append(kind)
+        sql = "SELECT * FROM inbox_messages"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        async with self._conn.execute(sql, tuple(params)) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_inbox_message(row) for row in rows]
+
+    async def ack_inbox_message(self, message_id: int) -> InboxMessage:
+        now = self._now().isoformat()
+        cur = await self._conn.execute(
+            "UPDATE inbox_messages SET state = 'acked', acked_at = ?, delivered_at = "
+            "COALESCE(delivered_at, ?)"
+            " WHERE id = ? AND state != 'acked'",
+            (now, now, message_id),
+        )
+        await self._conn.commit()
+        if cur.rowcount == 0:
+            return await self.get_inbox_message(message_id)
+        return await self.get_inbox_message(message_id)
+
+    async def ack_inbox_messages_for_lane(self, lane: str) -> int:
+        cur = await self._conn.execute(
+            "UPDATE inbox_messages SET state = 'acked', acked_at = ?, delivered_at = "
+            "COALESCE(delivered_at, ?) WHERE recipient_lane = ? AND state = 'pending'",
+            (self._now().isoformat(), self._now().isoformat(), lane),
+        )
+        await self._conn.commit()
+        return cur.rowcount
+
+    async def mark_inbox_delivered(
+        self, message_id: int, *, queued_message_id: int | None = None, ack: bool = False
+    ) -> InboxMessage:
+        now = self._now().isoformat()
+        state = "acked" if ack else "pending"
+        await self._conn.execute(
+            "UPDATE inbox_messages SET delivered_at = ?, queued_message_id = ?, state = ?, "
+            "acked_at = CASE WHEN ? THEN ? ELSE acked_at END WHERE id = ?",
+            (now, queued_message_id, state, int(ack), now, message_id),
+        )
+        await self._conn.commit()
+        return await self.get_inbox_message(message_id)
+
+    async def mark_inbox_delivered_for_queue(
+        self, queued_message_id: int, *, ack: bool = False
+    ) -> int:
+        now = self._now().isoformat()
+        state = "acked" if ack else "pending"
+        cur = await self._conn.execute(
+            "UPDATE inbox_messages SET delivered_at = ?, state = ?, "
+            "acked_at = CASE WHEN ? THEN ? ELSE acked_at END "
+            "WHERE queued_message_id = ?",
+            (now, state, int(ack), now, queued_message_id),
+        )
+        await self._conn.commit()
+        return cur.rowcount
+
+    # --- subscriptions --------------------------------------------------------
+
+    async def add_subscription(self, subscription: Subscription) -> Subscription:
+        await self._conn.execute(
+            "INSERT INTO subscriptions (id, target_lane, subscriber_lane, when_spec, delivery, "
+            "deliver_policy, tail, once, ack_policy, attribution, state, created_at, updated_at, "
+            "last_matched_at, last_inbox_message_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                subscription.id,
+                subscription.target_lane,
+                subscription.subscriber_lane,
+                subscription.when,
+                subscription.delivery,
+                subscription.deliver,
+                subscription.tail,
+                int(subscription.once),
+                subscription.ack,
+                int(subscription.attribution),
+                subscription.state,
+                subscription.created_at.isoformat(),
+                subscription.updated_at.isoformat(),
+                subscription.last_matched_at.isoformat()
+                if subscription.last_matched_at is not None
+                else None,
+                subscription.last_inbox_message_id,
+            ),
+        )
+        await self._conn.commit()
+        return await self.get_subscription(subscription.id)
+
+    async def get_subscription(self, subscription_id: str) -> Subscription:
+        async with self._conn.execute(
+            "SELECT * FROM subscriptions WHERE id = ?", (subscription_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            raise NotFoundError(f"no subscription {subscription_id!r}")
+        return _row_to_subscription(row)
+
+    async def list_subscriptions(
+        self,
+        *,
+        target_lane: str | None = None,
+        subscriber_lane: str | None = None,
+        state: str | None = None,
+    ) -> list[Subscription]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if target_lane is not None:
+            clauses.append("target_lane = ?")
+            params.append(target_lane)
+        if subscriber_lane is not None:
+            clauses.append("subscriber_lane = ?")
+            params.append(subscriber_lane)
+        if state is not None:
+            clauses.append("state = ?")
+            params.append(state)
+        sql = "SELECT * FROM subscriptions"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY created_at, id"
+        async with self._conn.execute(sql, tuple(params)) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_subscription(row) for row in rows]
+
+    async def remove_subscription(self, subscription_id: str) -> bool:
+        cur = await self._conn.execute("DELETE FROM subscriptions WHERE id = ?", (subscription_id,))
+        await self._conn.commit()
+        return cur.rowcount > 0
+
+    async def mark_subscription_matched(
+        self, subscription_id: str, *, inbox_message_id: int
+    ) -> Subscription:
+        now = self._now().isoformat()
+        await self._conn.execute(
+            "UPDATE subscriptions SET last_matched_at = ?, last_inbox_message_id = ?, "
+            "state = CASE WHEN once = 1 THEN 'done' ELSE state END, updated_at = ? WHERE id = ?",
+            (now, inbox_message_id, now, subscription_id),
+        )
+        await self._conn.commit()
+        return await self.get_subscription(subscription_id)
+
     # --- lane sync -----------------------------------------------------------
 
     async def upsert_lane_sync(self, sync: LaneSync) -> LaneSync:
@@ -975,6 +1421,334 @@ class Registry:
             row = await cur.fetchone()
         return _row_to_lane_runtime_settings(row) if row is not None else None
 
+    # --- provider events / normalized history ---------------------------------
+
+    async def record_provider_event(self, event: ProviderEvent) -> ProviderEvent:
+        payload = json.dumps(event.payload) if event.payload is not None else None
+        await self._conn.execute(
+            "INSERT INTO provider_events (provider, provider_thread_id, lane, event_type, "
+            "provider_event_id, provider_turn_id, provider_item_id, correlation_id, "
+            "provider_ts, received_at, summary, payload, raw_retained) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(provider, provider_event_id) WHERE provider_event_id IS NOT NULL "
+            "DO NOTHING",
+            (
+                event.provider,
+                event.provider_thread_id,
+                event.lane,
+                event.event_type,
+                event.provider_event_id,
+                event.provider_turn_id,
+                event.provider_item_id,
+                event.correlation_id,
+                event.provider_ts,
+                event.received_at,
+                json.dumps(event.summary, separators=(",", ":")),
+                payload,
+                int(event.raw_retained),
+            ),
+        )
+        await self._conn.commit()
+        if event.provider_event_id is not None:
+            existing = await self.find_provider_event(
+                event.provider, provider_event_id=event.provider_event_id
+            )
+            if existing is None:
+                raise RuntimeError("provider event insert did not return a row")
+            return existing
+        async with self._conn.execute(
+            "SELECT * FROM provider_events WHERE id = last_insert_rowid()"
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            raise RuntimeError("provider event insert did not return a row")
+        return _row_to_provider_event(row)
+
+    async def find_provider_event(
+        self, provider: str, *, provider_event_id: str
+    ) -> ProviderEvent | None:
+        async with self._conn.execute(
+            "SELECT * FROM provider_events WHERE provider = ? AND provider_event_id = ?",
+            (provider, provider_event_id),
+        ) as cur:
+            row = await cur.fetchone()
+        return _row_to_provider_event(row) if row is not None else None
+
+    async def list_provider_events(
+        self,
+        *,
+        lane: str | None = None,
+        provider_thread_id: str | None = None,
+        limit: int = 50,
+    ) -> list[ProviderEvent]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if lane is not None:
+            clauses.append("lane = ?")
+            params.append(lane)
+        if provider_thread_id is not None:
+            clauses.append("provider_thread_id = ?")
+            params.append(provider_thread_id)
+        sql = "SELECT * FROM provider_events"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        async with self._conn.execute(sql, tuple(params)) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_provider_event(row) for row in rows]
+
+    async def upsert_thread_turn(self, turn: ThreadTurn) -> ThreadTurn:
+        await self._conn.execute(
+            "INSERT INTO thread_turns (provider, provider_thread_id, turn_id, lane, status, "
+            "started_at, completed_at, failed_at, error, completion_source, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(provider, provider_thread_id, turn_id) DO UPDATE SET "
+            "lane = COALESCE(excluded.lane, thread_turns.lane), "
+            "status = CASE WHEN excluded.status = 'unknown' "
+            "THEN thread_turns.status ELSE excluded.status END, "
+            "started_at = COALESCE(excluded.started_at, thread_turns.started_at), "
+            "completed_at = COALESCE(excluded.completed_at, thread_turns.completed_at), "
+            "failed_at = COALESCE(excluded.failed_at, thread_turns.failed_at), "
+            "error = COALESCE(excluded.error, thread_turns.error), "
+            "completion_source = COALESCE(excluded.completion_source, "
+            "thread_turns.completion_source), "
+            "updated_at = excluded.updated_at",
+            (
+                turn.provider,
+                turn.provider_thread_id,
+                turn.turn_id,
+                turn.lane,
+                turn.status,
+                turn.started_at,
+                turn.completed_at,
+                turn.failed_at,
+                turn.error,
+                turn.completion_source,
+                turn.updated_at,
+            ),
+        )
+        await self._conn.commit()
+        return await self.get_thread_turn(turn.provider, turn.provider_thread_id, turn.turn_id)
+
+    async def get_thread_turn(
+        self, provider: str, provider_thread_id: str, turn_id: str
+    ) -> ThreadTurn:
+        async with self._conn.execute(
+            "SELECT * FROM thread_turns WHERE provider = ? AND provider_thread_id = ? "
+            "AND turn_id = ?",
+            (provider, provider_thread_id, turn_id),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            raise NotFoundError(f"no thread turn {provider}:{provider_thread_id}:{turn_id}")
+        return ThreadTurn.model_validate(_row_dict(row))
+
+    async def list_thread_turns(self, *, lane: str, limit: int = 50) -> list[ThreadTurn]:
+        async with self._conn.execute(
+            "SELECT * FROM thread_turns WHERE lane = ? ORDER BY updated_at DESC LIMIT ?",
+            (lane, limit),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [ThreadTurn.model_validate(_row_dict(row)) for row in rows]
+
+    async def upsert_thread_item(
+        self, item: ThreadItem, *, refs: list[ThreadItemRef] | None = None
+    ) -> ThreadItem:
+        await self._conn.execute("BEGIN")
+        try:
+            await self._conn.execute(
+                "INSERT INTO thread_items (provider, provider_thread_id, item_id, lane, "
+                "turn_id, item_type, role, text, tool, created_at, inserted_at, payload, "
+                "raw_retained) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(provider, provider_thread_id, item_id) DO UPDATE SET "
+                "lane = excluded.lane, turn_id = excluded.turn_id, item_type = excluded.item_type, "
+                "role = excluded.role, text = excluded.text, tool = excluded.tool, "
+                "created_at = excluded.created_at, inserted_at = excluded.inserted_at, "
+                "payload = excluded.payload, raw_retained = excluded.raw_retained",
+                (
+                    item.provider,
+                    item.provider_thread_id,
+                    item.item_id,
+                    item.lane,
+                    item.turn_id,
+                    item.item_type,
+                    item.role,
+                    item.text,
+                    item.tool,
+                    item.created_at,
+                    item.inserted_at,
+                    json.dumps(item.payload) if item.payload is not None else None,
+                    int(item.raw_retained),
+                ),
+            )
+            if refs is not None:
+                await self._conn.execute(
+                    "DELETE FROM thread_item_refs WHERE provider = ? AND provider_thread_id = ? "
+                    "AND item_id = ?",
+                    (item.provider, item.provider_thread_id, item.item_id),
+                )
+                for ref in refs:
+                    await self._conn.execute(
+                        "INSERT OR IGNORE INTO thread_item_refs (provider, provider_thread_id, "
+                        "item_id, ref_type, ref_value) VALUES (?, ?, ?, ?, ?)",
+                        (
+                            ref.provider,
+                            ref.provider_thread_id,
+                            ref.item_id,
+                            ref.ref_type,
+                            ref.ref_value,
+                        ),
+                    )
+        except Exception:
+            await self._conn.rollback()
+            raise
+        await self._conn.commit()
+        return await self.get_thread_item(item.provider, item.provider_thread_id, item.item_id)
+
+    async def get_thread_item(
+        self, provider: str, provider_thread_id: str, item_id: str
+    ) -> ThreadItem:
+        async with self._conn.execute(
+            "SELECT * FROM thread_items WHERE provider = ? AND provider_thread_id = ? "
+            "AND item_id = ?",
+            (provider, provider_thread_id, item_id),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            raise NotFoundError(f"no thread item {provider}:{provider_thread_id}:{item_id}")
+        return _row_to_thread_item(row)
+
+    async def list_thread_items(
+        self, *, lane: str, turn_id: str | None = None, limit: int = 50
+    ) -> list[ThreadItem]:
+        clauses = ["lane = ?"]
+        params: list[object] = [lane]
+        if turn_id is not None:
+            clauses.append("turn_id = ?")
+            params.append(turn_id)
+        sql = "SELECT * FROM thread_items WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY inserted_at DESC LIMIT ?"
+        params.append(limit)
+        async with self._conn.execute(sql, tuple(params)) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_thread_item(row) for row in rows]
+
+    async def list_thread_item_refs(self, item: ThreadItem) -> list[ThreadItemRef]:
+        async with self._conn.execute(
+            "SELECT * FROM thread_item_refs WHERE provider = ? AND provider_thread_id = ? "
+            "AND item_id = ? ORDER BY ref_type, ref_value",
+            (item.provider, item.provider_thread_id, item.item_id),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [ThreadItemRef.model_validate(_row_dict(row)) for row in rows]
+
+    async def upsert_message_receipt(self, receipt: MessageReceipt) -> MessageReceipt:
+        await self._conn.execute(
+            "INSERT INTO message_receipts (id, lane, queued_message_id, provider, "
+            "provider_thread_id, dispatch_message_id, status, turn_id, error, created_at, "
+            "sent_at, accepted_at, completed_at, failed_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(dispatch_message_id) WHERE dispatch_message_id IS NOT NULL "
+            "DO UPDATE SET lane = excluded.lane, queued_message_id = excluded.queued_message_id, "
+            "provider = excluded.provider, provider_thread_id = excluded.provider_thread_id, "
+            "status = excluded.status, turn_id = excluded.turn_id, error = excluded.error, "
+            "sent_at = excluded.sent_at, accepted_at = excluded.accepted_at, "
+            "completed_at = excluded.completed_at, failed_at = excluded.failed_at, "
+            "updated_at = excluded.updated_at",
+            (
+                receipt.id,
+                receipt.lane,
+                receipt.queued_message_id,
+                receipt.provider,
+                receipt.provider_thread_id,
+                receipt.dispatch_message_id,
+                receipt.status,
+                receipt.turn_id,
+                receipt.error,
+                receipt.created_at,
+                receipt.sent_at,
+                receipt.accepted_at,
+                receipt.completed_at,
+                receipt.failed_at,
+                receipt.updated_at,
+            ),
+        )
+        await self._conn.commit()
+        if receipt.dispatch_message_id is not None:
+            got = await self.find_message_receipt(
+                provider=receipt.provider, dispatch_message_id=receipt.dispatch_message_id
+            )
+            if got is None:
+                raise RuntimeError("message receipt upsert did not return a row")
+            return got
+        async with self._conn.execute(
+            "SELECT * FROM message_receipts WHERE id = last_insert_rowid()"
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            raise RuntimeError("message receipt upsert did not return a row")
+        return MessageReceipt.model_validate(_row_dict(row))
+
+    async def find_message_receipt(
+        self, *, provider: str, dispatch_message_id: str
+    ) -> MessageReceipt | None:
+        async with self._conn.execute(
+            "SELECT * FROM message_receipts WHERE provider = ? AND dispatch_message_id = ?",
+            (provider, dispatch_message_id),
+        ) as cur:
+            row = await cur.fetchone()
+        return MessageReceipt.model_validate(_row_dict(row)) if row is not None else None
+
+    async def list_message_receipts(self, *, lane: str, limit: int = 50) -> list[MessageReceipt]:
+        async with self._conn.execute(
+            "SELECT * FROM message_receipts WHERE lane = ? ORDER BY updated_at DESC LIMIT ?",
+            (lane, limit),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [MessageReceipt.model_validate(_row_dict(row)) for row in rows]
+
+    async def upsert_lane_runtime_state(self, state: LaneRuntimeState) -> LaneRuntimeState:
+        await self._conn.execute(
+            "INSERT INTO lane_runtime_state (lane, provider, provider_thread_id, status, "
+            "active_turn_id, latest_turn_id, latest_turn_status, needs_attention, "
+            "attention_kind, attention_detail, updated_at, last_event_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(lane) DO UPDATE SET provider = excluded.provider, "
+            "provider_thread_id = excluded.provider_thread_id, status = excluded.status, "
+            "active_turn_id = excluded.active_turn_id, latest_turn_id = excluded.latest_turn_id, "
+            "latest_turn_status = excluded.latest_turn_status, "
+            "needs_attention = excluded.needs_attention, attention_kind = excluded.attention_kind, "
+            "attention_detail = excluded.attention_detail, updated_at = excluded.updated_at, "
+            "last_event_at = excluded.last_event_at",
+            (
+                state.lane,
+                state.provider,
+                state.provider_thread_id,
+                state.status,
+                state.active_turn_id,
+                state.latest_turn_id,
+                state.latest_turn_status,
+                int(state.needs_attention),
+                state.attention_kind,
+                state.attention_detail,
+                state.updated_at,
+                state.last_event_at,
+            ),
+        )
+        await self._conn.commit()
+        got = await self.get_lane_runtime_state(state.lane)
+        if got is None:
+            raise RuntimeError("lane runtime state upsert did not return a row")
+        return got
+
+    async def get_lane_runtime_state(self, lane_id: str) -> LaneRuntimeState | None:
+        async with self._conn.execute(
+            "SELECT * FROM lane_runtime_state WHERE lane = ?", (lane_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return _row_to_lane_runtime_state(row) if row is not None else None
+
     # --- triggers -------------------------------------------------------------
 
     async def add_trigger(self, trigger: Trigger) -> Trigger:
@@ -1087,6 +1861,13 @@ def _json_str_list(value: object) -> list[str]:
     return [str(item) for item in raw if isinstance(item, str)]
 
 
+def _json_dict(value: object) -> dict[str, object]:
+    if not value:
+        return {}
+    raw = json.loads(str(value))
+    return raw if isinstance(raw, dict) else {}
+
+
 def _json_service_tiers(value: object) -> list[ServiceTierEntry]:
     if not value:
         return []
@@ -1156,6 +1937,45 @@ def _row_to_lane_runtime_settings(row: aiosqlite.Row) -> LaneRuntimeSettings:
     raw_schema = data["output_schema"]
     data["output_schema"] = json.loads(str(raw_schema)) if raw_schema else None
     return LaneRuntimeSettings.model_validate(data)
+
+
+def _row_to_provider_event(row: aiosqlite.Row) -> ProviderEvent:
+    data = _row_dict(row)
+    data["summary"] = _json_dict(data["summary"])
+    payload = data["payload"]
+    data["payload"] = json.loads(str(payload)) if payload else None
+    data["raw_retained"] = bool(data["raw_retained"])
+    return ProviderEvent.model_validate(data)
+
+
+def _row_to_thread_item(row: aiosqlite.Row) -> ThreadItem:
+    data = _row_dict(row)
+    payload = data["payload"]
+    data["payload"] = json.loads(str(payload)) if payload else None
+    data["raw_retained"] = bool(data["raw_retained"])
+    return ThreadItem.model_validate(data)
+
+
+def _row_to_lane_runtime_state(row: aiosqlite.Row) -> LaneRuntimeState:
+    data = _row_dict(row)
+    data["needs_attention"] = bool(data["needs_attention"])
+    return LaneRuntimeState.model_validate(data)
+
+
+def _row_to_inbox_message(row: aiosqlite.Row) -> InboxMessage:
+    data = _row_dict(row)
+    data["payload"] = _json_dict(data["payload"])
+    return InboxMessage.model_validate(data)
+
+
+def _row_to_subscription(row: aiosqlite.Row) -> Subscription:
+    data = _row_dict(row)
+    data["when"] = data.pop("when_spec")
+    data["deliver"] = data.pop("deliver_policy")
+    data["ack"] = data.pop("ack_policy")
+    data["once"] = bool(data["once"])
+    data["attribution"] = bool(data["attribution"])
+    return Subscription.model_validate(data)
 
 
 def _row_to_trigger(row: aiosqlite.Row) -> Trigger:
