@@ -1,8 +1,8 @@
 # Execution Retro: query-split-filters
 
 Date started: 2026-07-02
-Date finalized: pending
-Status: In progress
+Date finalized: 2026-07-02
+Status: Complete
 Spec: `.agents/goals/2026-07-02-query-split-filters/SPEC.md`
 Goal: `.agents/goals/2026-07-02-query-split-filters/GOAL.md`
 Prompt: `.agents/goals/2026-07-02-query-split-filters/PROMPT.md`
@@ -12,9 +12,9 @@ Refs: `.agents/goals/2026-07-02-query-split-filters/REFS.md`
 
 - Objective: Split App Server search from local indexed query and add structured local query filters.
 - Completion horizon: merged.
-- Authority used: implementation, local daemon restart, local review, commit/PR pending.
-- Outcome: implementation complete locally; PR/merge pending.
-- Tracker/PR/source-control state: Linear issues `DIS-29` through `DIS-33` created under `DIS-20`; branch `dis-29-query-split-filters`; no PR yet.
+- Authority used: implementation, local daemon restart, local review, commit, PR, merge, tracker updates, branch cleanup.
+- Outcome: complete and merged.
+- Tracker/PR/source-control state: PR #70 merged to `main`; Linear issues `DIS-29` through `DIS-33` moved to review and linked to PR #70.
 - Verification: packet checks passed; `just check` passed; live-safe CLI smoke passed after daemon restart.
 - Review state: targeted local review scored 5/5 after two P2 findings were fixed.
 - Remaining risks: daemon/client version skew remains covered by adjacent `DIS-28`; no public compatibility burden for removed `search --local`.
@@ -27,7 +27,7 @@ Refs: `.agents/goals/2026-07-02-query-split-filters/REFS.md`
 - Verification blockers: none known.
 - Tracker blockers: none known.
 - Authority blockers: none known.
-- Next action: start implementation branch from clean `main`.
+- Next action: keep `DIS-28` as the follow-up daemon/client skew guardrail.
 
 ## Goal Amendments
 
@@ -59,6 +59,13 @@ Refs: `.agents/goals/2026-07-02-query-split-filters/REFS.md`
 - Review: local review found and fixed two P2 issues: `--file-under` substring matching and missing `tool_server` fallback from refs.
 - Next: Commit, submit PR, reconcile tracker, merge when checks/reviews permit.
 - Blockers: none.
+
+2026-07-02 17:51 ET - Merged implementation and cleaned branch
+- Changed: Submitted PR #70, filled in the PR description, marked it ready after CI passed, merged through Graphite, synced `main`, and deleted the merged feature branch locally/remotely.
+- Verified: GitHub PR #70 merged at `91a8cba`; CI `check`, CodeQL, and Graphite mergeability were green before merge.
+- Result: `main` contains the query/search split.
+- Next: Track `DIS-28` separately; no release was published in this goal.
+- Blockers: none.
 ```
 
 ## Review Log
@@ -72,7 +79,7 @@ Refs: `.agents/goals/2026-07-02-query-split-filters/REFS.md`
 | Check | Scope | Result | Notes |
 | --- | --- | --- | --- |
 | `/Users/mg/.agents/skills/goal-loop/scripts/check-goal-prompt --no-placeholders .agents/goals/2026-07-02-query-split-filters/PROMPT.md` | prompt | passed | 3810/4000 chars; no unresolved placeholders. |
-| `/Users/mg/.agents/skills/goal-loop/scripts/goal-loop-doctor .agents/goals/2026-07-02-query-split-filters` | packet | passed | Packet OK; no review reports yet. |
+| `/Users/mg/.agents/skills/goal-loop/scripts/goal-loop-doctor .agents/goals/2026-07-02-query-split-filters` | packet | passed | Packet OK; one review report recorded. |
 | `uv run dispatch schema search \| jq '.input.properties.local // null'` | CLI schema | passed | Returned `null`; `search` no longer projects `local`. |
 | `uv run dispatch schema query \| jq '.input.properties \| keys'` | CLI schema | passed | Query schema exposes structured indexed filters. |
 | `uv run dispatch query --tool linear.save_issue --limit 5 --json` | live CLI smoke | passed | Executed through refreshed daemon; no local matches in current registry. |
@@ -92,23 +99,24 @@ Refs: `.agents/goals/2026-07-02-query-split-filters/REFS.md`
 | Item | State | Notes |
 | --- | --- | --- |
 | DIS-20 | Backlog | Parent local substrate umbrella. |
-| DIS-29 | Backlog | Split App Server search from local indexed query. |
-| DIS-30 | Backlog | Add structured query filters. |
-| DIS-31 | Backlog | Promote concrete MCP tool-call metadata. |
-| DIS-32 | Backlog | Unify query/history filter semantics. |
-| DIS-33 | Backlog | Update docs and skills. |
+| PR #70 | Merged | `feat: split local query from app search`; merge commit `91a8cba`. |
+| DIS-29 | In Review | Split App Server search from local indexed query; linked to PR #70. |
+| DIS-30 | In Review | Add structured query filters; linked to PR #70. |
+| DIS-31 | In Review | Promote concrete MCP tool-call metadata; linked to PR #70. |
+| DIS-32 | In Review | Unify query/history filter semantics; linked to PR #70. |
+| DIS-33 | In Review | Update docs and skills; linked to PR #70. |
 | DIS-28 | Backlog | Adjacent daemon/client version-skew issue. |
 
 ## Follow-Ups
 
-- Decide during implementation whether `DIS-28` is cheap to handle in the same stack or should remain separate.
+- `DIS-28` remains separate: the live smoke confirmed stale daemons can report `unknown op 'query'` until restarted.
 
 ## Final State
 
-- Completion proof: pending.
-- Prompt length: pending.
-- Review report summary: pending.
-- Verification summary: pending.
-- Forbidden actions audit: pending.
-- Remaining P3s / risks: pending.
-- Final transcript proof: pending.
+- Completion proof: PR #70 merged to `main` at `91a8cba`; feature branch deleted locally and remotely.
+- Prompt length: 3810/4000 chars.
+- Review report summary: local review scored 5/5 with no open P0/P1/P2 after two fixed findings.
+- Verification summary: `just check`, schema smokes, live query/search smokes, CI, CodeQL, and Graphite mergeability passed.
+- Forbidden actions audit: no release/publish, storage-default change, paid/cloud service, secret/config mutation, or raw payload indexing default change.
+- Remaining P3s / risks: daemon/client version skew is tracked by `DIS-28`; semantic/vector search and Turso remain out of scope.
+- Final transcript proof: this retro records the implementation, review, PR, merge, and cleanup evidence.
