@@ -7,8 +7,11 @@ and the ``actions_log`` audit of every send/action.
 
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -44,6 +47,34 @@ from .refs import BASE58BTC_ALPHABET, CODEX_REF_SOURCE, codex_ref_payload, make_
 
 Clock = Callable[[], datetime]
 SCHEMA_VERSION = 12
+
+
+@dataclass(frozen=True)
+class ThreadHistoryFileStat:
+    path: str
+    count: int
+
+
+@dataclass(frozen=True)
+class ThreadHistoryToolStat:
+    tool: str
+    count: int
+    item_types: list[str]
+
+
+@dataclass(frozen=True)
+class ThreadHistorySummaryStats:
+    turns: int
+    items: int
+    messages: int
+    tool_calls: int
+    transcript_bytes: int | None
+    first_event_at: str | None
+    last_event_at: str | None
+    tools: list[ThreadHistoryToolStat]
+    files_changed_count: int
+    files: list[ThreadHistoryFileStat]
+
 
 _QUEUED_MESSAGES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS queued_messages (
@@ -352,12 +383,17 @@ class Registry:
     def __init__(self, conn: aiosqlite.Connection, now: Clock) -> None:
         self._conn = conn
         self._now = now
+        self._write_lock = asyncio.Lock()
 
     @classmethod
     async def open(cls, path: str | Path = ":memory:", now: Clock = _utcnow) -> Registry:
         conn = await aiosqlite.connect(path)
         conn.row_factory = aiosqlite.Row
         await conn.execute("PRAGMA foreign_keys = ON")
+        await conn.execute("PRAGMA busy_timeout = 5000")
+        if str(path) != ":memory:":
+            await conn.execute("PRAGMA journal_mode = WAL")
+            await conn.execute("PRAGMA synchronous = NORMAL")
         store = cls(conn, now)
         async with store._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
@@ -377,6 +413,17 @@ class Registry:
 
     async def close(self) -> None:
         await self._conn.close()
+
+    @asynccontextmanager
+    async def _transaction(self) -> AsyncIterator[None]:
+        async with self._write_lock:
+            await self._conn.execute("BEGIN")
+            try:
+                yield
+            except BaseException:
+                await self._conn.rollback()
+                raise
+            await self._conn.commit()
 
     def now_iso(self) -> str:
         return self._now().isoformat()
@@ -731,16 +778,11 @@ class Registry:
             last_event_at=None,
         )
         synced_at = sync.last_synced_at or now.isoformat()
-        await self._conn.execute("BEGIN")
-        try:
+        async with self._transaction():
             await self._insert_lane(lane)
             await self._upsert_lane_sync_rows(sync, synced_at)
             if audit_op is not None:
                 await self._insert_action_log(audit_op, lane=lane.id, detail=audit_detail)
-        except Exception:
-            await self._conn.rollback()
-            raise
-        await self._conn.commit()
         saved_sync = await self.get_lane_sync(lane.id)
         if saved_sync is None:
             raise RuntimeError("lane sync insert did not return a row")
@@ -1213,13 +1255,8 @@ class Registry:
 
     async def upsert_lane_sync(self, sync: LaneSync) -> LaneSync:
         now = sync.last_synced_at or self._now().isoformat()
-        await self._conn.execute("BEGIN")
-        try:
+        async with self._transaction():
             await self._upsert_lane_sync_rows(sync, now)
-        except Exception:
-            await self._conn.rollback()
-            raise
-        await self._conn.commit()
         got = await self.get_lane_sync(sync.lane)
         if got is None:
             raise RuntimeError("lane sync upsert did not return a row")
@@ -1514,6 +1551,11 @@ class Registry:
         return [_row_to_provider_event(row) for row in rows]
 
     async def upsert_thread_turn(self, turn: ThreadTurn) -> ThreadTurn:
+        async with self._transaction():
+            await self._upsert_thread_turn_row(turn)
+        return await self.get_thread_turn(turn.provider, turn.provider_thread_id, turn.turn_id)
+
+    async def _upsert_thread_turn_row(self, turn: ThreadTurn) -> None:
         await self._conn.execute(
             "INSERT INTO thread_turns (provider, provider_thread_id, turn_id, lane, status, "
             "started_at, completed_at, failed_at, error, completion_source, updated_at) "
@@ -1543,8 +1585,6 @@ class Registry:
                 turn.updated_at,
             ),
         )
-        await self._conn.commit()
-        return await self.get_thread_turn(turn.provider, turn.provider_thread_id, turn.turn_id)
 
     async def get_thread_turn(
         self, provider: str, provider_thread_id: str, turn_id: str
@@ -1570,58 +1610,82 @@ class Registry:
     async def upsert_thread_item(
         self, item: ThreadItem, *, refs: list[ThreadItemRef] | None = None
     ) -> ThreadItem:
-        await self._conn.execute("BEGIN")
-        try:
+        async with self._transaction():
+            await self._upsert_thread_item_row(item)
+            if refs is not None:
+                await self._replace_thread_item_refs(item, refs)
+        return await self.get_thread_item(item.provider, item.provider_thread_id, item.item_id)
+
+    async def upsert_thread_history_snapshot(
+        self,
+        *,
+        turns: list[ThreadTurn],
+        items: list[tuple[ThreadItem, list[ThreadItemRef]]],
+        provider: str,
+        provider_thread_id: str,
+        turn_ids: set[str],
+        item_ids: set[str],
+    ) -> None:
+        async with self._transaction():
+            for turn in turns:
+                await self._upsert_thread_turn_row(turn)
+            for item, refs in items:
+                await self._upsert_thread_item_row(item)
+                await self._replace_thread_item_refs(item, refs)
+            await self._prune_thread_history_snapshot_rows(
+                provider=provider,
+                provider_thread_id=provider_thread_id,
+                turn_ids=turn_ids,
+                item_ids=item_ids,
+            )
+
+    async def _upsert_thread_item_row(self, item: ThreadItem) -> None:
+        await self._conn.execute(
+            "INSERT INTO thread_items (provider, provider_thread_id, item_id, lane, "
+            "turn_id, item_type, role, text, tool, created_at, position, inserted_at, "
+            "payload, raw_retained) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(provider, provider_thread_id, item_id) DO UPDATE SET "
+            "lane = excluded.lane, turn_id = excluded.turn_id, item_type = excluded.item_type, "
+            "role = excluded.role, text = excluded.text, tool = excluded.tool, "
+            "created_at = excluded.created_at, position = excluded.position, "
+            "inserted_at = excluded.inserted_at, payload = excluded.payload, "
+            "raw_retained = excluded.raw_retained",
+            (
+                item.provider,
+                item.provider_thread_id,
+                item.item_id,
+                item.lane,
+                item.turn_id,
+                item.item_type,
+                item.role,
+                item.text,
+                item.tool,
+                item.created_at,
+                item.position,
+                item.inserted_at,
+                _json_dump_compact(item.payload) if item.payload is not None else None,
+                int(item.raw_retained),
+            ),
+        )
+
+    async def _replace_thread_item_refs(self, item: ThreadItem, refs: list[ThreadItemRef]) -> None:
+        await self._conn.execute(
+            "DELETE FROM thread_item_refs WHERE provider = ? AND provider_thread_id = ? "
+            "AND item_id = ?",
+            (item.provider, item.provider_thread_id, item.item_id),
+        )
+        for ref in refs:
             await self._conn.execute(
-                "INSERT INTO thread_items (provider, provider_thread_id, item_id, lane, "
-                "turn_id, item_type, role, text, tool, created_at, position, inserted_at, "
-                "payload, raw_retained) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(provider, provider_thread_id, item_id) DO UPDATE SET "
-                "lane = excluded.lane, turn_id = excluded.turn_id, item_type = excluded.item_type, "
-                "role = excluded.role, text = excluded.text, tool = excluded.tool, "
-                "created_at = excluded.created_at, position = excluded.position, "
-                "inserted_at = excluded.inserted_at, payload = excluded.payload, "
-                "raw_retained = excluded.raw_retained",
+                "INSERT OR IGNORE INTO thread_item_refs (provider, provider_thread_id, "
+                "item_id, ref_type, ref_value) VALUES (?, ?, ?, ?, ?)",
                 (
-                    item.provider,
-                    item.provider_thread_id,
-                    item.item_id,
-                    item.lane,
-                    item.turn_id,
-                    item.item_type,
-                    item.role,
-                    item.text,
-                    item.tool,
-                    item.created_at,
-                    item.position,
-                    item.inserted_at,
-                    _json_dump_compact(item.payload) if item.payload is not None else None,
-                    int(item.raw_retained),
+                    ref.provider,
+                    ref.provider_thread_id,
+                    ref.item_id,
+                    ref.ref_type,
+                    ref.ref_value,
                 ),
             )
-            if refs is not None:
-                await self._conn.execute(
-                    "DELETE FROM thread_item_refs WHERE provider = ? AND provider_thread_id = ? "
-                    "AND item_id = ?",
-                    (item.provider, item.provider_thread_id, item.item_id),
-                )
-                for ref in refs:
-                    await self._conn.execute(
-                        "INSERT OR IGNORE INTO thread_item_refs (provider, provider_thread_id, "
-                        "item_id, ref_type, ref_value) VALUES (?, ?, ?, ?, ?)",
-                        (
-                            ref.provider,
-                            ref.provider_thread_id,
-                            ref.item_id,
-                            ref.ref_type,
-                            ref.ref_value,
-                        ),
-                    )
-        except Exception:
-            await self._conn.rollback()
-            raise
-        await self._conn.commit()
-        return await self.get_thread_item(item.provider, item.provider_thread_id, item.item_id)
 
     async def get_thread_item(
         self, provider: str, provider_thread_id: str, item_id: str
@@ -1653,6 +1717,117 @@ class Registry:
             rows = await cur.fetchall()
         return [_row_to_thread_item(row) for row in rows]
 
+    async def get_thread_history_summary_stats(self, *, lane: str) -> ThreadHistorySummaryStats:
+        async with self._conn.execute(
+            """
+            SELECT
+                COUNT(DISTINCT turns.turn_id) AS turns,
+                MIN(turns.started_at) AS first_event_at,
+                MAX(COALESCE(turns.completed_at, turns.failed_at, turns.updated_at))
+                    AS last_turn_at
+            FROM thread_turns turns
+            WHERE turns.lane = ?
+            """,
+            (lane,),
+        ) as cur:
+            turn_row = await cur.fetchone()
+        async with self._conn.execute(
+            """
+            SELECT
+                COUNT(*) AS items,
+                SUM(
+                    CASE
+                        WHEN lower(item_type) LIKE '%message%'
+                            OR role IN ('user', 'assistant', 'system')
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS messages,
+                SUM(CASE WHEN tool IS NOT NULL THEN 1 ELSE 0 END) AS tool_calls,
+                SUM(length(COALESCE(text, ''))) AS transcript_bytes
+            FROM thread_items
+            WHERE lane = ?
+            """,
+            (lane,),
+        ) as cur:
+            item_row = await cur.fetchone()
+        async with self._conn.execute(
+            """
+            SELECT tool, COUNT(*) AS count, GROUP_CONCAT(DISTINCT item_type) AS item_types
+            FROM thread_items
+            WHERE lane = ? AND tool IS NOT NULL
+            GROUP BY tool
+            ORDER BY count DESC, tool ASC
+            """,
+            (lane,),
+        ) as cur:
+            tool_rows = await cur.fetchall()
+        async with self._conn.execute(
+            """
+            SELECT refs.ref_value AS path, COUNT(*) AS count
+            FROM thread_item_refs refs
+            INNER JOIN thread_items items
+                ON items.provider = refs.provider
+                AND items.provider_thread_id = refs.provider_thread_id
+                AND items.item_id = refs.item_id
+            WHERE items.lane = ? AND refs.ref_type = 'file'
+            GROUP BY refs.ref_value
+            ORDER BY count DESC, refs.ref_value ASC
+            LIMIT 25
+            """,
+            (lane,),
+        ) as cur:
+            file_rows = await cur.fetchall()
+        async with self._conn.execute(
+            """
+            SELECT COUNT(DISTINCT refs.ref_value) AS count
+            FROM thread_item_refs refs
+            INNER JOIN thread_items items
+                ON items.provider = refs.provider
+                AND items.provider_thread_id = refs.provider_thread_id
+                AND items.item_id = refs.item_id
+            WHERE items.lane = ? AND refs.ref_type = 'file'
+            """,
+            (lane,),
+        ) as cur:
+            file_count_row = await cur.fetchone()
+        sync = await self.get_lane_sync(lane)
+        transcript_bytes = _optional_int(item_row["transcript_bytes"] if item_row else None)
+        return ThreadHistorySummaryStats(
+            turns=_optional_int(turn_row["turns"] if turn_row else None) or 0,
+            items=_optional_int(item_row["items"] if item_row else None) or 0,
+            messages=_optional_int(item_row["messages"] if item_row else None) or 0,
+            tool_calls=_optional_int(item_row["tool_calls"] if item_row else None) or 0,
+            transcript_bytes=transcript_bytes,
+            first_event_at=turn_row["first_event_at"] if turn_row else None,
+            last_event_at=(
+                sync.latest_event_at
+                if sync is not None and sync.latest_event_at is not None
+                else (turn_row["last_turn_at"] if turn_row else None)
+            ),
+            tools=[
+                ThreadHistoryToolStat(
+                    tool=row["tool"],
+                    count=_optional_int(row["count"]) or 0,
+                    item_types=sorted(
+                        item_type
+                        for item_type in str(row["item_types"] or "").split(",")
+                        if item_type
+                    ),
+                )
+                for row in tool_rows
+            ],
+            files_changed_count=_optional_int(file_count_row["count"] if file_count_row else None)
+            or 0,
+            files=[
+                ThreadHistoryFileStat(
+                    path=row["path"],
+                    count=_optional_int(row["count"]) or 0,
+                )
+                for row in file_rows
+            ],
+        )
+
     async def list_thread_item_refs(self, item: ThreadItem) -> list[ThreadItemRef]:
         async with self._conn.execute(
             "SELECT * FROM thread_item_refs WHERE provider = ? AND provider_thread_id = ? "
@@ -1662,7 +1837,47 @@ class Registry:
             rows = await cur.fetchall()
         return [ThreadItemRef.model_validate(_row_dict(row)) for row in rows]
 
+    async def list_thread_item_refs_many(
+        self, items: list[ThreadItem]
+    ) -> dict[str, list[ThreadItemRef]]:
+        refs_by_item: dict[str, list[ThreadItemRef]] = {item.item_id: [] for item in items}
+        for chunk_start in range(0, len(items), 500):
+            clauses = []
+            params: list[object] = []
+            for item in items[chunk_start : chunk_start + 500]:
+                clauses.append("(provider = ? AND provider_thread_id = ? AND item_id = ?)")
+                params.extend((item.provider, item.provider_thread_id, item.item_id))
+            if not clauses:
+                continue
+            sql = (
+                "SELECT * FROM thread_item_refs WHERE "
+                + " OR ".join(clauses)
+                + " ORDER BY item_id, ref_type, ref_value"
+            )
+            async with self._conn.execute(sql, tuple(params)) as cur:
+                rows = await cur.fetchall()
+            for row in rows:
+                ref = ThreadItemRef.model_validate(_row_dict(row))
+                refs_by_item.setdefault(ref.item_id, []).append(ref)
+        return refs_by_item
+
     async def prune_thread_history_snapshot(
+        self,
+        *,
+        provider: str,
+        provider_thread_id: str,
+        turn_ids: set[str],
+        item_ids: set[str],
+    ) -> None:
+        async with self._transaction():
+            await self._prune_thread_history_snapshot_rows(
+                provider=provider,
+                provider_thread_id=provider_thread_id,
+                turn_ids=turn_ids,
+                item_ids=item_ids,
+            )
+
+    async def _prune_thread_history_snapshot_rows(
         self,
         *,
         provider: str,
@@ -1684,7 +1899,6 @@ class Registry:
             id_column="turn_id",
             keep_ids=turn_ids,
         )
-        await self._conn.commit()
 
     async def _delete_missing_values(
         self,
@@ -1906,6 +2120,16 @@ class Registry:
 def _row_dict(row: aiosqlite.Row) -> dict[str, object]:
     # aiosqlite.Row iterates VALUES (not keys), so pair keys with values explicitly.
     return dict(zip(row.keys(), tuple(row), strict=True))
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float | str | bytes | bytearray):
+        return int(value)
+    raise TypeError(f"expected SQLite integer-compatible value, got {type(value).__name__}")
 
 
 def _bool_or_none(value: bool | None) -> int | None:

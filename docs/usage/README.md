@@ -594,15 +594,17 @@ uv run dispatch tail <dispatch-ref> --limit 50
 
 Use `history` when you want transcript inspection and rollups rather than only recent
 items. Bare `history` summarizes managed lanes; passing a selector drills into one
-thread and can show summary, items, tools, or files. Overview rows include transcript
-size, estimated tokens, active dates, deduped tool names, subagent thread ids when
-visible, best-effort git worktree identity, and dirty changed-file names from the
-lane cwd. `--type`, `--tool`, and `--grep` filter item views; `--cwd`, `--source`,
+thread and can show summary, items, tools, or files. Overview rows include indexed
+transcript size, estimated tokens, active dates, deduped tool names, best-effort git
+worktree identity, and dirty changed-file names from the lane cwd. `--type`, `--tool`,
+and `--grep` filter item views; `--cwd`, `--source`,
 `--status`, `--has-tool`, `--changed/--clean`, and `--min-bytes` filter overview
 rows; `--raw` includes raw App Server item payloads for jq-heavy inspection.
-When `history`, `tail`, or transcript-inclusive `get` read `thread/read` with
-turns, Dispatch also backfills its local normalized history index with turns,
-items, tool/file refs, and compact retained item payloads. Normal `history`
+Bare `history` reads the local normalized index only, so overview scans stay
+bounded and do not wake every App Server thread. When selector-scoped `history`,
+`tail`, or transcript-inclusive `get` read `thread/read` with turns, Dispatch
+backfills its local normalized history index with turns, items, tool/file refs,
+and compact retained item payloads for that one thread. Normal `history`
 item/tool/file views render from that normalized index after the refresh, so
 capture byte caps and provider-neutral refs are honored consistently. The App
 Server remains the canonical transcript source, and `history --raw` intentionally
@@ -739,9 +741,10 @@ searchable facts by default, but do not retain raw provider payloads unless the
 raw retention policy allows it. Live App Server events are stored as compact
 summaries; transcript reads index bounded turns, item text, tool names, and
 file/thread refs. Use `minimal` for a smaller footprint that keeps turn-level
-state but skips item-level transcript rows. Normal `history` item/tool/file
-views render from the normalized index after refreshing from the App Server;
-`history --raw` remains a live App Server raw-payload view. Use `debug` while
+state but skips item-level transcript rows. Bare `history` overview renders from
+the local index. Selector-scoped `history` item/tool/file views render from the
+normalized index after refreshing one thread from the App Server; `history --raw`
+remains a live App Server raw-payload view. Use `debug` while
 developing reducers, search, or provider adapters. Debug retention can store
 bounded raw provider event and item payloads with truncation markers; it should
 usually run against isolated state.
@@ -806,10 +809,11 @@ then runs the same index refresh. Unresolved `@handles` remain errors; they are 
 as raw thread ids.
 
 `sync --full` scans the whole current source file and marks the cache complete for that
-file identity. It is still an index refresh, not a write to the Codex thread. `history`,
-`tail`, and transcript-inclusive `get` continue to use official
-`thread/read(includeTurns:true)` when they need transcript turns, and those reads
-feed the normalized local history index as a side effect.
+file identity. It is still an index refresh, not a write to the Codex thread. Bare
+`history` stays local-index only. Selector-scoped `history`, `tail`, and
+transcript-inclusive `get` continue to use official `thread/read(includeTurns:true)`
+when they need transcript turns, and those reads feed the normalized local history
+index for that thread as a side effect.
 
 Archive state is lifecycle metadata, not a cleanup command. Dispatch keeps provider events
 and normalized history evidence unless an explicit future retention command/policy prunes

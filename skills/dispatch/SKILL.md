@@ -253,12 +253,14 @@ uv run dispatch sync <dispatch-ref-or-thread-id> --full
 
 Sync indexes source identity, sync state, latest event time, latest turn id, and
 bounded top+tail JSONL facts when Codex exposes a rollout path. It does not copy
-the full transcript by default. Transcript reads through `tail`, `history`, or
+the full transcript by default. Bare `history` reads the local index only.
+Selector-scoped transcript reads through `tail`, `history`, or
 transcript-inclusive `get` still use App Server `thread/read(includeTurns:true)`
 as the canonical source, and those reads backfill Dispatch's normalized local
-history index with turns, items, and refs. If the selector is a raw unmanaged
-Codex thread id, `sync` first registers it as an attached read/metadata-managed
-lane, then refreshes the index. That does not grant write authority.
+history index with turns, items, and refs for that one thread. If the selector
+is a raw unmanaged Codex thread id, `sync` first registers it as an attached
+read/metadata-managed lane, then refreshes the index. That does not grant write
+authority.
 
 Sync also reconciles known App Server archive membership for the target. Archive
 state is lifecycle metadata, not cleanup: dispatch does not delete provider
@@ -272,8 +274,9 @@ Dispatch captures normalized history into its local SQLite registry. Default
 Live App Server events are stored as compact summaries; transcript reads index
 bounded turns, item text, tool names, and file/thread refs. Raw provider payloads
 stay gated by retention policy. Minimal capture keeps turn-level state but skips
-item-level transcript rows. Normal `history` item/tool/file views render from
-the normalized index after refresh; `--raw` keeps its live App Server raw-payload
+item-level transcript rows. Bare `history` overview renders from the local
+index. Selector-scoped `history` item/tool/file views render from the normalized
+index after refreshing one thread; `--raw` keeps its live App Server raw-payload
 behavior. Use debug capture only when developing or diagnosing
 reducers/search/provider adapters; debug retention can store bounded raw
 provider event and item payloads with truncation markers:
@@ -468,11 +471,12 @@ uv run dispatch history --has-tool bash --changed --min-bytes 100000
 ```
 
 Bare `history` includes transcript size, estimated tokens, active dates, deduped
-tools, visible subagent thread ids, worktree identity, and dirty changed-file
+tools, worktree identity, and dirty changed-file
 names from each lane cwd. Overview filters include `--cwd`, `--source`,
 `--status`, `--has-tool`, `--changed/--clean`, and `--min-bytes`. Item views use
-`--type`, `--tool`, `--grep`, and optional `--raw`. History reads backfill the
-normalized local history index. Normal item/tool/file views render from that
+`--type`, `--tool`, `--grep`, and optional `--raw`. Bare overview reads the
+local index only. Selector-scoped history reads refresh one thread and backfill
+the normalized local history index. Normal item/tool/file views render from that
 index after refresh; `--raw` intentionally reads the live App Server raw item
 payloads for jq-heavy inspection.
 

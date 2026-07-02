@@ -63,9 +63,11 @@ default; use `dispatch sync <selector>` when you want dispatch to refresh its lo
 indexed view of an attached thread. If `<selector>` is a raw unmanaged Codex thread
 id, `sync` first registers it as an attached read/metadata-managed lane, then refreshes
 the index. `dispatch list --unmanaged --archived` shows archived Codex sessions before
-you decide whether to sync or restore them. Transcript reads through `tail`, `history`, or
-transcript-inclusive `get` still use App Server `thread/read(includeTurns:true)`
-as the canonical source and backfill Dispatch's normalized local history index.
+you decide whether to sync or restore them. Bare `dispatch history` reads Dispatch's
+local index only; selector-scoped transcript reads through `tail`, `history`, or
+transcript-inclusive `get` use App Server `thread/read(includeTurns:true)` as the
+canonical source and backfill Dispatch's normalized local history index for that
+one thread.
 
 History capture is configurable in `~/.dispatch/config.toml`. The default
 `standard` mode captures operational facts and bounded searchable history
@@ -73,8 +75,9 @@ metadata while keeping raw provider payloads gated. Live App Server events are
 stored as compact summaries; transcript reads index bounded turns, item text,
 tool names, and file/thread refs without retaining raw item payloads unless the
 retention policy allows it. Minimal capture keeps turn-level state but skips
-item-level transcript rows. Normal `history` item/tool/file views render from
-the normalized index after refreshing from the App Server, while `history --raw`
+item-level transcript rows. Bare `history` overview is a local indexed summary.
+Normal selector-scoped `history` item/tool/file views render from the normalized
+index after refreshing one thread from the App Server, while `history --raw`
 remains a live raw-payload inspection path. Use `debug` only for development
 with bounded temp state; debug retention can store bounded raw provider event
 and item payloads with truncation markers for reducer/search diagnosis:

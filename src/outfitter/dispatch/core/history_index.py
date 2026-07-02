@@ -35,6 +35,8 @@ async def index_codex_thread_read(
     position = 0
     seen_turn_ids: set[str] = set()
     seen_item_ids: set[str] = set()
+    indexed_turns: list[ThreadTurn] = []
+    indexed_items: list[tuple[ThreadItem, list[ThreadItemRef]]] = []
     for turn_index, raw_turn in enumerate(turns):
         if not isinstance(raw_turn, dict):
             continue
@@ -43,7 +45,7 @@ async def index_codex_thread_read(
         status = _turn_status(raw_turn.get("status"))
         created_at = _timestamp(raw_turn)
         turn_error = bound_text(_string(raw_turn.get("error")), policy)
-        await registry.upsert_thread_turn(
+        indexed_turns.append(
             ThreadTurn(
                 provider=_CODEX_PROVIDER,
                 provider_thread_id=provider_thread_id,
@@ -86,9 +88,11 @@ async def index_codex_thread_read(
                 payload=payload,
                 raw_retained=payload is not None,
             )
-            await registry.upsert_thread_item(item, refs=_item_refs(item, raw_item))
+            indexed_items.append((item, _item_refs(item, raw_item)))
             position += 1
-    await registry.prune_thread_history_snapshot(
+    await registry.upsert_thread_history_snapshot(
+        turns=indexed_turns,
+        items=indexed_items,
         provider=_CODEX_PROVIDER,
         provider_thread_id=provider_thread_id,
         turn_ids=seen_turn_ids,

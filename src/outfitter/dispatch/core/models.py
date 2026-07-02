@@ -259,7 +259,7 @@ class TranscriptInput(BaseModel):
 class HistoryInput(BaseModel):
     lane: str | None = Field(
         default=None,
-        description="Optional thread selector. Omit for managed-thread overview.",
+        description="Optional thread selector. Omit for local managed-thread overview.",
     )
     view: HistoryView = Field(
         default="auto",
@@ -283,9 +283,14 @@ class HistoryInput(BaseModel):
         ),
     )
     min_bytes: int | None = Field(
-        default=None, ge=0, description="Only include summaries with at least this transcript size."
+        default=None,
+        ge=0,
+        description="Only include summaries with at least this indexed transcript size.",
     )
-    raw: bool = Field(default=False, description="Include raw App Server item payloads.")
+    raw: bool = Field(
+        default=False,
+        description="Include raw App Server item payloads for selector-scoped item views.",
+    )
     limit: int = Field(default=50, ge=1, description="Max rows/items to return.")
 
 
