@@ -101,6 +101,14 @@ The result should separate operation-shape problems from storage-engine
 problems. Turso/libSQL should be reconsidered when measured SQLite contention
 or sync/vector needs justify the extra integration cost.
 
+The first harness is synthetic and local-only: `scripts/measure_event_ingestion.py`
+creates generated lanes, provider events, thread turns/items, message receipts,
+and runtime state through the normal `Registry` APIs. It can emit JSON metrics
+and optionally samples history-summary reads while writes are in flight. This
+already caught and fixed a same-connection transaction race in mixed
+event/history writes, which is exactly the kind of operation-shape problem this
+milestone is meant to find before a storage-engine decision.
+
 ### 3. Semantic Search
 
 Semantic search should index derived artifacts, not raw logs by default.
@@ -213,7 +221,10 @@ Work in milestones, with review after each:
 
 3. Event ingestion harness
    - Build an opt-in synthetic harness.
-   - Record baseline results and revisit thresholds.
+   - Use the harness to catch same-connection transaction races and record
+     baseline metrics.
+   - Revisit thresholds after several real dogfood sessions produce comparable
+     local data.
 
 4. Semantic search substrate
    - Define artifacts, retention, and exclusion policy.
