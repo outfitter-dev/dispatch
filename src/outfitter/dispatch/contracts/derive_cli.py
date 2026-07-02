@@ -487,6 +487,10 @@ def _stop_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., No
 def _search_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., None]:
     def command(
         query: Annotated[str, typer.Argument(help="Substring/full-text query.")],
+        local: Annotated[
+            bool,
+            typer.Option("--local", help="Search Dispatch's local managed-history index."),
+        ] = False,
         lane: Annotated[
             str | None,
             typer.Option("--thread", "--lane", help="Limit to one thread selector."),
@@ -531,6 +535,7 @@ def _search_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., 
             invoke,
             render,
             query=query,
+            local=local,
             lane=lane,
             directory=directory,
             repo=repo,
@@ -557,6 +562,7 @@ def _invoke_search(
     render: Renderer,
     *,
     query: str,
+    local: bool,
     lane: str | None,
     directory: str | None,
     repo: str | None,
@@ -576,6 +582,7 @@ def _invoke_search(
         op.id,
         {
             "query": query,
+            "local": local,
             "lane": lane,
             "directory": directory,
             "repo": repo,

@@ -321,6 +321,15 @@ async def test_provider_event_history_index_roundtrips_and_dedupes(store: Regist
         newer.item_id
     ]
 
+    matches, scanned = await store.search_thread_items(
+        query="PYTEST",
+        lanes={"L1"},
+        limit=2,
+        max_scan=10,
+    )
+    assert scanned == 3
+    assert [found.item_id for found in matches] == [newer.item_id, item.item_id]
+
     created = await store.upsert_message_receipt(message_receipt())
     accepted = await store.upsert_message_receipt(
         created.model_copy(

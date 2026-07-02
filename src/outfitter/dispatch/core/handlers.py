@@ -1613,6 +1613,11 @@ async def search(inp: SearchInput, ctx: Ctx) -> SearchOutput:
     since = _parse_bound(inp.since, start=True)
     until = _parse_bound(inp.until, start=False)
 
+    if inp.local:
+        if inp.unmanaged:
+            raise ValidationError("local search only includes managed indexed threads")
+        return await _search_local_index(inp, ctx, lane_map, root_filters, since, until)
+
     if inp.lane is not None:
         return await _search_one_thread(inp, ctx, lane_map, root_filters, since, until)
 
@@ -1660,6 +1665,71 @@ async def search(inp: SearchInput, ctx: Ctx) -> SearchOutput:
         matches=matches,
         scanned=scanned,
         next_cursor=next_cursor,
+    )
+
+
+async def _search_local_index(
+    inp: SearchInput,
+    ctx: Ctx,
+    lane_map: dict[str, Lane],
+    roots: tuple[Path, ...],
+    since: float | None,
+    until: float | None,
+) -> SearchOutput:
+    eligible = [
+        lane
+        for lane in lane_map.values()
+        if _lane_matches_archived_filter(lane, archived=inp.archived)
+        and not _outside_roots(lane.cwd, roots)
+        and _lane_inside_date(lane, inp.date_field, since=since, until=until)
+    ]
+    if inp.lane is not None:
+        resolved = await resolve_thread_selector(
+            ctx, inp.lane, allow_unmanaged_raw=False, allow_fuzzy=True
+        )
+        eligible = [lane for lane in eligible if lane.id == resolved.thread_id]
+
+    items, scanned = await ctx.registry.search_thread_items(
+        query=inp.query,
+        lanes={lane.id for lane in eligible},
+        limit=inp.limit,
+        max_scan=inp.max_scan,
+    )
+    refs_by_item = await ctx.registry.list_thread_item_refs_many(items)
+    matches: list[SearchMatch] = []
+    for item in items:
+        if item.lane is None:
+            continue
+        lane = lane_map.get(item.lane)
+        if lane is None:
+            continue
+        refs = refs_by_item.get(item.item_id, [])
+        snippet = _local_search_snippet(item.text or "", inp.query)
+        file_refs = [ref.ref_value for ref in refs if ref.ref_type == "file"]
+        if file_refs:
+            snippet = f"{snippet} [files: {', '.join(file_refs[:3])}]"
+        matches.append(
+            SearchMatch(
+                id=lane.id,
+                ref=lane.ref,
+                handle=lane.handle,
+                managed=True,
+                source=lane.source,
+                status=lane.status,
+                name=lane.handle,
+                cwd=lane.cwd,
+                preview=None,
+                snippet=snippet,
+                created_at=int(lane.created_at.timestamp()),
+                updated_at=int(lane.updated_at.timestamp()),
+            )
+        )
+    return SearchOutput(
+        query=inp.query,
+        matches=matches,
+        scanned=scanned,
+        next_cursor=None,
+        experimental=False,
     )
 
 
@@ -1784,6 +1854,40 @@ def _repo_root(path: str) -> Path:
         if (candidate / ".git").exists():
             return candidate
     raise ValidationError(f"no git repo found at or above {path!r}")
+
+
+def _lane_inside_date(
+    lane: Lane,
+    date_field: str,
+    *,
+    since: float | None,
+    until: float | None,
+) -> bool:
+    value = lane.created_at if date_field == "created_at" else lane.updated_at
+    stamp = value.timestamp()
+    if since is not None and stamp < since:
+        return False
+    return not (until is not None and stamp > until)
+
+
+def _lane_matches_archived_filter(lane: Lane, *, archived: bool) -> bool:
+    is_archived = lane.status == "archived"
+    return is_archived if archived else not is_archived
+
+
+def _local_search_snippet(text: str, query: str, *, radius: int = 80) -> str:
+    folded = text.casefold()
+    start = folded.find(query.casefold())
+    if start < 0:
+        return _short(text, limit=radius * 2) or ""
+    left = max(0, start - radius)
+    right = min(len(text), start + len(query) + radius)
+    snippet = text[left:right].strip()
+    if left > 0:
+        snippet = "..." + snippet
+    if right < len(text):
+        snippet += "..."
+    return snippet
 
 
 def _parse_bound(value: str | None, *, start: bool) -> float | None:

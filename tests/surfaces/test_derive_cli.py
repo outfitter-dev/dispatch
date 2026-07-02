@@ -323,6 +323,7 @@ def test_top_level_thread_actions_route_to_lane_contracts() -> None:
             "search",
             {
                 "query": "needle",
+                "local": False,
                 "lane": "@old",
                 "directory": None,
                 "repo": None,
@@ -339,6 +340,44 @@ def test_top_level_thread_actions_route_to_lane_contracts() -> None:
             },
         ),
     ]
+
+
+def test_search_local_flag_maps_to_search_contract() -> None:
+    captured: dict[str, object] = {}
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        captured["op"] = op_id
+        captured["params"] = params
+        return {
+            "query": "needle",
+            "matches": [],
+            "scanned": 0,
+            "next_cursor": None,
+            "experimental": False,
+        }
+
+    app = derive_cli(REGISTRY, invoke)
+    result = runner.invoke(app, ["search", "needle", "--local", "--managed"])
+
+    assert result.exit_code == 0
+    assert captured["op"] == "search"
+    assert captured["params"] == {
+        "query": "needle",
+        "local": True,
+        "lane": None,
+        "directory": None,
+        "repo": None,
+        "managed": True,
+        "unmanaged": False,
+        "archived": False,
+        "since": None,
+        "until": None,
+        "date_field": "updated_at",
+        "sort": "updated_at",
+        "ascending": False,
+        "limit": 20,
+        "max_scan": 200,
+    }
 
 
 def test_flat_thread_routes_core_commands() -> None:

@@ -1721,6 +1721,30 @@ class Registry:
             rows = await cur.fetchall()
         return [_row_to_thread_item(row) for row in rows]
 
+    async def search_thread_items(
+        self,
+        *,
+        query: str,
+        lanes: set[str] | None = None,
+        limit: int = 50,
+        max_scan: int = 500,
+    ) -> tuple[list[ThreadItem], int]:
+        clauses = ["text IS NOT NULL", "instr(lower(text), lower(?)) > 0"]
+        params: list[object] = [query]
+        if lanes is not None:
+            if not lanes:
+                return [], 0
+            placeholders = ", ".join("?" for _ in lanes)
+            clauses.append(f"lane IN ({placeholders})")
+            params.extend(sorted(lanes))
+        sql = "SELECT * FROM thread_items WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY inserted_at DESC, COALESCE(position, -1) DESC, item_id DESC LIMIT ?"
+        params.append(max_scan)
+        async with self._conn.execute(sql, tuple(params)) as cur:
+            rows = await cur.fetchall()
+        items = [_row_to_thread_item(row) for row in rows]
+        return items[:limit], len(items)
+
     async def get_thread_history_summary_stats(self, *, lane: str) -> ThreadHistorySummaryStats:
         async with self._conn.execute(
             """

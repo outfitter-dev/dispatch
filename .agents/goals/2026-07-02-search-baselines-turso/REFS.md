@@ -16,6 +16,7 @@
 ## Source / Docs
 
 - `docs/development/local-substrate-roadmap.md`
+- `docs/development/semantic-history-search.md`
 - `docs/adrs/0018-top-level-thread-actions-and-search.md`
 - `docs/adrs/0023-provider-event-log-and-history-index.md`
 - `docs/research/turso-libsql-storage-spike.md`
