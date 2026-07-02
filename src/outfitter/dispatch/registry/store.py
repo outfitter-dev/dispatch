@@ -1482,8 +1482,7 @@ class Registry:
             "provider_event_id, provider_turn_id, provider_item_id, correlation_id, "
             "provider_ts, received_at, summary, payload, raw_retained) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(provider, provider_event_id) WHERE provider_event_id IS NOT NULL "
-            "DO NOTHING",
+            "ON CONFLICT DO NOTHING",
             (
                 event.provider,
                 event.provider_thread_id,

@@ -4,7 +4,7 @@ slug: provider-event-log-and-history-index
 title: Provider Event Log and History Index
 status: proposed
 created: 2026-07-01
-updated: 2026-07-01
+updated: 2026-07-02
 owners: ['[galligan](https://github.com/galligan)']
 ---
 
@@ -119,6 +119,14 @@ Storage backend policy:
 - Treat vector search as an optional index over normalized items and summaries,
   not as the primary source of truth.
 
+2026-07-02 spike result: keep SQLite/`aiosqlite` as the default. The Turso/libSQL
+storage spike proved representative registry/history SQL can run on stdlib
+SQLite, `pyturso`, and `libsql` after a small provider-event upsert portability
+hardening, but it did not justify a default backend migration. Current Python
+Turso/libSQL package probes are synchronous from Dispatch's perspective, full
+registry test parity still needs a smaller connection/transaction boundary, and
+Turso Sync/cloud use requires a separate security/config decision.
+
 Retention and privacy policy:
 
 - Retain normalized indexed fields by default.
@@ -199,3 +207,4 @@ Retention and privacy policy:
 - [Turso AI and embeddings](https://docs.turso.tech/features/ai-and-embeddings)
 - [Turso libSQL overview](https://docs.turso.tech/libsql)
 - [Turso Python quickstart](https://docs.turso.tech/sdk/python/quickstart)
+- [Turso/libSQL storage spike](../research/turso-libsql-storage-spike.md)

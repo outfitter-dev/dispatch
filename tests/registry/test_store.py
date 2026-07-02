@@ -421,6 +421,11 @@ async def test_provider_event_payload_is_stored_compactly(store: Registry) -> No
     assert row["bytes"] == len(compact.encode("utf-8"))
 
 
+async def test_provider_event_foreign_key_errors_are_not_ignored(store: Registry) -> None:
+    with pytest.raises(aiosqlite.IntegrityError):
+        await store.record_provider_event(provider_event(lane="missing"))
+
+
 async def test_thread_item_payload_is_stored_compactly(store: Registry) -> None:
     await store.add_lane(id="L1", handle="@lane", source="own", status="idle")
     payload = {"type": "toolCall", "metadata": {str(index): index for index in range(8)}}
