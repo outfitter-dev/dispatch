@@ -437,7 +437,7 @@ SYNC = define_op(
     intent="write",
     idempotent=True,
     handler=handlers.sync_lane,
-    examples=[Example("missing", input={"lane": "nope"}, raises=NotFoundError)],
+    examples=[Example("missing-handle", input={"lane": "@nope"}, raises=NotFoundError)],
 )
 
 ROSTER = define_op(

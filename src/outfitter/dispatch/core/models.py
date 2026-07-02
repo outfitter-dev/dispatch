@@ -189,7 +189,12 @@ class ThreadTargetInput(BaseModel):
 
 
 class LaneSyncInput(BaseModel):
-    lane: str = Field(description=THREAD_SELECTOR_DESCRIPTION)
+    lane: str = Field(
+        description=(
+            "Thread selector: dispatch ref, full Codex thread id, or unique handle/title. "
+            "A raw unmanaged Codex thread id is attached before syncing."
+        )
+    )
     full: bool = Field(default=False, description="Scan the full source file instead of top+tail.")
 
 
@@ -337,6 +342,9 @@ class RosterInput(BaseModel):
 
 class DiscoverInput(BaseModel):
     limit: int = Field(default=50, ge=1, description="Max persisted Codex sessions to list.")
+    archived: bool = Field(
+        default=False, description="List archived sessions instead of active ones."
+    )
 
 
 class ModelsInput(BaseModel):
@@ -860,6 +868,7 @@ class DiscoveredSession(BaseModel):
     cwd: str | None = None
     status: str | None = None
     source: str | None = None
+    archived: bool = False
     ephemeral: bool | None = None
     model: ThreadModelView = Field(default_factory=ThreadModelView)
 

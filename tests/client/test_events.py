@@ -9,7 +9,9 @@ from outfitter.dispatch.client.events import (
     ItemCompleted,
     LaneIdle,
     StatusChanged,
+    ThreadArchived,
     ThreadCompacted,
+    ThreadUnarchived,
     TurnCompleted,
     TurnFailed,
     TurnStarted,
@@ -42,6 +44,11 @@ def test_goal_and_compaction_notifications_project_to_activity_events() -> None:
     assert project_notification("thread/goal/updated", {"threadId": "L1"}) == [GoalUpdated("L1")]
     assert project_notification("thread/goal/cleared", {"threadId": "L1"}) == [GoalCleared("L1")]
     assert project_notification("thread/compacted", {"threadId": "L1"}) == [ThreadCompacted("L1")]
+
+
+def test_archive_notifications_project_to_lifecycle_events() -> None:
+    assert project_notification("thread/archived", {"threadId": "L1"}) == [ThreadArchived("L1")]
+    assert project_notification("thread/unarchived", {"threadId": "L1"}) == [ThreadUnarchived("L1")]
 
 
 def test_status_changed_with_no_flags_also_emits_idle() -> None:

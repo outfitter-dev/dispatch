@@ -676,6 +676,9 @@ def _list_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Ca
         include_archived: Annotated[
             bool, typer.Option(help="Include archived managed threads.")
         ] = False,
+        archived: Annotated[
+            bool, typer.Option("--archived", help="List archived unmanaged sessions.")
+        ] = False,
         limit: Annotated[int, typer.Option(help="Max unmanaged sessions to list.")] = 50,
         json: Annotated[
             bool, typer.Option("--json", help="Render machine-readable JSON output.")
@@ -683,7 +686,9 @@ def _list_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Ca
     ) -> None:
         op = discover if unmanaged else roster
         params: dict[str, object] = (
-            {"limit": limit} if unmanaged else {"include_archived": include_archived}
+            {"limit": limit, "archived": archived}
+            if unmanaged
+            else {"include_archived": include_archived}
         )
         render(op, invoke(op.id, params))
         _ignore_json(json)

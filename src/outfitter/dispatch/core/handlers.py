@@ -737,10 +737,18 @@ async def attach_lane(inp: AttachInput, ctx: Ctx) -> LaneRef:
             f"attach timed out: thread/read metadata for {inp.thread!r} exceeded "
             f"{_ATTACH_METADATA_TIMEOUT_S:.0f}s (no lane registered)"
         ) from exc
-    handle = thread.name or f"@{inp.thread[:8]}"
-    sync = (
+    lane = await _register_attached_thread(thread, ctx, sync=inp.sync, audit_op="attach")
+    ctx.log.info("lane.attach", lane=lane.id, handle=lane.handle)
+    return _ref(lane, ctx)
+
+
+async def _register_attached_thread(
+    thread: ThreadInfo, ctx: Ctx, *, sync: bool, audit_op: str
+) -> Lane:
+    handle = thread.name or f"@{thread.id[:8]}"
+    lane_sync = (
         await _sync_from_thread(thread.id, thread, full=False)
-        if inp.sync
+        if sync
         else _metadata_sync(thread.id, thread, state="metadata")
     )
     lane, _ = await ctx.registry.add_lane_with_sync(
@@ -749,13 +757,12 @@ async def attach_lane(inp: AttachInput, ctx: Ctx) -> LaneRef:
         source="attached",
         cwd=thread.cwd,
         status="idle",
-        sync=sync,
-        audit_op="attach",
+        sync=lane_sync,
+        audit_op=audit_op,
         audit_detail=handle,
     )
-    await _record_observed_model(lane, thread, sync, ctx)
-    ctx.log.info("lane.attach", lane=lane.id, handle=handle)
-    return _ref(lane, ctx)
+    await _record_observed_model(lane, thread, lane_sync, ctx)
+    return lane
 
 
 async def _read_thread_metadata(ctx: Ctx, thread_id: str) -> ThreadInfo:
@@ -1347,8 +1354,14 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
 
 
 async def sync_lane(inp: LaneSyncInput, ctx: Ctx) -> LaneSyncResult:
-    lane = await _resolve(ctx, inp.lane)
+    resolved = await resolve_thread_selector(ctx, inp.lane, allow_unmanaged_raw=True)
+    if resolved.lane is None:
+        thread = await _read_thread_metadata(ctx, resolved.thread_id)
+        lane = await _register_attached_thread(thread, ctx, sync=False, audit_op="attach")
+    else:
+        lane = resolved.lane
     sync = await _sync_lane(lane, ctx, full=inp.full)
+    lane = await _reconcile_archive_membership(lane, ctx)
     model_settings = await ctx.registry.get_lane_model_settings(lane.id)
     await ctx.registry.log_action(
         "sync", lane=lane.id, detail=f"state={sync.state}; full={inp.full}"
@@ -1358,6 +1371,30 @@ async def sync_lane(inp: LaneSyncInput, ctx: Ctx) -> LaneSyncResult:
         sync=_sync_view(sync),
         model=_model_view(model_settings, sync),
     )
+
+
+async def _reconcile_archive_membership(lane: Lane, ctx: Ctx) -> Lane:
+    if await _thread_list_contains(ctx, lane.id, archived=True):
+        if lane.status != "archived":
+            await ctx.registry.update_lane_status(lane.id, "archived")
+            return await ctx.registry.get_lane(lane.id)
+        return lane
+    if lane.status == "archived" and await _thread_list_contains(ctx, lane.id, archived=False):
+        await ctx.registry.mark_lane_idle(lane.id)
+        return await ctx.registry.get_lane(lane.id)
+    return lane
+
+
+async def _thread_list_contains(ctx: Ctx, thread_id: str, *, archived: bool) -> bool:
+    threads = await ctx.client.thread_list(
+        limit=100,
+        archived=archived,
+        search_term=thread_id,
+        sort_direction="desc",
+        sort_key="updated_at",
+        use_state_db_only=True,
+    )
+    return any(thread.id == thread_id for thread in threads)
 
 
 async def rename_lane(inp: LaneRenameInput, ctx: Ctx) -> ThreadActionRef:
@@ -1945,7 +1982,7 @@ def _short(text: str | None, limit: int = _PREVIEW_MAX) -> str | None:
     return collapsed[: limit - 1].rstrip() + "…"
 
 
-def _session(thread: ThreadInfo) -> DiscoveredSession:
+def _session(thread: ThreadInfo, *, archived: bool = False) -> DiscoveredSession:
     return DiscoveredSession(
         id=thread.id,
         name=thread.name,
@@ -1953,6 +1990,7 @@ def _session(thread: ThreadInfo) -> DiscoveredSession:
         cwd=thread.cwd,
         status=thread.status.type if thread.status is not None else None,
         source=thread.source,
+        archived=archived,
         ephemeral=thread.ephemeral,
         model=_model_view_from_thread(thread),
     )
@@ -1964,12 +2002,12 @@ async def discover(inp: DiscoverInput, ctx: Ctx) -> Discovery:
     Discovery does not resume or register anything."""
     threads = await ctx.client.thread_list(
         limit=inp.limit,
-        archived=False,
+        archived=inp.archived,
         sort_direction="desc",
         sort_key="updated_at",
         use_state_db_only=True,
     )
-    return Discovery(sessions=[_session(thread) for thread in threads])
+    return Discovery(sessions=[_session(thread, archived=inp.archived) for thread in threads])
 
 
 async def models(inp: ModelsInput, ctx: Ctx) -> ModelCatalogOutput:
