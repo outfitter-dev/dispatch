@@ -30,7 +30,7 @@ The current canonical operator grammar is:
 - registry recovery: `registry migrate`
 - model catalog: `models`
 - thread lifecycle/read/search: `new`, `attach`, `list`, `list --unmanaged`,
-  `get`, `sync`, `tail`, `history`, `watch`, `search`
+  `get`, `sync`, `tail`, `history`, `watch`, `search`, `query`
 - thread actions: `rename`, `archive`, `restore`
 - message verbs: `send`, `stop`
 - goals: `goal status`, `goal set`, `goal clear`
@@ -323,11 +323,11 @@ uv run dispatch restore @my-lane
 
 `restore` only unarchives; it does not resume or start a turn.
 
-Use `search` before attaching when you need to find the right existing thread:
+Use `search` before attaching when you need App Server broad search over Codex
+history, including unmanaged or not-yet-indexed threads:
 
 ```bash
 uv run dispatch search "schema drift"
-uv run dispatch search "schema drift" --local
 uv run dispatch search "schema drift" --managed
 uv run dispatch search "schema drift" --unmanaged
 uv run dispatch search "schema drift" --thread <dispatch-ref>
@@ -336,13 +336,25 @@ uv run dispatch search "schema drift" --dir /path/to/project
 uv run dispatch search "schema drift" --since 2026-06-01 --until 2026-06-05
 ```
 
-Broad search uses experimental App Server `thread/search` plus dispatch-side
-filters. Use `--local` when you want Dispatch's normalized local managed-history
-index instead; it does not call App Server search and rejects `--unmanaged`.
-Lane-focused search without `--local` reads one thread transcript and scans
-locally. Sync is separate for managed lanes: it refreshes dispatch's local index
-and does not grant write authority. For a raw unmanaged Codex id, `sync` is also
-the explicit registration step.
+Use `query` for Dispatch's local indexed managed-history substrate. Query does
+not call App Server search and only sees threads Dispatch has indexed through
+sync/history/tail/watch/live capture. Text is optional when a structural filter
+is present:
+
+```bash
+uv run dispatch query "schema drift"
+uv run dispatch query --tool linear.save_issue
+uv run dispatch query --tool linear.save_issue --tool-status completed --arg-key id
+uv run dispatch query --file convex/support/lineage.ts
+uv run dispatch query --repo . --since 2026-06-01 --until 2026-06-05
+uv run dispatch query --type mcpToolCall --errored
+uv run dispatch schema query
+```
+
+Use `history` after you already know the thread and want summary/items/tools/files
+inspection. Sync is separate for managed lanes: it refreshes dispatch's local
+index and does not grant write authority. For a raw unmanaged Codex id, `sync` is
+also the explicit registration step.
 
 ## Message Verbs
 

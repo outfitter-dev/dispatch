@@ -118,6 +118,10 @@ from .models import (
     NewInput,
     NewLane,
     OpenInput,
+    QueryInput,
+    QueryMatch,
+    QueryOutput,
+    QueryRef,
     RollbackInput,
     Roster,
     RosterInput,
@@ -1613,11 +1617,6 @@ async def search(inp: SearchInput, ctx: Ctx) -> SearchOutput:
     since = _parse_bound(inp.since, start=True)
     until = _parse_bound(inp.until, start=False)
 
-    if inp.local:
-        if inp.unmanaged:
-            raise ValidationError("local search only includes managed indexed threads")
-        return await _search_local_index(inp, ctx, lane_map, root_filters, since, until)
-
     if inp.lane is not None:
         return await _search_one_thread(inp, ctx, lane_map, root_filters, since, until)
 
@@ -1668,19 +1667,25 @@ async def search(inp: SearchInput, ctx: Ctx) -> SearchOutput:
     )
 
 
-async def _search_local_index(
-    inp: SearchInput,
-    ctx: Ctx,
-    lane_map: dict[str, Lane],
-    roots: tuple[Path, ...],
-    since: float | None,
-    until: float | None,
-) -> SearchOutput:
+async def query(inp: QueryInput, ctx: Ctx) -> QueryOutput:
+    if inp.limit > inp.max_scan:
+        raise ValidationError("query limit cannot exceed max_scan")
+    if inp.query is not None and not inp.query.strip():
+        raise ValidationError("query text cannot be empty")
+    if inp.query is None and not _query_has_structural_filter(inp):
+        raise ValidationError("query requires text or at least one structural filter")
+
+    lane_map = {lane.id: lane for lane in await ctx.registry.list_lanes(include_archived=True)}
+    root_filters = _search_roots(inp)
+    since = _parse_bound(inp.since, start=True)
+    until = _parse_bound(inp.until, start=False)
     eligible = [
         lane
         for lane in lane_map.values()
         if _lane_matches_archived_filter(lane, archived=inp.archived)
-        and not _outside_roots(lane.cwd, roots)
+        and (inp.source is None or lane.source == inp.source)
+        and (inp.status is None or lane.status == inp.status)
+        and not _outside_roots(lane.cwd, root_filters)
         and _lane_inside_date(lane, inp.date_field, since=since, until=until)
     ]
     if inp.lane is not None:
@@ -1689,14 +1694,28 @@ async def _search_local_index(
         )
         eligible = [lane for lane in eligible if lane.id == resolved.thread_id]
 
-    items, scanned = await ctx.registry.search_thread_items(
+    items, scanned = await ctx.registry.query_thread_items(
         query=inp.query,
         lanes={lane.id for lane in eligible},
+        item_type=inp.item_type,
+        role=inp.role,
+        tool=inp.tool,
+        tool_server=inp.tool_server,
+        tool_status=inp.tool_status,
+        errored=inp.errored,
+        file=inp.file,
+        file_under=inp.file_under,
+        ext=inp.ext,
+        mentions_thread=inp.mentions_thread,
+        turn_id=inp.turn,
+        item_id=inp.item_id,
+        arg_key=inp.arg_key,
+        raw_retained=inp.raw_retained,
         limit=inp.limit,
         max_scan=inp.max_scan,
     )
     refs_by_item = await ctx.registry.list_thread_item_refs_many(items)
-    matches: list[SearchMatch] = []
+    matches: list[QueryMatch] = []
     for item in items:
         if item.lane is None:
             continue
@@ -1704,33 +1723,108 @@ async def _search_local_index(
         if lane is None:
             continue
         refs = refs_by_item.get(item.item_id, [])
-        snippet = _local_search_snippet(item.text or "", inp.query)
-        file_refs = [ref.ref_value for ref in refs if ref.ref_type == "file"]
-        if file_refs:
-            snippet = f"{snippet} [files: {', '.join(file_refs[:3])}]"
-        matches.append(
-            SearchMatch(
-                id=lane.id,
-                ref=lane.ref,
-                handle=lane.handle,
-                managed=True,
-                source=lane.source,
-                status=lane.status,
-                name=lane.handle,
-                cwd=lane.cwd,
-                preview=None,
-                snippet=snippet,
-                created_at=int(lane.created_at.timestamp()),
-                updated_at=int(lane.updated_at.timestamp()),
+        matches.append(_query_match(lane, item, refs, query=inp.query))
+    return QueryOutput(query=inp.query, matches=matches, scanned=scanned)
+
+
+def _query_has_structural_filter(inp: QueryInput) -> bool:
+    return (
+        any(
+            value is not None
+            for value in (
+                inp.lane,
+                inp.directory,
+                inp.repo,
+                inp.source,
+                inp.status,
+                inp.since,
+                inp.until,
+                inp.item_type,
+                inp.role,
+                inp.tool,
+                inp.tool_server,
+                inp.tool_status,
+                inp.errored,
+                inp.file,
+                inp.file_under,
+                inp.ext,
+                inp.mentions_thread,
+                inp.turn,
+                inp.item_id,
+                inp.arg_key,
+                inp.raw_retained,
             )
         )
-    return SearchOutput(
-        query=inp.query,
-        matches=matches,
-        scanned=scanned,
-        next_cursor=None,
-        experimental=False,
+        or inp.archived
     )
+
+
+def _query_match(
+    lane: Lane, item: ThreadItem, refs: list[ThreadItemRef], *, query: str | None
+) -> QueryMatch:
+    raw = item.payload or {}
+    ref_views = [QueryRef(type=ref.ref_type, value=ref.ref_value) for ref in refs]
+    file_refs = [ref.ref_value for ref in refs if ref.ref_type == "file"]
+    return QueryMatch(
+        ref=lane.ref,
+        id=lane.id,
+        handle=lane.handle,
+        source=lane.source,
+        status=lane.status,
+        cwd=lane.cwd,
+        item_id=item.item_id,
+        turn_id=item.turn_id,
+        type=item.item_type,
+        role=item.role,
+        tool=item.tool,
+        snippet=_query_snippet(item, refs, query=query),
+        files=file_refs,
+        refs=ref_views,
+        created_at=item.created_at,
+        inserted_at=item.inserted_at,
+        raw_retained=item.raw_retained,
+        tool_server=_string_from_raw(raw, "server") or _ref_value(refs, "tool_server"),
+        tool_status=_string_from_raw(raw, "status") or _ref_value(refs, "tool_status"),
+        errored=bool(raw.get("error")) or any(ref.ref_type == "tool_error" for ref in refs),
+        duration_ms=_int_from_raw(raw, "durationMs"),
+    )
+
+
+def _query_snippet(item: ThreadItem, refs: list[ThreadItemRef], *, query: str | None) -> str:
+    if item.text:
+        return (
+            _local_search_snippet(item.text, query)
+            if query is not None
+            else (_short(item.text) or "")
+        )
+    pieces = [item.tool or item.item_type]
+    status = _ref_value(refs, "tool_status")
+    server = _ref_value(refs, "tool_server")
+    if status:
+        pieces.append(status)
+    if server:
+        pieces.append(f"on {server}")
+    files = [ref.ref_value for ref in refs if ref.ref_type == "file"]
+    if files:
+        pieces.append(f"files: {', '.join(files[:3])}")
+    return " ".join(piece for piece in pieces if piece)
+
+
+def _ref_value(refs: list[ThreadItemRef], ref_type: str) -> str | None:
+    for ref in refs:
+        if ref.ref_type == ref_type:
+            return ref.ref_value
+    return None
+
+
+def _string_from_raw(raw: dict[str, object], key: str) -> str | None:
+    value = raw.get(key)
+    return value if isinstance(value, str) else None
+
+
+def _int_from_raw(raw: dict[str, object], key: str) -> int | None:
+    value = raw.get(key)
+    return value if isinstance(value, int) else None
 
 
 def _watch_event(raw: dict[str, object]) -> WatchEvent | None:
@@ -1833,7 +1927,7 @@ async def _search_one_thread(
     return SearchOutput(query=inp.query, matches=matches, scanned=scanned)
 
 
-def _search_roots(inp: SearchInput) -> tuple[Path, ...]:
+def _search_roots(inp: SearchInput | QueryInput) -> tuple[Path, ...]:
     roots: list[Path] = []
     if inp.directory is not None:
         roots.append(_normalize_path(inp.directory))

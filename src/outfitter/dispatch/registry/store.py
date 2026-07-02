@@ -76,6 +76,47 @@ class ThreadHistorySummaryStats:
     files: list[ThreadHistoryFileStat]
 
 
+def _ref_exists_sql(ref_type: str, *, operator: str = "instr", exact: bool = False) -> str:
+    value_predicate = (
+        "refs.ref_value = ?"
+        if exact
+        else (
+            "lower(refs.ref_value) LIKE lower(?)"
+            if operator == "LIKE"
+            else "instr(lower(refs.ref_value), lower(?)) > 0"
+        )
+    )
+    return (
+        "EXISTS (SELECT 1 FROM thread_item_refs refs "
+        "WHERE refs.provider = items.provider "
+        "AND refs.provider_thread_id = items.provider_thread_id "
+        "AND refs.item_id = items.item_id "
+        "AND refs.ref_type = "
+        f"{json.dumps(ref_type)} "
+        f"AND {value_predicate})"
+    )
+
+
+def _path_prefix(path: str) -> str:
+    normalized = path.rstrip("/")
+    return f"{normalized}/" if normalized else path
+
+
+def _ref_path_under_sql() -> str:
+    return (
+        "EXISTS (SELECT 1 FROM thread_item_refs refs "
+        "WHERE refs.provider = items.provider "
+        "AND refs.provider_thread_id = items.provider_thread_id "
+        "AND refs.item_id = items.item_id "
+        "AND refs.ref_type = 'file' "
+        "AND (refs.ref_value = ? OR lower(refs.ref_value) LIKE lower(?)))"
+    )
+
+
+def _extension_suffix(ext: str) -> str:
+    return ext if ext.startswith(".") else f".{ext}"
+
+
 _QUEUED_MESSAGES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS queued_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1739,6 +1780,98 @@ class Registry:
             params.extend(sorted(lanes))
         sql = "SELECT * FROM thread_items WHERE " + " AND ".join(clauses)
         sql += " ORDER BY inserted_at DESC, COALESCE(position, -1) DESC, item_id DESC LIMIT ?"
+        params.append(max_scan)
+        async with self._conn.execute(sql, tuple(params)) as cur:
+            rows = await cur.fetchall()
+        items = [_row_to_thread_item(row) for row in rows]
+        return items[:limit], len(items)
+
+    async def query_thread_items(
+        self,
+        *,
+        query: str | None = None,
+        lanes: set[str] | None = None,
+        item_type: str | None = None,
+        role: str | None = None,
+        tool: str | None = None,
+        tool_server: str | None = None,
+        tool_status: str | None = None,
+        errored: bool | None = None,
+        file: str | None = None,
+        file_under: str | None = None,
+        ext: str | None = None,
+        mentions_thread: str | None = None,
+        turn_id: str | None = None,
+        item_id: str | None = None,
+        arg_key: str | None = None,
+        raw_retained: bool | None = None,
+        limit: int = 50,
+        max_scan: int = 500,
+    ) -> tuple[list[ThreadItem], int]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if query is not None:
+            clauses.append("items.text IS NOT NULL")
+            clauses.append("instr(lower(items.text), lower(?)) > 0")
+            params.append(query)
+        if lanes is not None:
+            if not lanes:
+                return [], 0
+            placeholders = ", ".join("?" for _ in lanes)
+            clauses.append(f"items.lane IN ({placeholders})")
+            params.extend(sorted(lanes))
+        if item_type is not None:
+            clauses.append("instr(lower(items.item_type), lower(?)) > 0")
+            params.append(item_type)
+        if role is not None:
+            clauses.append("items.role IS NOT NULL")
+            clauses.append("instr(lower(items.role), lower(?)) > 0")
+            params.append(role)
+        if tool is not None:
+            clauses.append("items.tool IS NOT NULL")
+            clauses.append("instr(lower(items.tool), lower(?)) > 0")
+            params.append(tool)
+        if turn_id is not None:
+            clauses.append("items.turn_id = ?")
+            params.append(turn_id)
+        if item_id is not None:
+            clauses.append("items.item_id = ?")
+            params.append(item_id)
+        if raw_retained is not None:
+            clauses.append("items.raw_retained = ?")
+            params.append(int(raw_retained))
+        for ref_type, ref_value in (
+            ("tool_server", tool_server),
+            ("tool_status", tool_status),
+            ("file", file),
+            ("thread", mentions_thread),
+            ("tool_arg_key", arg_key),
+        ):
+            if ref_value is not None:
+                clauses.append(_ref_exists_sql(ref_type))
+                params.append(ref_value)
+        if file_under is not None:
+            clauses.append(_ref_path_under_sql())
+            path = file_under.rstrip("/")
+            params.extend([path, f"{_path_prefix(path)}%"])
+        if ext is not None:
+            clauses.append(_ref_exists_sql("file", operator="LIKE"))
+            params.append(f"%{_extension_suffix(ext).casefold()}")
+        if errored is not None:
+            clause = _ref_exists_sql("tool_error", exact=True)
+            clauses.append(clause if errored else f"NOT {clause}")
+            if errored:
+                params.append("true")
+            else:
+                params.append("true")
+        where = " AND ".join(clauses) if clauses else "1 = 1"
+        sql = "SELECT items.* FROM thread_items items WHERE " + where
+        sql += (
+            " ORDER BY items.inserted_at DESC,"
+            " COALESCE(items.position, -1) DESC,"
+            " items.item_id DESC"
+        )
+        sql += " LIMIT ?"
         params.append(max_scan)
         async with self._conn.execute(sql, tuple(params)) as cur:
             rows = await cur.fetchall()

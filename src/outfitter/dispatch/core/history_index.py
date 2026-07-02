@@ -136,7 +136,7 @@ def _item_text(item: dict[str, object]) -> str | None:
 
 
 def _tool_name(item: dict[str, object]) -> str | None:
-    for key in ("toolName", "tool_name", "name", "command"):
+    for key in ("toolName", "tool_name", "tool", "name", "command"):
         value = _string(item.get(key))
         if value:
             return value
@@ -150,6 +150,20 @@ def _item_refs(item: ThreadItem, raw_item: dict[str, object]) -> list[ThreadItem
     refs: set[tuple[str, str]] = set()
     if item.tool:
         refs.add(("tool", item.tool))
+    for key, ref_type in (
+        ("server", "tool_server"),
+        ("status", "tool_status"),
+    ):
+        value = _string(raw_item.get(key))
+        if value:
+            refs.add((ref_type, value))
+    if raw_item.get("error") is not None:
+        refs.add(("tool_error", "true"))
+    arguments = raw_item.get("arguments")
+    if isinstance(arguments, dict):
+        for key in arguments:
+            if isinstance(key, str):
+                refs.add(("tool_arg_key", key))
     for path in _file_paths(raw_item):
         refs.add(("file", path))
     blob = json.dumps(raw_item, separators=(",", ":"))

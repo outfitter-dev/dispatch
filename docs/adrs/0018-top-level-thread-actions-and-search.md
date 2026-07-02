@@ -56,9 +56,9 @@ filters for managed/unmanaged state, repo/directory containment, and date ranges
 lane search uses `thread/read(includeTurns:true)` and a local substring scan because the
 App Server search schema does not expose a thread-id filter.
 
-2026-07-02 update: `dispatch search --local` is an explicit managed-history path over
-Dispatch's normalized `thread_items` index. It does not call App Server search and rejects
-`--unmanaged`; broad search remains App Server-backed by default.
+2026-07-02 update: the explicit managed-history path moved to `dispatch query`.
+`query` reads Dispatch's normalized `thread_items`/`thread_item_refs` index and does
+not call App Server search. Broad `search` remains App Server-backed.
 
 ## Consequences
 

@@ -43,6 +43,8 @@ from .models import (
     NewInput,
     NewLane,
     OpenInput,
+    QueryInput,
+    QueryOutput,
     RollbackInput,
     Roster,
     RosterInput,
@@ -464,7 +466,7 @@ DISCOVER = define_op(
 
 SEARCH = define_op(
     id="search",
-    summary="Search Codex thread history.",
+    summary="Search Codex thread history through App Server search.",
     input=SearchInput,
     output=SearchOutput,
     intent="read",
@@ -480,6 +482,28 @@ SEARCH = define_op(
                 "scanned": 0,
                 "next_cursor": None,
                 "experimental": True,
+            },
+        )
+    ],
+)
+
+QUERY = define_op(
+    id="query",
+    summary="Query Dispatch's local indexed managed-thread history.",
+    input=QueryInput,
+    output=QueryOutput,
+    intent="read",
+    idempotent=True,
+    handler=handlers.query,
+    examples=[
+        Example(
+            "empty",
+            input={"query": "needle"},
+            output={
+                "query": "needle",
+                "matches": [],
+                "scanned": 0,
+                "experimental": False,
             },
         )
     ],
@@ -812,6 +836,7 @@ _ALL = (
     ROSTER,
     DISCOVER,
     SEARCH,
+    QUERY,
     MODELS,
     INBOX_LIST,
     INBOX_READ,

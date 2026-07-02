@@ -121,10 +121,11 @@ milestone is meant to find before a storage-engine decision.
 
 Semantic search should index derived artifacts, not raw logs by default.
 
-The first completed slice is intentionally pre-semantic: `dispatch search --local`
-queries the normalized local `thread_items` index for managed threads and leaves
-broad App Server search as the default. This proves the local search contract, filters,
-and retention boundaries before introducing embeddings or vector storage.
+The first completed slice is intentionally pre-semantic: `dispatch query`
+queries the normalized local `thread_items`/`thread_item_refs` index for managed
+threads and leaves `dispatch search` as the broad App Server search surface. This
+proves the local query contract, filters, and retention boundaries before introducing
+embeddings or vector storage.
 
 Good initial index candidates:
 

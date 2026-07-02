@@ -24,13 +24,14 @@ the candidate backend without changing the app-level `Registry` contract.
 
 ### Current Local Search Does Not Require Turso
 
-`dispatch search --local` now searches normalized `thread_items` for managed
-threads only. It is intentionally keyword search, not semantic/vector search.
+`dispatch query` now searches normalized `thread_items`/`thread_item_refs` for
+managed threads only. It is intentionally keyword and structural indexed search,
+not semantic/vector search.
 The current implementation proves:
 
-- the local search contract can be backed by existing SQLite tables;
-- CLI/MCP schema projection can expose the mode without surface drift;
-- local search can preserve the App Server broad-search default;
+- the local query contract can be backed by existing SQLite tables;
+- CLI/MCP schema projection can expose a separate local query surface without surface drift;
+- local query can preserve `dispatch search` as the App Server broad-search surface;
 - retention and embedding policy can be documented before real embeddings exist.
 
 This removes immediate product pressure to introduce vector storage before the

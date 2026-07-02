@@ -56,6 +56,7 @@ from outfitter.dispatch.core.models import (
     ModelsInput,
     NewInput,
     OpenInput,
+    QueryInput,
     RollbackInput,
     RosterInput,
     SearchInput,
@@ -2173,7 +2174,7 @@ async def test_search_can_filter_unmanaged_threads(store: Registry) -> None:
     assert out.matches[0].source == "unmanaged"
 
 
-async def test_local_search_reads_indexed_managed_history_without_app_server_search(
+async def test_query_reads_indexed_managed_history_without_app_server_search(
     store: Registry, tmp_path: Path
 ) -> None:
     repo = tmp_path / "repo"
@@ -2202,26 +2203,26 @@ async def test_local_search_reads_indexed_managed_history_without_app_server_sea
         ],
     )
 
-    out = await handlers.search(SearchInput(query="needle", local=True, repo=str(repo)), ctx)
+    out = await handlers.query(QueryInput(query="needle", repo=str(repo)), ctx)
 
     assert out.experimental is False
     assert out.scanned == 1
     assert [match.ref for match in out.matches] == [lane.ref]
     assert out.matches[0].handle == "@local"
     assert "local needle lives" in out.matches[0].snippet
-    assert "src/local.py" in out.matches[0].snippet
+    assert out.matches[0].files == ["src/local.py"]
     assert not any(name == "thread_search" for name, _ in client.calls)
     assert not any(name == "thread_read" for name, _ in client.calls)
 
 
-async def test_local_search_rejects_unmanaged_filter(store: Registry) -> None:
+async def test_query_requires_text_or_structural_filter(store: Registry) -> None:
     ctx = make_ctx(store)
 
-    with pytest.raises(ValidationError, match="local search only includes managed"):
-        await handlers.search(SearchInput(query="needle", local=True, unmanaged=True), ctx)
+    with pytest.raises(ValidationError, match="requires text or at least one structural filter"):
+        await handlers.query(QueryInput(), ctx)
 
 
-async def test_local_search_archived_filter_matches_app_server_semantics(
+async def test_query_archived_filter_matches_app_server_semantics(
     store: Registry,
 ) -> None:
     ctx = make_ctx(store)
@@ -2242,13 +2243,132 @@ async def test_local_search_archived_filter_matches_app_server_semantics(
             ).model_copy(update={"text": "needle in local history"})
         )
 
-    active_out = await handlers.search(SearchInput(query="needle", local=True), ctx)
-    archived_out = await handlers.search(
-        SearchInput(query="needle", local=True, archived=True), ctx
-    )
+    active_out = await handlers.query(QueryInput(query="needle"), ctx)
+    archived_out = await handlers.query(QueryInput(query="needle", archived=True), ctx)
 
     assert [match.ref for match in active_out.matches] == [active.ref]
     assert [match.ref for match in archived_out.matches] == [archived.ref]
+
+
+async def test_query_filters_structural_refs_and_concrete_tool_metadata(
+    store: Registry, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    lane = await store.add_lane(id="L1", handle="@local", source="own", cwd=str(repo))
+    await store.upsert_thread_turn(
+        thread_turn(lane=lane.id, provider_thread_id=lane.id, turn_id="turn-1")
+    )
+    payload = {
+        "type": "mcpToolCall",
+        "id": "tool-1",
+        "server": "codex_apps",
+        "tool": "linear.save_issue",
+        "status": "completed",
+        "arguments": {"id": "DIS-31"},
+        "durationMs": 123,
+    }
+    await store.upsert_thread_item(
+        thread_item(
+            lane=lane.id,
+            provider_thread_id=lane.id,
+            turn_id="turn-1",
+            item_id="tool-1",
+        ).model_copy(
+            update={
+                "item_type": "mcpToolCall",
+                "tool": "linear.save_issue",
+                "payload": payload,
+                "raw_retained": True,
+            }
+        ),
+        refs=[
+            thread_item_ref(
+                provider_thread_id=lane.id,
+                item_id="tool-1",
+                ref_type="tool",
+                ref_value="linear.save_issue",
+            ),
+            thread_item_ref(
+                provider_thread_id=lane.id,
+                item_id="tool-1",
+                ref_type="tool_server",
+                ref_value="codex_apps",
+            ),
+            thread_item_ref(
+                provider_thread_id=lane.id,
+                item_id="tool-1",
+                ref_type="tool_status",
+                ref_value="completed",
+            ),
+            thread_item_ref(
+                provider_thread_id=lane.id,
+                item_id="tool-1",
+                ref_type="tool_arg_key",
+                ref_value="id",
+            ),
+            thread_item_ref(
+                provider_thread_id=lane.id,
+                item_id="tool-1",
+                ref_type="file",
+                ref_value="src/app.py",
+            ),
+        ],
+    )
+
+    out = await handlers.query(
+        QueryInput(
+            tool="linear.save_issue",
+            tool_server="codex_apps",
+            tool_status="completed",
+            arg_key="id",
+            file="src/app.py",
+            raw_retained=True,
+            repo=str(repo),
+        ),
+        ctx,
+    )
+
+    assert [match.item_id for match in out.matches] == ["tool-1"]
+    match = out.matches[0]
+    assert match.tool == "linear.save_issue"
+    assert match.tool_server == "codex_apps"
+    assert match.tool_status == "completed"
+    assert match.duration_ms == 123
+    assert match.files == ["src/app.py"]
+    assert {ref.type for ref in match.refs} >= {"tool", "tool_server", "tool_status", "file"}
+
+    await store.upsert_thread_item(
+        thread_item(
+            lane=lane.id,
+            provider_thread_id=lane.id,
+            turn_id="turn-1",
+            item_id="tool-2",
+        ).model_copy(update={"item_type": "mcpToolCall", "tool": "linear.save_issue"}),
+        refs=[
+            thread_item_ref(
+                provider_thread_id=lane.id,
+                item_id="tool-2",
+                ref_type="tool_server",
+                ref_value="codex_apps",
+            ),
+            thread_item_ref(
+                provider_thread_id=lane.id,
+                item_id="tool-2",
+                ref_type="tool_status",
+                ref_value="completed",
+            ),
+        ],
+    )
+
+    ref_only_out = await handlers.query(QueryInput(item_id="tool-2"), ctx)
+
+    assert [match.item_id for match in ref_only_out.matches] == ["tool-2"]
+    assert ref_only_out.matches[0].tool_server == "codex_apps"
+    assert ref_only_out.matches[0].tool_status == "completed"
 
 
 async def test_lane_search_reads_one_thread_transcript(store: Registry) -> None:
