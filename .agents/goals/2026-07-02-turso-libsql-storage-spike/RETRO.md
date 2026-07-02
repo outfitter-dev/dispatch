@@ -1,8 +1,8 @@
 # Execution Retro: turso-libsql-storage-spike
 
 Date started: 2026-07-02
-Date finalized: pending
-Status: ready to merge
+Date finalized: 2026-07-02
+Status: complete
 Spec: `.agents/goals/2026-07-02-turso-libsql-storage-spike/SPEC.md`
 Goal: `.agents/goals/2026-07-02-turso-libsql-storage-spike/GOAL.md`
 Prompt: `.agents/goals/2026-07-02-turso-libsql-storage-spike/PROMPT.md`
@@ -14,7 +14,7 @@ Refs: `.agents/goals/2026-07-02-turso-libsql-storage-spike/REFS.md`
 - Completion horizon: merged.
 - Authority used: Created branch, committed/pushed scoped changes, opened PR #57, updated Linear `DIS-8`; no release, publish, default-backend migration, live data mutation, or real Turso credentials.
 - Outcome: keep SQLite/`aiosqlite` as the default; retain Turso/libSQL as optional future backend candidate behind a smaller storage boundary.
-- Tracker/PR/source-control state: PR #57 is open and CI green; Linear `DIS-8` updated with outcome comment.
+- Tracker/PR/source-control state: PR #57 merged at `3cadc3b`; Linear `DIS-8` updated with outcome comment; local `main` synced.
 - Verification: goal prompt and packet validation passed; initial Python package probes passed.
 - Review state: full-stack local review clean, 5/5, no P0/P1/P2.
 - Remaining risks: Turso docs/packages are moving; package probes may require network and may fail on platform wheels; sync/cloud cannot be fully proven without credentials and must stay out of scope.
@@ -27,7 +27,7 @@ Refs: `.agents/goals/2026-07-02-turso-libsql-storage-spike/REFS.md`
 - Verification blockers: none known.
 - Tracker blockers: richer Linear read tooling was not available in the current surface; update/comment is available.
 - Authority blockers: no release/publish authority; no default-backend migration authority.
-- Next action: mark PR #57 ready, merge, sync `main`, and finalize this goal.
+- Next action: none for DIS-8; follow-ups are tracked as future storage-boundary, packaging, async, vector, and sync work.
 
 ## Decision Question Passes
 
@@ -161,6 +161,13 @@ Refs: `.agents/goals/2026-07-02-turso-libsql-storage-spike/REFS.md`
 - Result: PR is ready to leave draft.
 - Next: Amend this retro update, resubmit, mark ready, merge, and sync `main`.
 - Blockers: None known.
+
+2026-07-02 TBD - Merge and sync
+- Changed: Merged PR #57 through Graphite and synced local `main`.
+- Verified: `gh pr view 57` reports `MERGED`, merge commit `3cadc3bbc5f2b72aec1debe10b55934a354d24de`; `git switch main` reports `main...origin/main` up to date.
+- Result: Completion horizon reached.
+- Next: No immediate action for DIS-8. Reopen Turso work when a connection/transaction boundary, measured SQLite contention, semantic-search requirement, or multi-machine sync product decision exists.
+- Blockers: None.
 ```
 
 ## Review Log
@@ -197,7 +204,7 @@ Refs: `.agents/goals/2026-07-02-turso-libsql-storage-spike/REFS.md`
 | Item | State | Notes |
 | --- | --- | --- |
 | DIS-8 | updated | Outcome comment posted with PR #57, checks, decision, and follow-ups. |
-| PR #57 | open, draft, CI green | https://github.com/outfitter-dev/dispatch/pull/57 |
+| PR #57 | merged | https://github.com/outfitter-dev/dispatch/pull/57, merge commit `3cadc3bbc5f2b72aec1debe10b55934a354d24de`. |
 
 ## Follow-Ups
 
@@ -205,10 +212,10 @@ Refs: `.agents/goals/2026-07-02-turso-libsql-storage-spike/REFS.md`
 
 ## Final State
 
-- Completion proof: pending merge.
+- Completion proof: PR #57 merged and local `main` synced to `origin/main`.
 - Prompt length: 3715/4000 characters.
 - Review report summary: full-stack local review, 5/5 clean, no findings.
 - Verification summary: local `just check` passed; PR #57 GitHub checks passed.
 - Forbidden actions audit: no release/publish, no default backend switch, no real Turso credentials, no live user registry or `~/.codex` mutation.
 - Remaining P3s / risks: platform wheel audit, async production integration, and full alternate-backend parity remain follow-up scope.
-- Final transcript proof: pending merge and local `main` sync.
+- Final transcript proof: `gh pr view 57` returned merged at 2026-07-02T16:06:08Z with merge commit `3cadc3bbc5f2b72aec1debe10b55934a354d24de`; `git switch main` returned branch up to date with `origin/main`.
