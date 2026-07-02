@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -331,6 +332,44 @@ async def test_provider_event_history_index_roundtrips_and_dedupes(store: Regist
     assert runtime.status == "busy"
     assert runtime.latest_turn_status == "started"
     assert await store.get_lane_runtime_state("L1") == runtime
+
+
+async def test_provider_event_payload_is_stored_compactly(store: Registry) -> None:
+    await store.add_lane(id="L1", handle="@lane", source="own", status="idle")
+    payload = {"method": "m", "params": {str(index): index for index in range(8)}}
+
+    saved = await store.record_provider_event(
+        provider_event().model_copy(update={"payload": payload})
+    )
+
+    async with store._conn.execute(
+        "SELECT payload, length(payload) AS bytes FROM provider_events WHERE id = ?",
+        (saved.id,),
+    ) as cur:
+        row = await cur.fetchone()
+    compact = json.dumps(payload, separators=(",", ":"))
+    assert row is not None
+    assert row["payload"] == compact
+    assert row["bytes"] == len(compact.encode("utf-8"))
+
+
+async def test_thread_item_payload_is_stored_compactly(store: Registry) -> None:
+    await store.add_lane(id="L1", handle="@lane", source="own", status="idle")
+    payload = {"type": "toolCall", "metadata": {str(index): index for index in range(8)}}
+
+    saved = await store.upsert_thread_item(
+        thread_item().model_copy(update={"payload": payload, "raw_retained": True})
+    )
+
+    async with store._conn.execute(
+        "SELECT payload, length(payload) AS bytes FROM thread_items WHERE item_id = ?",
+        (saved.item_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    compact = json.dumps(payload, separators=(",", ":"))
+    assert row is not None
+    assert row["payload"] == compact
+    assert row["bytes"] == len(compact.encode("utf-8"))
 
 
 async def test_v10_registry_migration_adds_provider_history_tables(tmp_path: Path) -> None:

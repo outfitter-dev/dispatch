@@ -32,6 +32,10 @@ def test_turn_failed_carries_message() -> None:
         "turn/failed", {"threadId": "L1", "turnId": "T1", "message": "unsupported model"}
     )
     assert failed == [TurnFailed("L1", "T1", "unsupported model")]
+    assert failed[0].raw_payload == {
+        "method": "turn/failed",
+        "params": {"threadId": "L1", "turnId": "T1", "message": "unsupported model"},
+    }
 
 
 def test_item_completed_carries_item_id() -> None:
@@ -78,6 +82,12 @@ def test_command_approval_request_projects_with_request_id() -> None:
         {"threadId": "L1", "itemId": "I1", "turnId": "T1"},
     )
     assert event == ApprovalRequested("L1", 42, "command", "I1", "T1")
+    assert event is not None
+    assert event.raw_payload == {
+        "id": 42,
+        "method": "item/commandExecution/requestApproval",
+        "params": {"threadId": "L1", "itemId": "I1", "turnId": "T1"},
+    }
 
 
 def test_file_change_approval_request_projects_as_file_change() -> None:

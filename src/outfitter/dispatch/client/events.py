@@ -8,7 +8,7 @@ they stay stable across binary/protocol drift.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 ApprovalKind = Literal["command", "file_change"]
@@ -19,6 +19,11 @@ class LaneEvent:
     """Base for all normalized lane events. ``lane_id`` is the App Server threadId."""
 
     lane_id: str
+    raw_payload: dict[str, object] | None = field(
+        default=None,
+        compare=False,
+        kw_only=True,
+    )
 
 
 @dataclass(frozen=True)
@@ -118,34 +123,35 @@ def project_notification(method: str, params: dict[str, object]) -> list[LaneEve
     if lane is None:
         return []
     turn = _str(params, "turnId")
+    raw: dict[str, object] = {"method": method, "params": params}
     match method:
         case "turn/started":
-            return [TurnStarted(lane, turn)]
+            return [TurnStarted(lane, turn, raw_payload=raw)]
         case "turn/completed":
-            return [TurnCompleted(lane, turn)]
+            return [TurnCompleted(lane, turn, raw_payload=raw)]
         case "turn/failed":
-            return [TurnFailed(lane, turn, _str(params, "message"))]
+            return [TurnFailed(lane, turn, _str(params, "message"), raw_payload=raw)]
         case "turn/diff/updated":
-            return [DiffUpdated(lane, turn)]
+            return [DiffUpdated(lane, turn, raw_payload=raw)]
         case "item/completed":
-            return [ItemCompleted(lane, _str(params, "itemId"))]
+            return [ItemCompleted(lane, _str(params, "itemId"), raw_payload=raw)]
         case "thread/tokenUsage/updated":
-            return [TokenUsageUpdated(lane)]
+            return [TokenUsageUpdated(lane, raw_payload=raw)]
         case "thread/goal/updated":
-            return [GoalUpdated(lane)]
+            return [GoalUpdated(lane, raw_payload=raw)]
         case "thread/goal/cleared":
-            return [GoalCleared(lane)]
+            return [GoalCleared(lane, raw_payload=raw)]
         case "thread/compacted":
-            return [ThreadCompacted(lane)]
+            return [ThreadCompacted(lane, raw_payload=raw)]
         case "thread/archived":
-            return [ThreadArchived(lane)]
+            return [ThreadArchived(lane, raw_payload=raw)]
         case "thread/unarchived":
-            return [ThreadUnarchived(lane)]
+            return [ThreadUnarchived(lane, raw_payload=raw)]
         case "thread/status/changed":
             flags = _active_flags(params)
-            events: list[LaneEvent] = [StatusChanged(lane, flags)]
+            events: list[LaneEvent] = [StatusChanged(lane, flags, raw_payload=raw)]
             if not flags:
-                events.append(LaneIdle(lane))
+                events.append(LaneIdle(lane, raw_payload=raw))
             return events
         case _:
             return []
@@ -160,11 +166,12 @@ def project_server_request(
         return None
     item = _str(params, "itemId")
     turn = _str(params, "turnId")
+    raw: dict[str, object] = {"id": request_id, "method": method, "params": params}
     match method:
         case "item/commandExecution/requestApproval":
-            return ApprovalRequested(lane, request_id, "command", item, turn)
+            return ApprovalRequested(lane, request_id, "command", item, turn, raw_payload=raw)
         case "item/fileChange/requestApproval":
-            return ApprovalRequested(lane, request_id, "file_change", item, turn)
+            return ApprovalRequested(lane, request_id, "file_change", item, turn, raw_payload=raw)
         case _:
             return None
 

@@ -232,6 +232,84 @@ async def test_reactor_indexes_bounded_standard_event_summaries(store: Registry)
     assert runtime.attention_detail == "failure "
 
 
+async def test_reactor_retains_bounded_raw_provider_event_payload_in_debug(
+    store: Registry,
+) -> None:
+    ctx = make_ctx(
+        store,
+        capture=CapturePolicy(mode="debug", raw_payload_retention="debug", max_payload_bytes=80),
+    )
+    reactor = Reactor(ctx, TriggerRunner(ctx, lambda: _T0))
+    await store.add_lane(id="L1", handle="@x", source="own", status="idle")
+
+    await reactor.handle(
+        TurnStarted(
+            "L1",
+            "turn-1",
+            raw_payload={
+                "method": "turn/started",
+                "params": {"threadId": "L1", "turnId": "turn-1", "blob": "x" * 400},
+            },
+        )
+    )
+
+    [event] = await store.list_provider_events(lane="L1")
+    assert event.raw_retained is True
+    assert event.payload is not None
+    assert event.payload["truncated"] is True
+    async with store._conn.execute(
+        "SELECT length(payload) AS bytes FROM provider_events WHERE id = ?",
+        (event.id,),
+    ) as cur:
+        row = await cur.fetchone()
+    assert row is not None
+    assert row["bytes"] <= ctx.capture.max_payload_bytes
+
+
+async def test_reactor_retains_error_raw_provider_event_payload_for_errors_policy(
+    store: Registry,
+) -> None:
+    ctx = make_ctx(
+        store,
+        capture=CapturePolicy(raw_payload_retention="errors", max_payload_bytes=256),
+    )
+    reactor = Reactor(ctx, TriggerRunner(ctx, lambda: _T0))
+    await store.add_lane(id="L1", handle="@x", source="own", status="idle")
+
+    await reactor.handle(
+        TurnFailed(
+            "L1",
+            "turn-1",
+            "provider failed",
+            raw_payload={
+                "method": "turn/failed",
+                "params": {"threadId": "L1", "turnId": "turn-1", "message": "provider failed"},
+            },
+        )
+    )
+
+    [event] = await store.list_provider_events(lane="L1")
+    assert event.raw_retained is True
+    assert event.payload is not None
+    assert event.payload["method"] == "turn/failed"
+
+
+async def test_reactor_does_not_retain_non_error_raw_payload_for_errors_policy(
+    store: Registry,
+) -> None:
+    ctx = make_ctx(store, capture=CapturePolicy(raw_payload_retention="errors"))
+    reactor = Reactor(ctx, TriggerRunner(ctx, lambda: _T0))
+    await store.add_lane(id="L1", handle="@x", source="own", status="idle")
+
+    await reactor.handle(
+        TurnStarted("L1", "turn-1", raw_payload={"method": "turn/started", "params": {}})
+    )
+
+    [event] = await store.list_provider_events(lane="L1")
+    assert event.payload is None
+    assert event.raw_retained is False
+
+
 async def test_reactor_dedupes_stable_live_events_on_replay(store: Registry) -> None:
     ctx = make_ctx(store)
     reactor = Reactor(ctx, TriggerRunner(ctx, lambda: _T0))

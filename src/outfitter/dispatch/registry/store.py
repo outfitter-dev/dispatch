@@ -1424,7 +1424,7 @@ class Registry:
     # --- provider events / normalized history ---------------------------------
 
     async def record_provider_event(self, event: ProviderEvent) -> ProviderEvent:
-        payload = json.dumps(event.payload) if event.payload is not None else None
+        payload = _json_dump_compact(event.payload) if event.payload is not None else None
         await self._conn.execute(
             "INSERT INTO provider_events (provider, provider_thread_id, lane, event_type, "
             "provider_event_id, provider_turn_id, provider_item_id, correlation_id, "
@@ -1578,7 +1578,7 @@ class Registry:
                     item.tool,
                     item.created_at,
                     item.inserted_at,
-                    json.dumps(item.payload) if item.payload is not None else None,
+                    _json_dump_compact(item.payload) if item.payload is not None else None,
                     int(item.raw_retained),
                 ),
             )
@@ -1850,6 +1850,10 @@ def _row_dict(row: aiosqlite.Row) -> dict[str, object]:
 
 def _bool_or_none(value: bool | None) -> int | None:
     return None if value is None else int(value)
+
+
+def _json_dump_compact(value: object) -> str:
+    return json.dumps(value, separators=(",", ":"))
 
 
 def _json_str_list(value: object) -> list[str]:
