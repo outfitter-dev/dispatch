@@ -1,17 +1,17 @@
 # Execution Retro: search-baselines-turso
 
 Date started: 2026-07-02
-Date finalized: pending
-Status: active
+Date finalized: 2026-07-02
+Status: complete
 
 ## Summary
 
 - Objective: land local search, ingestion baselines, and Turso decision work.
 - Completion horizon: merged.
 - Tracker: `DIS-23`, `DIS-26`, `DIS-27`; parent `DIS-20`.
-- Outcome: pending.
-- Verification: pending.
-- Review state: pending.
+- Outcome: complete; PRs #65-#68 merged to `main`.
+- Verification: `just check` passed; CI and CodeQL passed on merged stack PRs.
+- Review state: three milestone reviews, all 5/5 clean with no open P0/P1/P2.
 
 ## Readiness
 
@@ -66,6 +66,12 @@ Status: active
 - Added explicit reopen conditions and guardrails for credentials, remote sync,
   raw payloads, embeddings, and packaging.
 - Local review clean with no P0/P1/P2 findings.
+
+2026-07-02 - Merge and tracker closeout
+- Merged PR #65, #66, #67, and #68 through Graphite.
+- Synced local `main` to `7e41970`.
+- Linear auto-marked `DIS-23`, `DIS-26`, and `DIS-27` Done; added completion
+  comments to each child issue and a parent rollup comment on `DIS-20`.
 ```
 
 ## Goal Amendments
@@ -107,19 +113,31 @@ Status: active
 | `uv run python scripts/measure_event_ingestion.py --events 500 --lanes 4 --concurrency 8 --no-reader --json` | DIS-26 baseline | pass | 716.953 events/s; no reader samples; exact totals. |
 | `uv run python scripts/measure_event_ingestion.py --events 250 --lanes 4 --concurrency 8 --raw-retained --json` | DIS-26 baseline | pass | 546.005 events/s; 58 reader samples; exact totals. |
 | `git diff --check` | DIS-27 docs review | pass | No whitespace errors. |
+| `just check` | final merged stack | pass | ruff, format, mypy, pytest 396 passed / 9 deselected, build, and package contents check passed before each milestone merge. |
+| GitHub CI / CodeQL | PR #65 | pass | `check`, `Analyze (actions)`, `Analyze (python)`, and CodeQL succeeded before merge. |
+| GitHub CI / CodeQL | PR #66 | pass | Restacked onto `main`; `check`, CodeQL analyses, and Graphite mergeability succeeded before merge. |
+| GitHub CI / CodeQL | PR #67 | pass | Restacked onto `main`; `check`, CodeQL analyses, and Graphite mergeability succeeded before merge. |
+| GitHub CI / CodeQL | PR #68 | pass | Restacked onto `main`; `check`, CodeQL analyses, and Graphite mergeability succeeded before merge. |
 
 ## Tracker / PR Log
 
 | Item | State | Notes |
 | --- | --- | --- |
-| DIS-23 | local implementation ready | Local keyword-search substrate and retention/embedding policy complete locally; PR pending. |
-| DIS-26 | local implementation ready | Baseline note complete locally; PR pending. |
-| DIS-27 | local implementation ready | Decision memo complete locally; PR pending. |
+| DIS-23 | Done | Merged in PR #66: https://github.com/outfitter-dev/dispatch/pull/66 |
+| DIS-26 | Done | Merged in PR #67: https://github.com/outfitter-dev/dispatch/pull/67 |
+| DIS-27 | Done | Merged in PR #68: https://github.com/outfitter-dev/dispatch/pull/68 |
+| PR #65 | merged | Goal packet: https://github.com/outfitter-dev/dispatch/pull/65 |
 
 ## Final State
 
-- Completion proof: pending.
-- Review summary: pending.
-- Verification summary: pending.
-- Forbidden actions audit: pending.
-- Remaining risks: pending.
+- Completion proof: merged PRs #65-#68; local `main` synced to `7e41970`.
+- Review summary: milestone reviews for DIS-23, DIS-26, and DIS-27 are 5/5 clean
+  with no open P0/P1/P2.
+- Verification summary: focused checks, baseline commands, `goal-loop-doctor`,
+  `just check`, GitHub CI, and CodeQL passed.
+- Forbidden actions audit: no paid embedding/API calls, no cloud credentials, no
+  real transcript embeddings, no backend default migration, no live/private
+  benchmark data, and no `DIS-24` implementation.
+- Remaining risks: local search is keyword search over indexed managed history;
+  baselines are synthetic local measurements; Turso/libSQL remains future
+  optional work behind a storage boundary and explicit product trigger.
