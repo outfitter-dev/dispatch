@@ -131,6 +131,45 @@ Refs: `.agents/goals/2026-07-01-history-capture-policy/REFS.md`
 - Result: Milestone 2 standard capture expansion is complete.
 - Next: Create `feat/history-debug-capture` and begin debug payload retention.
 - Blockers: None known.
+
+2026-07-01 America/New_York - Milestone 3 debug capture mode
+- Changed: Created `feat/history-debug-capture` above
+  `feat/history-standard-capture`. Added keyword-only raw provider payload
+  metadata to normalized LaneEvents, projected raw notification/server-request
+  payloads from the client router, and retained bounded raw provider-event
+  payloads only when capture policy allows `debug`, `errors`, or `all`.
+  Updated README, usage docs, and the dispatch skill to describe bounded debug
+  event/item payload retention.
+- Verified: focused client event/reducer/capture/config/doctor tests passed;
+  broader client/reactor/handler/capture/config/doctor/registry/fixture tests
+  passed; ruff check, ruff format check, and mypy passed on touched code/tests.
+- Result: Milestone 3 implementation is ready for local review.
+- Next: Commit the milestone and run standing plus targeted privacy/storage
+  review.
+- Blockers: None known.
+
+2026-07-01 America/New_York - Milestone 3 review fixes
+- Changed: Fixed targeted P1 LR-001 by persisting provider-event and thread-item
+  payload JSON with the same compact encoding used by the capture byte-bound
+  helper. Added storage-bound tests that query actual SQLite `length(payload)`,
+  and strengthened the debug provider-event retention test to check the stored
+  column length stays within `max_payload_bytes`.
+- Verified: focused registry/reducer/capture tests passed; broader
+  client/reactor/handler/capture/config/doctor/registry/fixture tests passed;
+  ruff check, ruff format check, and mypy passed on touched code/tests.
+- Result: Milestone 3 review finding is fixed locally.
+- Next: Amend the milestone commit and rerun standing plus targeted re-review.
+- Blockers: None known.
+
+2026-07-01 America/New_York - Milestone 3 closed
+- Changed: Standing and targeted re-reviews both passed clean after the
+  storage-bound fix.
+- Verified: Standing re-review clean 5/5 with 0 open P0-P2; targeted
+  privacy/storage re-review clean 5/5 with 0 open P0-P2.
+- Result: Milestone 3 debug capture mode is complete.
+- Next: Create `feat/db-backed-history-surfaces` and begin the DB-backed
+  operator surface cutover.
+- Blockers: None known.
 ```
 
 ## Branch / PR Log
@@ -139,7 +178,7 @@ Refs: `.agents/goals/2026-07-01-history-capture-policy/REFS.md`
 | --- | --- | --- | --- | --- |
 | `feat/history-capture-policy` | `docs/history-capture-policy-goal` | pending | local milestone complete | Capture policy foundation. |
 | `feat/history-standard-capture` | `feat/history-capture-policy` | pending | local milestone complete | Standard Tier 1/Tier 2 capture. |
-| `feat/history-debug-capture` | `feat/history-standard-capture` | pending | not started | Debug retention mode. |
+| `feat/history-debug-capture` | `feat/history-standard-capture` | pending | local milestone complete | Debug retention mode. |
 | `feat/db-backed-history-surfaces` | `feat/history-debug-capture` | pending | not started | DB-backed history/search/status surfaces. |
 
 ## Review Log
@@ -153,6 +192,9 @@ Refs: `.agents/goals/2026-07-01-history-capture-policy/REFS.md`
 | milestone-2 pre-review | standard capture expansion | not applicable | not scored | implementation ready | 0 | Review requests pending. |
 | milestone-2 round-1 | standard capture expansion | `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-2/standing.json`; `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-2/targeted-reducer-storage.json` | 3 / 3 | changes_requested | 4 | Standing found one P2 bounded-error bypass; targeted found three P2 test gaps. All fixed locally; re-review pending. |
 | milestone-2 final | standard capture expansion | `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-2/standing-rereview.json`; `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-2/targeted-reducer-storage-rereview.json` | 5 / 5 | clean | 0 | Milestone 2 closed. |
+| milestone-3 pre-review | debug capture mode | not applicable | not scored | implementation ready | 0 | Review requests pending. |
+| milestone-3 round-1 | debug capture mode | `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-3/targeted-privacy-storage.json` | 3 | changes_requested | 1 | Targeted found P1 storage-bound mismatch between compact byte checks and default JSON persistence; fixed locally. Standing review still pending. |
+| milestone-3 final | debug capture mode | `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-3/standing.json`; `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-3/targeted-privacy-storage-rereview.json` | 5 / 5 | clean | 0 | Milestone 3 closed. |
 
 ## Verification Log
 
@@ -183,6 +225,16 @@ Refs: `.agents/goals/2026-07-01-history-capture-policy/REFS.md`
 | `uv run ruff check src/outfitter/dispatch/core/event_index.py src/outfitter/dispatch/core/history_index.py src/outfitter/dispatch/core/reactor.py src/outfitter/dispatch/core/handlers.py src/outfitter/dispatch/core/queue.py tests/core/test_triggers.py tests/core/test_handlers.py` | milestone 2 review-fix lint | passed | All checks passed. |
 | `uv run ruff format --check src/outfitter/dispatch/core/event_index.py src/outfitter/dispatch/core/history_index.py src/outfitter/dispatch/core/reactor.py src/outfitter/dispatch/core/handlers.py src/outfitter/dispatch/core/queue.py tests/core/test_triggers.py tests/core/test_handlers.py` | milestone 2 review-fix format | passed | 7 files already formatted. |
 | `uv run mypy src/outfitter/dispatch/core/event_index.py src/outfitter/dispatch/core/history_index.py src/outfitter/dispatch/core/reactor.py src/outfitter/dispatch/core/handlers.py src/outfitter/dispatch/core/queue.py tests/core/test_triggers.py tests/core/test_handlers.py` | milestone 2 review-fix types | passed | No issues found. |
+| `uv run pytest tests/client/test_events.py tests/core/test_triggers.py tests/core/test_capture.py tests/test_config.py tests/test_doctor.py -q` | milestone 3 focused tests | passed | 61 passed. |
+| `uv run pytest tests/client/test_events.py tests/core/test_triggers.py tests/core/test_handlers.py tests/core/test_capture.py tests/test_config.py tests/test_doctor.py tests/registry/test_store.py tests/fixtures/test_corpus.py -q` | milestone 3 broader tests | passed | 200 passed. |
+| `uv run ruff check src/outfitter/dispatch/client/events.py src/outfitter/dispatch/core/event_index.py src/outfitter/dispatch/core/history_index.py src/outfitter/dispatch/core/reactor.py src/outfitter/dispatch/core/handlers.py src/outfitter/dispatch/core/queue.py tests/client/test_events.py tests/core/test_triggers.py tests/core/test_handlers.py` | milestone 3 lint | passed | All checks passed. |
+| `uv run ruff format --check src/outfitter/dispatch/client/events.py src/outfitter/dispatch/core/event_index.py src/outfitter/dispatch/core/history_index.py src/outfitter/dispatch/core/reactor.py src/outfitter/dispatch/core/handlers.py src/outfitter/dispatch/core/queue.py tests/client/test_events.py tests/core/test_triggers.py tests/core/test_handlers.py` | milestone 3 format | passed | 9 files already formatted. |
+| `uv run mypy src/outfitter/dispatch/client/events.py src/outfitter/dispatch/core/event_index.py src/outfitter/dispatch/core/history_index.py src/outfitter/dispatch/core/reactor.py src/outfitter/dispatch/core/handlers.py src/outfitter/dispatch/core/queue.py tests/client/test_events.py tests/core/test_triggers.py tests/core/test_handlers.py` | milestone 3 types | passed | No issues found. |
+| `uv run pytest tests/registry/test_store.py tests/core/test_triggers.py tests/core/test_capture.py -q` | milestone 3 review-fix focused tests | passed | 57 passed. |
+| `uv run pytest tests/client/test_events.py tests/core/test_triggers.py tests/core/test_handlers.py tests/core/test_capture.py tests/test_config.py tests/test_doctor.py tests/registry/test_store.py tests/fixtures/test_corpus.py -q` | milestone 3 review-fix broader tests | passed | 202 passed. |
+| `uv run ruff check src/outfitter/dispatch/client/events.py src/outfitter/dispatch/core/event_index.py src/outfitter/dispatch/registry/store.py tests/client/test_events.py tests/core/test_triggers.py tests/registry/test_store.py` | milestone 3 review-fix lint | passed | All checks passed. |
+| `uv run ruff format --check src/outfitter/dispatch/client/events.py src/outfitter/dispatch/core/event_index.py src/outfitter/dispatch/registry/store.py tests/client/test_events.py tests/core/test_triggers.py tests/registry/test_store.py` | milestone 3 review-fix format | passed | 6 files already formatted. |
+| `uv run mypy src/outfitter/dispatch/client/events.py src/outfitter/dispatch/core/event_index.py src/outfitter/dispatch/registry/store.py tests/client/test_events.py tests/core/test_triggers.py tests/registry/test_store.py` | milestone 3 review-fix types | passed | No issues found. |
 
 ## Prompt / Goal Alignment
 

@@ -738,7 +738,9 @@ raw retention policy allows it. Live App Server events are stored as compact
 summaries; transcript reads index bounded turns, item text, tool names, and
 file/thread refs. Use `minimal` for a smaller footprint that keeps turn-level
 state but skips item-level transcript rows; use `debug` while developing
-reducers, search, or provider adapters.
+reducers, search, or provider adapters. Debug retention can store bounded raw
+provider event and item payloads with truncation markers; it should usually run
+against isolated state.
 
 Configure capture in `~/.dispatch/config.toml`:
 

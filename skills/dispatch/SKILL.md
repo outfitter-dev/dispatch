@@ -273,7 +273,8 @@ Live App Server events are stored as compact summaries; transcript reads index
 bounded turns, item text, tool names, and file/thread refs. Raw provider payloads
 stay gated by retention policy. Minimal capture keeps turn-level state but skips
 item-level transcript rows. Use debug capture only when developing or diagnosing
-reducers/search/provider adapters:
+reducers/search/provider adapters; debug retention can store bounded raw
+provider event and item payloads with truncation markers:
 
 ```toml
 [history]

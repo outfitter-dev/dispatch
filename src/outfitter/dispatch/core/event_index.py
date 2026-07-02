@@ -20,7 +20,7 @@ from outfitter.dispatch.client.events import (
     TurnStarted,
 )
 from outfitter.dispatch.config import CapturePolicy
-from outfitter.dispatch.core.capture import bound_text
+from outfitter.dispatch.core.capture import bound_payload, bound_text
 from outfitter.dispatch.registry.models import (
     Lane,
     LaneRuntimeState,
@@ -41,6 +41,7 @@ async def index_codex_lane_event(
     """Persist a normalized Codex LaneEvent and reduce compact runtime facts."""
 
     policy = capture or CapturePolicy()
+    retained_payload = _retained_payload(event, policy)
     received_at = registry.now_iso()
     provider_event = ProviderEvent(
         provider=_CODEX_PROVIDER,
@@ -53,7 +54,8 @@ async def index_codex_lane_event(
         correlation_id=_correlation_id(event),
         received_at=received_at,
         summary=_summary(event, policy),
-        raw_retained=False,
+        payload=retained_payload,
+        raw_retained=retained_payload is not None,
     )
     await registry.record_provider_event(provider_event)
 
@@ -183,6 +185,16 @@ def _summary(event: LaneEvent, capture: CapturePolicy) -> dict[str, object]:
     if isinstance(event, ThreadUnarchived):
         return {"status": "unarchived"}
     return {}
+
+
+def _retained_payload(event: LaneEvent, capture: CapturePolicy) -> dict[str, object] | None:
+    if not capture.should_retain_raw_payload(is_error=_is_error_event(event)):
+        return None
+    return bound_payload(event.raw_payload, capture).payload
+
+
+def _is_error_event(event: LaneEvent) -> bool:
+    return isinstance(event, TurnFailed)
 
 
 def _status_summary(

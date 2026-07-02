@@ -74,7 +74,8 @@ stored as compact summaries; transcript reads index bounded turns, item text,
 tool names, and file/thread refs without retaining raw item payloads unless the
 retention policy allows it. Minimal capture keeps turn-level state but skips
 item-level transcript rows. Use `debug` only for development with bounded temp
-state:
+state; debug retention can store bounded raw provider event and item payloads
+with truncation markers for reducer/search diagnosis:
 
 ```toml
 [history]
