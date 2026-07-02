@@ -33,6 +33,8 @@ async def test_event_ingestion_harness_writes_expected_registry_shapes(
     assert result.lanes == 3
     assert result.events_requested == 12
     assert result.concurrency == 4
+    assert result.reader_enabled is True
+    assert result.raw_retained is False
     assert result.totals["provider_events"] == 12
     assert result.totals["thread_turns"] == 12
     assert result.totals["thread_items"] == 12
@@ -70,6 +72,8 @@ def test_measure_event_ingestion_script_emits_json(tmp_path: Path) -> None:
     data = json.loads(completed.stdout)
     assert data["db_path"] == str(db)
     assert data["temporary_db"] is False
+    assert data["reader_enabled"] is False
+    assert data["raw_retained"] is False
     assert data["reader_samples"] == 0
     assert data["totals"]["provider_events"] == 6
     assert data["totals"]["thread_items"] == 6

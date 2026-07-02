@@ -41,6 +41,18 @@ Status: active
   slice, default exclusions, embedding policy, and storage boundary.
 - Local review found one P2 mypy/test-interface issue; fixed before commit.
 - `just check` passed after the fix.
+
+2026-07-02 - Milestone 2 event-ingestion baselines
+- Added `reader_enabled` and `raw_retained` to ingestion harness JSON output so
+  baseline profile dimensions are explicit and test-covered.
+- Recorded four synthetic SQLite/`aiosqlite` profiles in
+  `docs/research/event-ingestion-baselines.md`.
+- Results: small mixed read/write 759.102 events/s; larger mixed read/write
+  550.824 events/s; larger write-only 716.953 events/s; raw-retained mixed
+  read/write 546.005 events/s.
+- Confirmed exact totals for provider events, thread turns, thread items, and
+  message receipts in every profile.
+- Local review clean after fixing two small P3 evidence-shape issues.
 ```
 
 ## Goal Amendments
@@ -61,6 +73,7 @@ Status: active
 | Round | Scope | Report | Score | State | Open P0-P2 | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | milestone-1 | DIS-23 local managed-history search | `.agents/goals/2026-07-02-search-baselines-turso/tmp/reviews/milestone-1-local-search.json` | 5 | clean | 0 | One P2 mypy/test-interface finding fixed before commit; no open P0-P2. |
+| milestone-2 | DIS-26 event-ingestion baselines | `.agents/goals/2026-07-02-search-baselines-turso/tmp/reviews/milestone-2-ingestion-baselines.json` | 5 | clean | 0 | Two P3 evidence-shape issues fixed locally; no open P0-P2. |
 
 ## Verification Log
 
@@ -73,13 +86,19 @@ Status: active
 | `uv run dispatch schema search \| jq -e '.input.properties.local.description, .input.properties.max_scan.description'` | DIS-23 schema smoke | pass | Derived schema exposes `local` and backend-neutral `max_scan` wording. |
 | `uv run dispatch search --help \| rg -- '--local\|Search Dispatch'` | DIS-23 help smoke | pass | CLI help exposes `--local`. |
 | `just check` | DIS-23 full gate | pass | ruff, format, mypy, pytest 396 passed / 9 deselected, build, and package contents check passed. |
+| `uv run pytest tests/registry/test_ingest_harness.py -q` | DIS-26 focused | pass | 3 passed. |
+| `uv run mypy src/outfitter/dispatch/registry/ingest_harness.py tests/registry/test_ingest_harness.py` | DIS-26 focused | pass | Success: no issues found in 2 source files. |
+| `uv run python scripts/measure_event_ingestion.py --events 100 --lanes 4 --concurrency 4 --json` | DIS-26 baseline | pass | 759.102 events/s; 24 reader samples; exact totals. |
+| `uv run python scripts/measure_event_ingestion.py --events 500 --lanes 4 --concurrency 8 --json` | DIS-26 baseline | pass | 550.824 events/s; 115 reader samples; exact totals. |
+| `uv run python scripts/measure_event_ingestion.py --events 500 --lanes 4 --concurrency 8 --no-reader --json` | DIS-26 baseline | pass | 716.953 events/s; no reader samples; exact totals. |
+| `uv run python scripts/measure_event_ingestion.py --events 250 --lanes 4 --concurrency 8 --raw-retained --json` | DIS-26 baseline | pass | 546.005 events/s; 58 reader samples; exact totals. |
 
 ## Tracker / PR Log
 
 | Item | State | Notes |
 | --- | --- | --- |
 | DIS-23 | local implementation ready | Local keyword-search substrate and retention/embedding policy complete locally; PR pending. |
-| DIS-26 | todo | Event-ingestion baselines. |
+| DIS-26 | local implementation ready | Baseline note complete locally; PR pending. |
 | DIS-27 | todo | Turso/libSQL decision memo. |
 
 ## Final State

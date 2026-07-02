@@ -54,6 +54,9 @@ from Slack, Linear, another laptop, or a remote machine.
   default.
 - [Semantic History Search](semantic-history-search.md) defines the current
   local keyword-search slice plus the retention and embedding boundary.
+- [Event Ingestion Baselines](../research/event-ingestion-baselines.md)
+  records repeatable synthetic SQLite/`aiosqlite` profiles for the current
+  registry write path.
 - [Dispatch Cloud Gateway](cloud-gateway.md) sketches the always-on ingress and
   routing plane.
 
