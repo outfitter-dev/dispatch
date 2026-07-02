@@ -1479,29 +1479,38 @@ class Registry:
 
     async def record_provider_event(self, event: ProviderEvent) -> ProviderEvent:
         payload = _json_dump_compact(event.payload) if event.payload is not None else None
-        await self._conn.execute(
-            "INSERT INTO provider_events (provider, provider_thread_id, lane, event_type, "
-            "provider_event_id, provider_turn_id, provider_item_id, correlation_id, "
-            "provider_ts, received_at, summary, payload, raw_retained) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT DO NOTHING",
-            (
-                event.provider,
-                event.provider_thread_id,
-                event.lane,
-                event.event_type,
-                event.provider_event_id,
-                event.provider_turn_id,
-                event.provider_item_id,
-                event.correlation_id,
-                event.provider_ts,
-                event.received_at,
-                json.dumps(event.summary, separators=(",", ":")),
-                payload,
-                int(event.raw_retained),
-            ),
-        )
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._conn.execute(
+                "INSERT INTO provider_events (provider, provider_thread_id, lane, event_type, "
+                "provider_event_id, provider_turn_id, provider_item_id, correlation_id, "
+                "provider_ts, received_at, summary, payload, raw_retained) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT DO NOTHING",
+                (
+                    event.provider,
+                    event.provider_thread_id,
+                    event.lane,
+                    event.event_type,
+                    event.provider_event_id,
+                    event.provider_turn_id,
+                    event.provider_item_id,
+                    event.correlation_id,
+                    event.provider_ts,
+                    event.received_at,
+                    json.dumps(event.summary, separators=(",", ":")),
+                    payload,
+                    int(event.raw_retained),
+                ),
+            )
+            await self._conn.commit()
+            if event.provider_event_id is None:
+                async with self._conn.execute(
+                    "SELECT * FROM provider_events WHERE id = last_insert_rowid()"
+                ) as cur:
+                    row = await cur.fetchone()
+                if row is None:
+                    raise RuntimeError("provider event insert did not return a row")
+                return _row_to_provider_event(row)
         if event.provider_event_id is not None:
             existing = await self.find_provider_event(
                 event.provider, provider_event_id=event.provider_event_id
@@ -1509,13 +1518,7 @@ class Registry:
             if existing is None:
                 raise RuntimeError("provider event insert did not return a row")
             return existing
-        async with self._conn.execute(
-            "SELECT * FROM provider_events WHERE id = last_insert_rowid()"
-        ) as cur:
-            row = await cur.fetchone()
-        if row is None:
-            raise RuntimeError("provider event insert did not return a row")
-        return _row_to_provider_event(row)
+        raise RuntimeError("provider event insert did not return a row")
 
     async def find_provider_event(
         self, provider: str, *, provider_event_id: str
@@ -1919,37 +1922,47 @@ class Registry:
         await self._conn.execute(sql, tuple(params))
 
     async def upsert_message_receipt(self, receipt: MessageReceipt) -> MessageReceipt:
-        await self._conn.execute(
-            "INSERT INTO message_receipts (id, lane, queued_message_id, provider, "
-            "provider_thread_id, dispatch_message_id, status, turn_id, error, created_at, "
-            "sent_at, accepted_at, completed_at, failed_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(dispatch_message_id) WHERE dispatch_message_id IS NOT NULL "
-            "DO UPDATE SET lane = excluded.lane, queued_message_id = excluded.queued_message_id, "
-            "provider = excluded.provider, provider_thread_id = excluded.provider_thread_id, "
-            "status = excluded.status, turn_id = excluded.turn_id, error = excluded.error, "
-            "sent_at = excluded.sent_at, accepted_at = excluded.accepted_at, "
-            "completed_at = excluded.completed_at, failed_at = excluded.failed_at, "
-            "updated_at = excluded.updated_at",
-            (
-                receipt.id,
-                receipt.lane,
-                receipt.queued_message_id,
-                receipt.provider,
-                receipt.provider_thread_id,
-                receipt.dispatch_message_id,
-                receipt.status,
-                receipt.turn_id,
-                receipt.error,
-                receipt.created_at,
-                receipt.sent_at,
-                receipt.accepted_at,
-                receipt.completed_at,
-                receipt.failed_at,
-                receipt.updated_at,
-            ),
-        )
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._conn.execute(
+                "INSERT INTO message_receipts (id, lane, queued_message_id, provider, "
+                "provider_thread_id, dispatch_message_id, status, turn_id, error, created_at, "
+                "sent_at, accepted_at, completed_at, failed_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(dispatch_message_id) WHERE dispatch_message_id IS NOT NULL "
+                "DO UPDATE SET lane = excluded.lane, "
+                "queued_message_id = excluded.queued_message_id, "
+                "provider = excluded.provider, provider_thread_id = excluded.provider_thread_id, "
+                "status = excluded.status, turn_id = excluded.turn_id, error = excluded.error, "
+                "sent_at = excluded.sent_at, accepted_at = excluded.accepted_at, "
+                "completed_at = excluded.completed_at, failed_at = excluded.failed_at, "
+                "updated_at = excluded.updated_at",
+                (
+                    receipt.id,
+                    receipt.lane,
+                    receipt.queued_message_id,
+                    receipt.provider,
+                    receipt.provider_thread_id,
+                    receipt.dispatch_message_id,
+                    receipt.status,
+                    receipt.turn_id,
+                    receipt.error,
+                    receipt.created_at,
+                    receipt.sent_at,
+                    receipt.accepted_at,
+                    receipt.completed_at,
+                    receipt.failed_at,
+                    receipt.updated_at,
+                ),
+            )
+            await self._conn.commit()
+            if receipt.dispatch_message_id is None:
+                async with self._conn.execute(
+                    "SELECT * FROM message_receipts WHERE id = last_insert_rowid()"
+                ) as cur:
+                    row = await cur.fetchone()
+                if row is None:
+                    raise RuntimeError("message receipt upsert did not return a row")
+                return MessageReceipt.model_validate(_row_dict(row))
         if receipt.dispatch_message_id is not None:
             got = await self.find_message_receipt(
                 provider=receipt.provider, dispatch_message_id=receipt.dispatch_message_id
@@ -1957,13 +1970,7 @@ class Registry:
             if got is None:
                 raise RuntimeError("message receipt upsert did not return a row")
             return got
-        async with self._conn.execute(
-            "SELECT * FROM message_receipts WHERE id = last_insert_rowid()"
-        ) as cur:
-            row = await cur.fetchone()
-        if row is None:
-            raise RuntimeError("message receipt upsert did not return a row")
-        return MessageReceipt.model_validate(_row_dict(row))
+        raise RuntimeError("message receipt upsert did not return a row")
 
     async def find_message_receipt(
         self, *, provider: str, dispatch_message_id: str
@@ -1984,34 +1991,37 @@ class Registry:
         return [MessageReceipt.model_validate(_row_dict(row)) for row in rows]
 
     async def upsert_lane_runtime_state(self, state: LaneRuntimeState) -> LaneRuntimeState:
-        await self._conn.execute(
-            "INSERT INTO lane_runtime_state (lane, provider, provider_thread_id, status, "
-            "active_turn_id, latest_turn_id, latest_turn_status, needs_attention, "
-            "attention_kind, attention_detail, updated_at, last_event_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(lane) DO UPDATE SET provider = excluded.provider, "
-            "provider_thread_id = excluded.provider_thread_id, status = excluded.status, "
-            "active_turn_id = excluded.active_turn_id, latest_turn_id = excluded.latest_turn_id, "
-            "latest_turn_status = excluded.latest_turn_status, "
-            "needs_attention = excluded.needs_attention, attention_kind = excluded.attention_kind, "
-            "attention_detail = excluded.attention_detail, updated_at = excluded.updated_at, "
-            "last_event_at = excluded.last_event_at",
-            (
-                state.lane,
-                state.provider,
-                state.provider_thread_id,
-                state.status,
-                state.active_turn_id,
-                state.latest_turn_id,
-                state.latest_turn_status,
-                int(state.needs_attention),
-                state.attention_kind,
-                state.attention_detail,
-                state.updated_at,
-                state.last_event_at,
-            ),
-        )
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._conn.execute(
+                "INSERT INTO lane_runtime_state (lane, provider, provider_thread_id, status, "
+                "active_turn_id, latest_turn_id, latest_turn_status, needs_attention, "
+                "attention_kind, attention_detail, updated_at, last_event_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(lane) DO UPDATE SET provider = excluded.provider, "
+                "provider_thread_id = excluded.provider_thread_id, status = excluded.status, "
+                "active_turn_id = excluded.active_turn_id, "
+                "latest_turn_id = excluded.latest_turn_id, "
+                "latest_turn_status = excluded.latest_turn_status, "
+                "needs_attention = excluded.needs_attention, "
+                "attention_kind = excluded.attention_kind, "
+                "attention_detail = excluded.attention_detail, "
+                "updated_at = excluded.updated_at, last_event_at = excluded.last_event_at",
+                (
+                    state.lane,
+                    state.provider,
+                    state.provider_thread_id,
+                    state.status,
+                    state.active_turn_id,
+                    state.latest_turn_id,
+                    state.latest_turn_status,
+                    int(state.needs_attention),
+                    state.attention_kind,
+                    state.attention_detail,
+                    state.updated_at,
+                    state.last_event_at,
+                ),
+            )
+            await self._conn.commit()
         got = await self.get_lane_runtime_state(state.lane)
         if got is None:
             raise RuntimeError("lane runtime state upsert did not return a row")

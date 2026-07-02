@@ -24,6 +24,9 @@
 - `spikes/06_turso_libsql_storage_probe.py` - current backend compatibility probe.
 - `src/outfitter/dispatch/registry/sql_compat.py` - representative registry SQL compatibility contract.
 - `tests/registry/test_sql_compat.py` - stdlib SQLite compatibility tests.
+- `src/outfitter/dispatch/registry/ingest_harness.py` - synthetic event-ingestion harness.
+- `scripts/measure_event_ingestion.py` - opt-in ingestion measurement script.
+- `tests/registry/test_ingest_harness.py` - harness/script tests.
 
 ## Docs / ADRs / Notes
 
@@ -41,14 +44,18 @@
 - `uv run python -m pytest tests/registry -q`
 - `uv run --with pyturso --with libsql python spikes/06_turso_libsql_storage_probe.py`
 - `uv run pytest tests/registry/test_sql_compat.py -q`
+- `uv run pytest tests/registry/test_ingest_harness.py -q`
+- `uv run python scripts/measure_event_ingestion.py --events 80 --lanes 4 --concurrency 8 --json`
 - `just check`
 
 ## PRs / Branches
 
 - `feat/local-substrate-roadmap` - current working branch.
 - `dis-21-storage-boundary-contracts` - storage compatibility contract branch.
+- `dis-22-event-ingestion-harness` - synthetic event-ingestion harness branch.
 
 ## Review Reports
 
 - `.agents/goals/2026-07-02-local-substrate-stack/tmp/reviews/milestone-1-docs.json` - milestone 1 local review, 5/5 clean, no P0/P1/P2.
 - `.agents/goals/2026-07-02-local-substrate-stack/tmp/reviews/milestone-2-storage.json` - milestone 2 local review, 5/5 clean, no P0/P1/P2.
+- `.agents/goals/2026-07-02-local-substrate-stack/tmp/reviews/milestone-3-ingest.json` - milestone 3 local review, 5/5 clean, no P0/P1/P2.

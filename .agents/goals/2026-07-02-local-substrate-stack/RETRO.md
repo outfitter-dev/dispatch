@@ -13,10 +13,10 @@ Refs: `.agents/goals/2026-07-02-local-substrate-stack/REFS.md`
 - Objective: Land as much of the local substrate stack as safely possible.
 - Completion horizon: merged.
 - Authority used: Created Linear issues and branch `feat/local-substrate-roadmap`.
-- Outcome: active; milestone 1 submitted, milestone 2 in progress.
-- Tracker/PR/source-control state: Linear `DIS-20` through `DIS-25` created; PR #59 opened for milestone 1.
-- Verification: packet checks, lint/format, registry tests, mypy, and SQL compatibility spike passed.
-- Review state: milestone 1 and milestone 2 local reviews clean, 5/5, no P0/P1/P2.
+- Outcome: active; milestones 1 and 2 submitted, milestone 3 ready to submit.
+- Tracker/PR/source-control state: Linear `DIS-20` through `DIS-25` created; PR #59 opened for milestone 1; PR #60 opened for milestone 2.
+- Verification: packet checks, lint/format, registry tests, mypy, SQL compatibility spike, and synthetic event-ingestion harness passed.
+- Review state: milestone 1 through milestone 3 local reviews clean, 5/5, no P0/P1/P2.
 - Remaining risks: scope sprawl, storage abstraction overreach, semantic privacy risk, and gateway/log boundary drift.
 
 ## Readiness
@@ -27,7 +27,7 @@ Refs: `.agents/goals/2026-07-02-local-substrate-stack/REFS.md`
 - Verification blockers: none known.
 - Tracker blockers: none known.
 - Authority blockers: no release/publish, default backend migration, live data, cloud credentials, or paid API authority.
-- Next action: finish milestone 2 local review, commit, submit stacked PR, and continue if safe.
+- Next action: commit milestone 3, submit stacked PR, and continue if safe.
 
 ## Execution Log
 
@@ -46,6 +46,14 @@ Refs: `.agents/goals/2026-07-02-local-substrate-stack/REFS.md`
 - Result: Storage work now has a checked SQL portability target without changing the default SQLite/aiosqlite registry path.
 - Next: Commit, submit stacked PR, and update DIS-21.
 - Blockers: None known.
+
+2026-07-02 TBD - Milestone 3 synthetic event-ingestion harness
+- Changed: Added an opt-in synthetic event-ingestion harness and script; fixed a same-connection transaction race by serializing provider event, message receipt, and runtime-state writes through the registry write lock.
+- Verified: `uv run pytest tests/registry/test_ingest_harness.py -q` passed; `uv run pytest tests/registry -q` passed; `uv run mypy src tests/registry/test_ingest_harness.py` passed; focused ruff check/format passed; `uv run python scripts/measure_event_ingestion.py --events 80 --lanes 4 --concurrency 8 --json` wrote 80 provider events, turns, items, and receipts with 19 reader samples at 815.012 events/s.
+- Reviewed: milestone 3 local review clean 5/5; no P0/P1/P2.
+- Result: Event ingestion now has a repeatable local baseline harness, and the harness found a real registry write-concurrency bug.
+- Next: Commit, submit stacked PR, and update DIS-22.
+- Blockers: None known.
 ```
 
 ## Goal Amendments
@@ -60,6 +68,7 @@ Refs: `.agents/goals/2026-07-02-local-substrate-stack/REFS.md`
 | --- | --- | --- | --- | --- | --- | --- |
 | milestone-1-docs | roadmap, gateway boundary, goal packet | `.agents/goals/2026-07-02-local-substrate-stack/tmp/reviews/milestone-1-docs.json` | 5/5 | clean | 0 | Docs/tracker milestone only; implementation milestones pending. |
 | milestone-2-storage | SQL compatibility contract | `.agents/goals/2026-07-02-local-substrate-stack/tmp/reviews/milestone-2-storage.json` | 5/5 | clean | 0 | Contract probe only; full storage boundary still requires concrete call-site need. |
+| milestone-3-ingest | synthetic event-ingestion harness | `.agents/goals/2026-07-02-local-substrate-stack/tmp/reviews/milestone-3-ingest.json` | 5/5 | clean | 0 | Harness found and fixed a registry write-concurrency race. |
 
 ## Verification Log
 
@@ -73,6 +82,8 @@ Refs: `.agents/goals/2026-07-02-local-substrate-stack/REFS.md`
 | `uv run pytest tests/registry -q` | registry tests | pass | 37 passed. |
 | `uv run mypy src tests/registry/test_sql_compat.py` | typecheck | pass | Success, no issues found. |
 | `uv run --with pyturso --with libsql python spikes/06_turso_libsql_storage_probe.py` | optional backend spike | pass | sqlite3 PASS; pyturso PASS; libsql PASS. |
+| `uv run pytest tests/registry/test_ingest_harness.py -q` | event-ingestion harness | pass | 3 passed. |
+| `uv run python scripts/measure_event_ingestion.py --events 80 --lanes 4 --concurrency 8 --json` | synthetic baseline | pass | 80 provider events, turns, items, and receipts; 19 reader samples; 815.012 events/s. |
 
 ## Prompt / Goal Alignment
 
