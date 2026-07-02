@@ -15,16 +15,17 @@ the retention and redaction boundary is proven.
   repo, archive state, and dates.
 - `dispatch search <query> --thread <selector>` reads one thread through App
   Server `thread/read(includeTurns:true)` and scans the returned transcript.
-- `dispatch search <query> --local` searches Dispatch's normalized local
-  `thread_items` index for managed threads only. It does not call App Server
-  search and rejects `--unmanaged`.
+- `dispatch query [query] [filters...]` searches Dispatch's normalized local
+  `thread_items`/`thread_item_refs` index for managed threads only. It does not
+  call App Server search. Text is optional when a structural filter is present.
 
-`--local` is intentionally keyword search. It proves the index contract, selectors,
-filters, and scriptable schemas before embeddings or vector storage are added.
+`query` is intentionally keyword and structural indexed search. It proves the
+index contract, selectors, filters, and scriptable schemas before embeddings or
+vector storage are added.
 
 ## Indexed By Default
 
-The local search substrate may index derived or bounded facts from:
+The local query substrate may index derived or bounded facts from:
 
 - thread summaries and lane metadata;
 - turn status, completion, and error summaries;
@@ -36,7 +37,7 @@ The local search substrate may index derived or bounded facts from:
 
 ## Excluded By Default
 
-The local search substrate must not index these by default:
+The local query substrate must not index these by default:
 
 - raw provider payloads;
 - full unbounded transcripts;
@@ -65,7 +66,7 @@ configurable before real transcript embeddings are enabled.
 ## Storage Boundary
 
 SQLite/`aiosqlite` remains the default backend. Turso/libSQL may be useful later
-for vector search, selected sync, or concurrent ingestion, but the local search
+for vector search, selected sync, or concurrent ingestion, but the local query
 contract should not depend on that engine. Any alternate backend must preserve:
 
 - the registry/history behavior suite;
@@ -78,7 +79,7 @@ contract should not depend on that engine. Any alternate backend must preserve:
 - Which summary artifacts should be generated eagerly during sync versus lazily
   when search is requested?
 - What redaction pass is required before real embeddings can be enabled?
-- Should `--local` grow field filters, or should those stay under `history` until
-  semantic search exists?
+- Which `query` filters should graduate from exact/substring matching to ranked
+  search once embeddings exist?
 - What is the smallest fixture corpus that can catch search ranking and retention
   regressions without using private transcripts?

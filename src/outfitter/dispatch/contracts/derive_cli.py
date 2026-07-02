@@ -28,6 +28,7 @@ Renderer = Callable[[Op, dict[str, object]], None]
 
 _SendMode = Literal["send", "steer", "queue", "interject", "context"]
 _SearchSortKey = Literal["created_at", "updated_at"]
+_QueryDateField = Literal["created_at", "updated_at"]
 _HistoryView = Literal["auto", "overview", "summary", "items", "tools", "files"]
 
 
@@ -43,6 +44,7 @@ _CUSTOM_ROUTES: tuple[CliRoute, ...] = (
     CliRoute(("send",), "send", ("lane", "text")),
     CliRoute(("stop",), "stop", ("lane",)),
     CliRoute(("search",), "search", ("query",)),
+    CliRoute(("query",), "query"),
     CliRoute(("history",), "history"),
     CliRoute(("list",), "roster"),
     CliRoute(("subscribe",), "subscribe", ("target", "spec")),
@@ -116,6 +118,7 @@ def derive_cli(
     _register_command(app, ("send",), _send_command(registry.get("send"), invoke, renderer))
     _register_command(app, ("stop",), _stop_command(registry.get("stop"), invoke, renderer))
     _register_command(app, ("search",), _search_command(registry.get("search"), invoke, renderer))
+    _register_command(app, ("query",), _query_command(registry.get("query"), invoke, renderer))
     _register_command(
         app, ("history",), _history_command(registry.get("history"), invoke, renderer)
     )
@@ -487,10 +490,6 @@ def _stop_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., No
 def _search_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., None]:
     def command(
         query: Annotated[str, typer.Argument(help="Substring/full-text query.")],
-        local: Annotated[
-            bool,
-            typer.Option("--local", help="Search Dispatch's local managed-history index."),
-        ] = False,
         lane: Annotated[
             str | None,
             typer.Option("--thread", "--lane", help="Limit to one thread selector."),
@@ -535,7 +534,6 @@ def _search_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., 
             invoke,
             render,
             query=query,
-            local=local,
             lane=lane,
             directory=directory,
             repo=repo,
@@ -562,7 +560,6 @@ def _invoke_search(
     render: Renderer,
     *,
     query: str,
-    local: bool,
     lane: str | None,
     directory: str | None,
     repo: str | None,
@@ -582,7 +579,6 @@ def _invoke_search(
         op.id,
         {
             "query": query,
-            "local": local,
             "lane": lane,
             "directory": directory,
             "repo": repo,
@@ -600,6 +596,134 @@ def _invoke_search(
     )
     render(op, result)
     _ignore_json(json)
+
+
+def _query_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., None]:
+    def command(
+        query: Annotated[
+            str | None,
+            typer.Argument(help="Optional local indexed text query."),
+        ] = None,
+        lane: Annotated[
+            str | None,
+            typer.Option("--thread", "--lane", help="Limit to one thread selector."),
+        ] = None,
+        directory: Annotated[
+            str | None,
+            typer.Option("--directory", "--dir", help="Only include threads under this directory."),
+        ] = None,
+        repo: Annotated[
+            str | None, typer.Option("--repo", help="Only include threads under this repo root.")
+        ] = None,
+        source: Annotated[
+            str | None, typer.Option("--source", help="Only include threads by source.")
+        ] = None,
+        status: Annotated[
+            str | None, typer.Option("--status", help="Only include threads by status.")
+        ] = None,
+        archived: Annotated[
+            bool, typer.Option("--archived", help="Query archived managed threads.")
+        ] = False,
+        since: Annotated[
+            str | None, typer.Option("--since", help="Inclusive ISO date/time lower bound.")
+        ] = None,
+        until: Annotated[
+            str | None, typer.Option("--until", help="Inclusive ISO date/time upper bound.")
+        ] = None,
+        date_field: Annotated[
+            _QueryDateField, typer.Option("--date-field", help="Lane timestamp for date filters.")
+        ] = "updated_at",
+        item_type: Annotated[
+            str | None, typer.Option("--type", help="Only include matching item types.")
+        ] = None,
+        role: Annotated[
+            str | None, typer.Option("--role", help="Only include matching item roles.")
+        ] = None,
+        tool: Annotated[
+            str | None, typer.Option("--tool", help="Only include matching tool names.")
+        ] = None,
+        tool_server: Annotated[
+            str | None, typer.Option("--tool-server", help="Only include matching tool servers.")
+        ] = None,
+        tool_status: Annotated[
+            str | None, typer.Option("--tool-status", help="Only include matching tool status.")
+        ] = None,
+        errored: Annotated[
+            bool | None,
+            typer.Option("--errored/--not-errored", help="Only include errored or clean items."),
+        ] = None,
+        file: Annotated[
+            str | None, typer.Option("--file", help="Only include matching file refs.")
+        ] = None,
+        file_under: Annotated[
+            str | None, typer.Option("--file-under", help="Only include refs under a path.")
+        ] = None,
+        ext: Annotated[
+            str | None, typer.Option("--ext", help="Only include file refs with extension.")
+        ] = None,
+        mentions_thread: Annotated[
+            str | None, typer.Option("--mentions-thread", help="Only include thread refs.")
+        ] = None,
+        turn: Annotated[str | None, typer.Option("--turn", help="Only include one turn id.")] = (
+            None
+        ),
+        item_id: Annotated[
+            str | None, typer.Option("--item-id", help="Only include one item id.")
+        ] = None,
+        arg_key: Annotated[
+            str | None, typer.Option("--arg-key", help="Only include tool calls with arg key.")
+        ] = None,
+        raw_retained: Annotated[
+            bool | None,
+            typer.Option(
+                "--raw-retained/--no-raw-retained",
+                help="Only include items with or without raw payloads.",
+            ),
+        ] = None,
+        limit: Annotated[int, typer.Option(help="Max matches to return.")] = 20,
+        max_scan: Annotated[int, typer.Option("--max-scan", help="Max indexed items to scan.")] = (
+            200
+        ),
+        json: Annotated[
+            bool, typer.Option("--json", help="Render machine-readable JSON output.")
+        ] = False,
+    ) -> None:
+        result = invoke(
+            op.id,
+            {
+                "query": query,
+                "lane": lane,
+                "directory": directory,
+                "repo": repo,
+                "source": source,
+                "status": status,
+                "archived": archived,
+                "since": since,
+                "until": until,
+                "date_field": date_field,
+                "item_type": item_type,
+                "role": role,
+                "tool": tool,
+                "tool_server": tool_server,
+                "tool_status": tool_status,
+                "errored": errored,
+                "file": file,
+                "file_under": file_under,
+                "ext": ext,
+                "mentions_thread": mentions_thread,
+                "turn": turn,
+                "item_id": item_id,
+                "arg_key": arg_key,
+                "raw_retained": raw_retained,
+                "limit": limit,
+                "max_scan": max_scan,
+            },
+        )
+        render(op, result)
+        _ignore_json(json)
+
+    command.__doc__ = op.summary
+    return command
 
 
 def _history_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., None]:

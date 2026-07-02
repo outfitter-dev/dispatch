@@ -26,6 +26,7 @@ async def test_registry_has_the_v1_ops() -> None:
         "roster",
         "discover",
         "search",
+        "query",
         "models",
         "inbox-list",
         "inbox-read",

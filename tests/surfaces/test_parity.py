@@ -55,6 +55,7 @@ _EXPECTED_CLI_SCHEMA_ROUTES = {
     "watch": "watch",
     "sync": "sync",
     "search": "search",
+    "query": "query",
     "subscribe": "subscribe",
     "inbox list": "inbox-list",
     "inbox read": "inbox-read",
@@ -197,6 +198,13 @@ def test_cli_composed_routes_invoke_canonical_ops() -> None:
                 "next_cursor": None,
                 "experimental": True,
             }
+        if op_id == "query":
+            return {
+                "query": None,
+                "matches": [],
+                "scanned": 0,
+                "experimental": False,
+            }
         if op_id == "goal-get":
             return {"lane": "L1", "goal": None}
         return {}
@@ -208,6 +216,7 @@ def test_cli_composed_routes_invoke_canonical_ops() -> None:
     assert runner.invoke(app, ["list", "--unmanaged"]).exit_code == 0
     assert runner.invoke(app, ["sync", "@docs"]).exit_code == 0
     assert runner.invoke(app, ["search", "needle", "--managed"]).exit_code == 0
+    assert runner.invoke(app, ["query", "--tool", "linear.save_issue"]).exit_code == 0
     assert runner.invoke(app, ["goal", "status", "@docs"]).exit_code == 0
 
     assert calls == [
@@ -219,7 +228,6 @@ def test_cli_composed_routes_invoke_canonical_ops() -> None:
             "search",
             {
                 "query": "needle",
-                "local": False,
                 "lane": None,
                 "directory": None,
                 "repo": None,
@@ -231,6 +239,37 @@ def test_cli_composed_routes_invoke_canonical_ops() -> None:
                 "date_field": "updated_at",
                 "sort": "updated_at",
                 "ascending": False,
+                "limit": 20,
+                "max_scan": 200,
+            },
+        ),
+        (
+            "query",
+            {
+                "query": None,
+                "lane": None,
+                "directory": None,
+                "repo": None,
+                "source": None,
+                "status": None,
+                "archived": False,
+                "since": None,
+                "until": None,
+                "date_field": "updated_at",
+                "item_type": None,
+                "role": None,
+                "tool": "linear.save_issue",
+                "tool_server": None,
+                "tool_status": None,
+                "errored": None,
+                "file": None,
+                "file_under": None,
+                "ext": None,
+                "mentions_thread": None,
+                "turn": None,
+                "item_id": None,
+                "arg_key": None,
+                "raw_retained": None,
                 "limit": 20,
                 "max_scan": 200,
             },

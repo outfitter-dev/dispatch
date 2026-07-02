@@ -58,16 +58,17 @@ lanes can receive writes. Every managed thread has a dispatch-local `ref`; full
 Codex thread UUIDs remain accepted everywhere.
 Titles and `@handles` are mutable convenience labels, not stable identity. Metadata
 lifecycle actions (`rename`, `archive`, `restore`) can target managed refs or raw
-unmanaged Codex thread ids, and `search` can span both. Attach is metadata-only by
-default; use `dispatch sync <selector>` when you want dispatch to refresh its local
-indexed view of an attached thread. If `<selector>` is a raw unmanaged Codex thread
-id, `sync` first registers it as an attached read/metadata-managed lane, then refreshes
-the index. `dispatch list --unmanaged --archived` shows archived Codex sessions before
-you decide whether to sync or restore them. Bare `dispatch history` reads Dispatch's
-local index only; selector-scoped transcript reads through `tail`, `history`, or
+unmanaged Codex thread ids. `search` uses App Server search for broad discovery, while
+`query` uses Dispatch's local indexed managed-history substrate. Attach is metadata-only
+by default; use `dispatch sync <selector>` when you want dispatch to refresh its local
+indexed view of an attached thread. If `<selector>` is a raw unmanaged Codex thread id,
+`sync` first registers it as an attached read/metadata-managed lane, then refreshes the
+index. `dispatch list --unmanaged --archived` shows archived Codex sessions before you
+decide whether to sync or restore them. Bare `dispatch history` reads Dispatch's local
+index only; selector-scoped transcript reads through `tail`, `history`, or
 transcript-inclusive `get` use App Server `thread/read(includeTurns:true)` as the
-canonical source and backfill Dispatch's normalized local history index for that
-one thread.
+canonical source and backfill Dispatch's normalized local history index for that one
+thread.
 
 History capture is configurable in `~/.dispatch/config.toml`. The default
 `standard` mode captures operational facts and bounded searchable history

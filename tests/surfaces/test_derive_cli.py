@@ -323,7 +323,6 @@ def test_top_level_thread_actions_route_to_lane_contracts() -> None:
             "search",
             {
                 "query": "needle",
-                "local": False,
                 "lane": "@old",
                 "directory": None,
                 "repo": None,
@@ -342,7 +341,7 @@ def test_top_level_thread_actions_route_to_lane_contracts() -> None:
     ]
 
 
-def test_search_local_flag_maps_to_search_contract() -> None:
+def test_query_routes_to_local_query_contract_and_search_rejects_local_flag() -> None:
     captured: dict[str, object] = {}
 
     def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
@@ -352,30 +351,55 @@ def test_search_local_flag_maps_to_search_contract() -> None:
             "query": "needle",
             "matches": [],
             "scanned": 0,
-            "next_cursor": None,
             "experimental": False,
         }
 
     app = derive_cli(REGISTRY, invoke)
-    result = runner.invoke(app, ["search", "needle", "--local", "--managed"])
+    rejected = runner.invoke(app, ["search", "needle", "--local"])
+    result = runner.invoke(
+        app,
+        [
+            "query",
+            "--tool",
+            "linear.save_issue",
+            "--tool-status",
+            "completed",
+            "--arg-key",
+            "id",
+            "--limit",
+            "5",
+        ],
+    )
 
+    assert rejected.exit_code == 2
     assert result.exit_code == 0
-    assert captured["op"] == "search"
+    assert captured["op"] == "query"
     assert captured["params"] == {
-        "query": "needle",
-        "local": True,
+        "query": None,
         "lane": None,
         "directory": None,
         "repo": None,
-        "managed": True,
-        "unmanaged": False,
+        "source": None,
+        "status": None,
         "archived": False,
         "since": None,
         "until": None,
         "date_field": "updated_at",
-        "sort": "updated_at",
-        "ascending": False,
-        "limit": 20,
+        "item_type": None,
+        "role": None,
+        "tool": "linear.save_issue",
+        "tool_server": None,
+        "tool_status": "completed",
+        "errored": None,
+        "file": None,
+        "file_under": None,
+        "ext": None,
+        "mentions_thread": None,
+        "turn": None,
+        "item_id": None,
+        "arg_key": "id",
+        "raw_retained": None,
+        "limit": 5,
         "max_scan": 200,
     }
 
@@ -568,6 +592,7 @@ def test_schema_command_resolves_composed_cli_routes() -> None:
 
     unmanaged = runner.invoke(app, ["schema", "list --unmanaged"])
     search = runner.invoke(app, ["schema", "search"])
+    query = runner.invoke(app, ["schema", "query"])
     attach = runner.invoke(app, ["schema", "attach"])
     get = runner.invoke(app, ["schema", "get"])
     tail = runner.invoke(app, ["schema", "tail"])
@@ -581,6 +606,8 @@ def test_schema_command_resolves_composed_cli_routes() -> None:
     assert '"op": "discover"' in unmanaged.output
     assert search.exit_code == 0
     assert '"op": "search"' in search.output
+    assert query.exit_code == 0
+    assert '"op": "query"' in query.output
     assert attach.exit_code == 0
     assert '"op": "attach"' in attach.output
     assert get.exit_code == 0

@@ -58,12 +58,17 @@ def test_action_schema_and_annotations_from_op() -> None:
     search_schema = next(
         s for s in lane_read.inputSchema["oneOf"] if s["properties"]["op"]["const"] == "search"
     )
-    assert "local" in search_schema["properties"]
+    query_schema = next(
+        s for s in lane_read.inputSchema["oneOf"] if s["properties"]["op"]["const"] == "query"
+    )
+    assert "local" not in search_schema["properties"]
+    assert {"tool", "file", "arg_key"} <= set(query_schema["properties"])
     assert {s["properties"]["op"]["const"] for s in lane_read.inputSchema["oneOf"]} >= {
         "transcript",
         "watch",
         "goal_get",
         "search",
+        "query",
     }
 
     lane_destroy = tools["dispatch_thread_destroy"]

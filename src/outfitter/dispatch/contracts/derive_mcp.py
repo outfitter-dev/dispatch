@@ -56,6 +56,7 @@ _GROUPS: tuple[_ToolGroup, ...] = (
             ("watch", "watch"),
             ("goal_get", "goal-get"),
             ("search", "search"),
+            ("query", "query"),
         ),
     ),
     _ToolGroup(

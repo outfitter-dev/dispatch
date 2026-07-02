@@ -37,6 +37,7 @@ SendMode = Literal["send", "steer", "queue", "interject", "context"]
 ThreadActionSource = Literal["own", "attached", "unmanaged"]
 SearchSortKey = Literal["created_at", "updated_at"]
 SearchDateField = Literal["created_at", "updated_at"]
+QueryDateField = Literal["created_at", "updated_at"]
 HistoryView = Literal["auto", "overview", "summary", "items", "tools", "files"]
 WorkspaceSetupMode = Literal["auto", "skip", "run"]
 WorktreeMode = Literal["none", "create"]
@@ -205,10 +206,6 @@ class LaneRenameInput(BaseModel):
 
 class SearchInput(BaseModel):
     query: str = Field(description="Substring/full-text query for Codex thread search.")
-    local: bool = Field(
-        default=False,
-        description="Search Dispatch's local managed-history index instead of App Server search.",
-    )
     lane: str | None = Field(default=None, description="Limit search to one thread selector.")
     directory: str | None = Field(
         default=None, description="Only include threads whose cwd is inside this directory."
@@ -234,6 +231,48 @@ class SearchInput(BaseModel):
         ge=1,
         description="Max search matches/items to scan while applying dispatch-side filters.",
     )
+
+
+class QueryInput(BaseModel):
+    query: str | None = Field(
+        default=None,
+        description="Optional text query for Dispatch's local managed-history index.",
+    )
+    lane: str | None = Field(default=None, description="Limit query to one thread selector.")
+    directory: str | None = Field(
+        default=None, description="Only include threads whose cwd is inside this directory."
+    )
+    repo: str | None = Field(
+        default=None, description="Only include threads whose cwd is inside this repo root."
+    )
+    source: LaneSource | None = Field(default=None, description="Only include threads by source.")
+    status: LaneStatus | None = Field(default=None, description="Only include threads by status.")
+    archived: bool = Field(default=False, description="Query archived managed threads.")
+    since: str | None = Field(default=None, description="Inclusive ISO date/time lower bound.")
+    until: str | None = Field(default=None, description="Inclusive ISO date/time upper bound.")
+    date_field: QueryDateField = Field(
+        default="updated_at", description="Lane timestamp field used for since/until filtering."
+    )
+    item_type: str | None = Field(default=None, description="Only include matching item types.")
+    role: str | None = Field(default=None, description="Only include matching item roles.")
+    tool: str | None = Field(default=None, description="Only include matching tool names.")
+    tool_server: str | None = Field(default=None, description="Only include matching tool servers.")
+    tool_status: str | None = Field(default=None, description="Only include matching tool status.")
+    errored: bool | None = Field(default=None, description="Only include errored or clean items.")
+    file: str | None = Field(default=None, description="Only include matching file references.")
+    file_under: str | None = Field(default=None, description="Only include file refs under a path.")
+    ext: str | None = Field(default=None, description="Only include file refs with this extension.")
+    mentions_thread: str | None = Field(
+        default=None, description="Only include refs to matching thread ids."
+    )
+    turn: str | None = Field(default=None, description="Only include one turn id.")
+    item_id: str | None = Field(default=None, description="Only include one item id.")
+    arg_key: str | None = Field(default=None, description="Only include tool calls with arg key.")
+    raw_retained: bool | None = Field(
+        default=None, description="Only include items with or without retained raw payloads."
+    )
+    limit: int = Field(default=20, ge=1, description="Max matches to return.")
+    max_scan: int = Field(default=200, ge=1, description="Max indexed items to scan.")
 
 
 class ShowInput(BaseModel):
@@ -907,6 +946,42 @@ class SearchOutput(BaseModel):
     scanned: int
     next_cursor: str | None = None
     experimental: bool = True
+
+
+class QueryRef(BaseModel):
+    type: str
+    value: str
+
+
+class QueryMatch(BaseModel):
+    ref: str
+    id: str
+    handle: str
+    source: LaneSource
+    status: LaneStatus
+    cwd: str | None = None
+    item_id: str
+    turn_id: str | None = None
+    type: str
+    role: str | None = None
+    tool: str | None = None
+    snippet: str
+    files: list[str] = Field(default_factory=list)
+    refs: list[QueryRef] = Field(default_factory=list)
+    created_at: str | None = None
+    inserted_at: str
+    raw_retained: bool = False
+    tool_server: str | None = None
+    tool_status: str | None = None
+    errored: bool = False
+    duration_ms: int | None = None
+
+
+class QueryOutput(BaseModel):
+    query: str | None = None
+    matches: list[QueryMatch]
+    scanned: int
+    experimental: bool = False
 
 
 class ModelServiceTierView(BaseModel):

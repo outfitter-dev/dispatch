@@ -282,7 +282,7 @@ def _is_message(item: HistoryItem) -> bool:
 
 
 def _tool_name(item: dict[str, object]) -> str | None:
-    for key in ("toolName", "tool_name", "name", "command"):
+    for key in ("toolName", "tool_name", "tool", "name", "command"):
         value = _string(item.get(key))
         if value:
             return value

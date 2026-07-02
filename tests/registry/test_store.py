@@ -330,6 +330,41 @@ async def test_provider_event_history_index_roundtrips_and_dedupes(store: Regist
     assert scanned == 3
     assert [found.item_id for found in matches] == [newer.item_id, item.item_id]
 
+    filtered, filtered_scanned = await store.query_thread_items(
+        lanes={"L1"},
+        tool="bash",
+        file="README.md",
+        item_type="tool",
+        raw_retained=True,
+        limit=5,
+        max_scan=10,
+    )
+    assert filtered_scanned == 1
+    assert [found.item_id for found in filtered] == [item.item_id]
+
+    await store.upsert_thread_item(
+        thread_item(item_id="item-src", position=3),
+        refs=[thread_item_ref(item_id="item-src", ref_type="file", ref_value="src/app.py")],
+    )
+    await store.upsert_thread_item(
+        thread_item(item_id="item-docs-src", position=4),
+        refs=[
+            thread_item_ref(
+                item_id="item-docs-src",
+                ref_type="file",
+                ref_value="docs/src/app.py",
+            )
+        ],
+    )
+    under_src, under_src_scanned = await store.query_thread_items(
+        lanes={"L1"},
+        file_under="src",
+        limit=10,
+        max_scan=10,
+    )
+    assert under_src_scanned == 1
+    assert [found.item_id for found in under_src] == ["item-src"]
+
     created = await store.upsert_message_receipt(message_receipt())
     accepted = await store.upsert_message_receipt(
         created.model_copy(

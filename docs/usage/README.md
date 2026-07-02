@@ -657,11 +657,11 @@ uv run dispatch restore <codex-thread-id>
 Destroy-intent commands prompt on a TTY. In scripts, use `--yes --json`; if you also
 set `--no-interactive`, `--yes` is required or the command exits with a usage error.
 
-Use `search` to search Codex thread history without first attaching every thread:
+Use `search` to ask the Codex App Server to search thread history without first
+attaching every thread:
 
 ```bash
 uv run dispatch search "schema drift"
-uv run dispatch search "schema drift" --local
 uv run dispatch search "schema drift" --managed
 uv run dispatch search "schema drift" --unmanaged
 uv run dispatch search "schema drift" --thread <dispatch-ref>
@@ -672,13 +672,29 @@ uv run dispatch search "schema drift" --since 2026-06-01 --until 2026-06-05
 
 Broad search uses the App Server experimental `thread/search` primitive, then applies
 dispatch-side filters for managed/unmanaged state, repo/directory, and date bounds.
-Use `--local` to search Dispatch's normalized local history index for managed threads
-without calling App Server search. Local search only includes threads that Dispatch
-manages and has indexed through sync, history, tail, watch, live events, or other capture
-paths; it rejects `--unmanaged`. Lane-focused search without `--local` reads that one
-thread with `thread/read(includeTurns:true)` and performs a local substring scan. Date
-bounds accept ISO dates or datetimes and default to filtering lane `updated_at`; use
-`--date-field created_at` when creation time matters.
+Lane-focused search reads that one thread with `thread/read(includeTurns:true)` and
+performs a local substring scan because App Server search has no thread-id filter.
+
+Use `query` when you want Dispatch's normalized local managed-history index. Query does
+not call App Server search; it only sees managed threads that Dispatch has indexed through
+sync, history, tail, watch, live events, or other capture paths. Text is optional when at
+least one structural filter is present.
+
+```bash
+uv run dispatch query "schema drift"
+uv run dispatch query --tool linear.save_issue
+uv run dispatch query --tool linear.save_issue --tool-status completed --arg-key id
+uv run dispatch query --file convex/support/lineage.ts
+uv run dispatch query --repo . --since 2026-06-01 --until 2026-06-05
+uv run dispatch query --type mcpToolCall --errored
+uv run dispatch query --mentions-thread 019e
+uv run dispatch schema query
+```
+
+`query` returns item-level JSON that is meant for `jq`: thread ref/id/handle, item id,
+turn id, item type, role, concrete tool name, snippet, file refs, other refs, timestamps,
+and safe tool-call metadata such as server, status, error state, and duration when
+available.
 
 ## Discover Sessions
 
