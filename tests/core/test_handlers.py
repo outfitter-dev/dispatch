@@ -979,6 +979,9 @@ async def test_history_thread_views_filter_items_and_rollups(store: Registry) ->
     summary = await handlers.history(HistoryInput(lane="@alpha"), ctx)
     tools = await handlers.history(HistoryInput(lane="@alpha", view="tools"), ctx)
     files = await handlers.history(HistoryInput(lane="@alpha", view="files"), ctx)
+    indexed_items_view = await handlers.history(
+        HistoryInput(lane="@alpha", view="items", tool="bash"), ctx
+    )
     items = await handlers.history(
         HistoryInput(lane="@alpha", view="items", tool="bash", raw=True), ctx
     )
@@ -988,6 +991,9 @@ async def test_history_thread_views_filter_items_and_rollups(store: Registry) ->
     assert summary.thread.tool_calls == 2
     assert [tool.tool for tool in tools.tools] == ["bash", "apply_patch"]
     assert files.files[0].path == "src/app.py"
+    assert len(indexed_items_view.items) == 1
+    assert indexed_items_view.items[0].tool == "bash"
+    assert indexed_items_view.items[0].raw is None
     assert len(items.items) == 1
     assert items.items[0].tool == "bash"
     assert items.items[0].raw is not None
@@ -1170,12 +1176,94 @@ async def test_history_index_bounds_searchable_thread_text(store: Registry) -> N
     ctx = make_ctx(store, client, capture=CapturePolicy(max_text_bytes=4))
     await handlers.open_lane(OpenInput(name="alpha"), ctx)
 
-    await handlers.history(HistoryInput(lane="@alpha"), ctx)
+    out = await handlers.history(HistoryInput(lane="@alpha", view="items"), ctx)
 
     [item] = await store.list_thread_items(lane="lane-1", turn_id="t1")
+    assert out.items[0].text == "abcd"
     assert item.text == "abcd"
     assert item.payload is None
     assert item.raw_retained is False
+
+
+async def test_history_indexed_views_do_not_truncate_before_filtering(
+    store: Registry,
+) -> None:
+    item_count = 1205
+    client = FakeLaneClient()
+    client.read_result = {
+        "thread": {
+            "id": "lane-1",
+            "turns": [
+                {
+                    "id": "t1",
+                    "items": [
+                        {
+                            "id": f"tool-{index:04d}",
+                            "type": "toolCall",
+                            "toolName": "bash",
+                            "path": f"src/file-{index % 3}.py",
+                            "text": f"message {index}",
+                        }
+                        for index in range(item_count)
+                    ],
+                }
+            ],
+        }
+    }
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+
+    items = await handlers.history(HistoryInput(lane="@alpha", view="items", limit=1200), ctx)
+    tools = await handlers.history(HistoryInput(lane="@alpha", view="tools"), ctx)
+    files = await handlers.history(HistoryInput(lane="@alpha", view="files"), ctx)
+
+    assert len(items.items) == 1200
+    assert items.items[0].text == "message 5"
+    assert items.items[-1].text == "message 1204"
+    assert [tool.tool for tool in tools.tools] == ["bash"]
+    assert tools.tools[0].count == item_count
+    assert sum(file.count for file in files.files) == item_count
+
+
+async def test_history_refresh_prunes_stale_indexed_items(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.read_result = {
+        "thread": {
+            "id": "lane-1",
+            "turns": [
+                {
+                    "id": "t1",
+                    "items": [
+                        {"id": "old", "type": "agentMessage", "text": "old"},
+                        {"id": "keep", "type": "agentMessage", "text": "keep"},
+                    ],
+                }
+            ],
+        }
+    }
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+    await handlers.history(HistoryInput(lane="@alpha", view="items"), ctx)
+
+    client.read_result = {
+        "thread": {
+            "id": "lane-1",
+            "turns": [
+                {
+                    "id": "t1",
+                    "items": [{"id": "keep", "type": "agentMessage", "text": "keep"}],
+                }
+            ],
+        }
+    }
+
+    normal = await handlers.history(HistoryInput(lane="@alpha", view="items"), ctx)
+    raw = await handlers.history(HistoryInput(lane="@alpha", view="items", raw=True), ctx)
+
+    assert [item.item_id for item in normal.items] == ["keep"]
+    assert [item.item_id for item in raw.items] == ["keep"]
+    indexed_items = await store.list_thread_items(lane="lane-1", limit=None)
+    assert [item.item_id for item in indexed_items] == ["keep"]
 
 
 async def test_watch_collects_bounded_raw_events(store: Registry) -> None:

@@ -602,9 +602,11 @@ lane cwd. `--type`, `--tool`, and `--grep` filter item views; `--cwd`, `--source
 rows; `--raw` includes raw App Server item payloads for jq-heavy inspection.
 When `history`, `tail`, or transcript-inclusive `get` read `thread/read` with
 turns, Dispatch also backfills its local normalized history index with turns,
-items, tool/file refs, and compact retained item payloads. The App Server remains
-the canonical transcript source; the local index is for fast filtering,
-receipts, subscriptions, and future provider-neutral history surfaces.
+items, tool/file refs, and compact retained item payloads. Normal `history`
+item/tool/file views render from that normalized index after the refresh, so
+capture byte caps and provider-neutral refs are honored consistently. The App
+Server remains the canonical transcript source, and `history --raw` intentionally
+uses the live App Server payload for jq-heavy inspection.
 
 ```bash
 uv run dispatch history
@@ -737,10 +739,12 @@ searchable facts by default, but do not retain raw provider payloads unless the
 raw retention policy allows it. Live App Server events are stored as compact
 summaries; transcript reads index bounded turns, item text, tool names, and
 file/thread refs. Use `minimal` for a smaller footprint that keeps turn-level
-state but skips item-level transcript rows; use `debug` while developing
-reducers, search, or provider adapters. Debug retention can store bounded raw
-provider event and item payloads with truncation markers; it should usually run
-against isolated state.
+state but skips item-level transcript rows. Normal `history` item/tool/file
+views render from the normalized index after refreshing from the App Server;
+`history --raw` remains a live App Server raw-payload view. Use `debug` while
+developing reducers, search, or provider adapters. Debug retention can store
+bounded raw provider event and item payloads with truncation markers; it should
+usually run against isolated state.
 
 Configure capture in `~/.dispatch/config.toml`:
 

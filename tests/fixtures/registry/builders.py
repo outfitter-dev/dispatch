@@ -150,6 +150,7 @@ def thread_item(
     provider_thread_id: str = "thread-1",
     turn_id: str = "turn-1",
     item_id: str = "item-1",
+    position: int | None = None,
     inserted_at: str | None = None,
 ) -> ThreadItem:
     return ThreadItem(
@@ -161,6 +162,7 @@ def thread_item(
         item_type="toolCall",
         text="uv run pytest",
         tool="bash",
+        position=position,
         inserted_at=inserted_at or fixed_now_iso(),
         payload={"type": "toolCall", "command": "uv run pytest"},
         raw_retained=True,

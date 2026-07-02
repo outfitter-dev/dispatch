@@ -134,6 +134,7 @@ class ThreadItem(BaseModel):
     text: str | None = None
     tool: str | None = None
     created_at: str | None = None
+    position: int | None = None
     inserted_at: str
     payload: dict[str, object] | None = None
     raw_retained: bool = False
