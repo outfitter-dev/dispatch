@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, time
 from pathlib import Path
 from typing import Literal, TypedDict, cast
@@ -52,10 +53,18 @@ from outfitter.dispatch.registry.models import (
     SubscriptionDelivery,
     SubscriptionWhen,
     SyncState,
+    ThreadItem,
+    ThreadItemRef,
 )
 
 from . import queue
-from .history import detect_worktree, history_items_from_thread, summarize_history
+from .history import (
+    detect_worktree,
+    history_items_from_indexed,
+    history_items_from_thread,
+    history_rollups_from_indexed,
+    summarize_history,
+)
 from .history_index import index_codex_thread_read
 from .launch import ResolvedLaunch, resolve_launch
 from .message_attribution import codex_thread_link, render_dispatch_message
@@ -76,7 +85,6 @@ from .models import (
     GoalView,
     HistoryFileStat,
     HistoryInput,
-    HistoryItem,
     HistoryOutput,
     HistoryThreadSummary,
     HistoryToolStat,
@@ -180,6 +188,12 @@ class _SubscriptionSettings(TypedDict):
     once: bool
     ack: SubscriptionAckPolicy
     attribution: bool
+
+
+@dataclass(frozen=True)
+class _IndexedHistory:
+    indexed: list[ThreadItem]
+    refs: dict[str, list[ThreadItemRef]]
 
 
 _ATTACHED_WRITE_LOCK_REASON = (
@@ -1489,7 +1503,7 @@ async def history(inp: HistoryInput, ctx: Ctx) -> HistoryOutput:
         raise ValidationError("history view requires a thread selector")
     lane = await _resolve(ctx, inp.lane)
     result = await ctx.client.thread_read(lane.id, include_turns=True)
-    summary, _items, tools, files = await _history_details(lane, result, ctx)
+    summary, items, tools, files = await _history_details(lane, result, ctx)
     if mode == "summary":
         return HistoryOutput(mode="summary", thread=summary, tools=tools, files=files)
     if mode == "tools":
@@ -1499,13 +1513,25 @@ async def history(inp: HistoryInput, ctx: Ctx) -> HistoryOutput:
     return HistoryOutput(
         mode="items",
         thread=summary,
-        items=history_items_from_thread(
-            result,
-            item_type=inp.item_type,
-            tool=inp.tool,
-            grep=inp.grep,
-            raw=inp.raw,
-            limit=inp.limit,
+        items=(
+            history_items_from_thread(
+                result,
+                item_type=inp.item_type,
+                tool=inp.tool,
+                grep=inp.grep,
+                raw=True,
+                limit=inp.limit,
+            )
+            if inp.raw
+            else history_items_from_indexed(
+                items.indexed,
+                items.refs,
+                item_type=inp.item_type,
+                tool=inp.tool,
+                grep=inp.grep,
+                raw=False,
+                limit=inp.limit,
+            )
         ),
     )
 
@@ -1543,11 +1569,17 @@ async def _history_summary_for_lane(lane: Lane, ctx: Ctx) -> HistoryThreadSummar
 
 async def _history_details(
     lane: Lane, result: dict[str, object], ctx: Ctx
-) -> tuple[HistoryThreadSummary, list[HistoryItem], list[HistoryToolStat], list[HistoryFileStat]]:
+) -> tuple[HistoryThreadSummary, _IndexedHistory, list[HistoryToolStat], list[HistoryFileStat]]:
     await index_codex_thread_read(ctx.registry, lane, result, ctx.capture)
     sync = await ctx.registry.get_lane_sync(lane.id)
     worktree = await detect_worktree(lane.cwd)
-    return summarize_history(result, lane=lane, sync=sync, worktree=worktree)
+    summary, _live_items, _live_tools, _live_files = summarize_history(
+        result, lane=lane, sync=sync, worktree=worktree
+    )
+    indexed_items = await ctx.registry.list_thread_items(lane=lane.id, limit=None)
+    refs = {item.item_id: await ctx.registry.list_thread_item_refs(item) for item in indexed_items}
+    tools, files = history_rollups_from_indexed(indexed_items, refs)
+    return summary, _IndexedHistory(indexed=indexed_items, refs=refs), tools, files
 
 
 async def search(inp: SearchInput, ctx: Ctx) -> SearchOutput:

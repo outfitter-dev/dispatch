@@ -9,7 +9,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-from outfitter.dispatch.registry.models import Lane, LaneSync
+from outfitter.dispatch.registry.models import Lane, LaneSync, ThreadItem, ThreadItemRef
 
 from .models import (
     HistoryFileStat,
@@ -36,6 +36,40 @@ def history_items_from_thread(
     return filtered[-limit:]
 
 
+def history_items_from_indexed(
+    items: list[ThreadItem],
+    refs_by_item: dict[str, list[ThreadItemRef]],
+    *,
+    item_type: str | None = None,
+    tool: str | None = None,
+    grep: str | None = None,
+    raw: bool = False,
+    limit: int = 50,
+) -> list[HistoryItem]:
+    """Project normalized DB-backed history rows into user-facing history items."""
+
+    projected = [
+        _indexed_history_item(item, refs_by_item.get(item.item_id, []), include_raw=raw)
+        for item in reversed(items)
+    ]
+    filtered = [
+        item
+        for item in projected
+        if _matches_filter(item, item_type=item_type, tool=tool, grep=grep)
+    ]
+    return filtered[-limit:]
+
+
+def history_rollups_from_indexed(
+    items: list[ThreadItem], refs_by_item: dict[str, list[ThreadItemRef]]
+) -> tuple[list[HistoryToolStat], list[HistoryFileStat]]:
+    projected = [
+        _indexed_history_item(item, refs_by_item.get(item.item_id, []), include_raw=False)
+        for item in reversed(items)
+    ]
+    return _history_rollups(projected)
+
+
 def summarize_history(
     result: dict[str, object],
     *,
@@ -49,6 +83,38 @@ def summarize_history(
     transcript_bytes = (
         len(json.dumps(thread, separators=(",", ":"))) if isinstance(thread, dict) else None
     )
+    tools, files = _history_rollups(items)
+    subagent_ids = sorted(
+        {value for item in items for value in _subagent_thread_ids(item.raw or {})}
+    )
+    summary = HistoryThreadSummary(
+        ref=lane.ref,
+        id=lane.id,
+        handle=lane.handle,
+        source=lane.source,
+        status=lane.status,
+        cwd=lane.cwd,
+        first_event_at=_first_event_at(thread if isinstance(thread, dict) else {}),
+        last_event_at=sync.latest_event_at if sync is not None else None,
+        turns=len(turns),
+        items=len(items),
+        messages=sum(1 for item in items if _is_message(item)),
+        tool_calls=sum(tool.count for tool in tools),
+        unique_tools=sorted(tool.tool for tool in tools),
+        files_changed_count=len(files),
+        files_changed=files[:25],
+        transcript_bytes=transcript_bytes,
+        estimated_tokens=(transcript_bytes // 4) if transcript_bytes is not None else None,
+        subagents_count=len(subagent_ids),
+        subagent_thread_ids=subagent_ids,
+        worktree=worktree or HistoryWorktree(),
+    )
+    return summary, items, tools, files
+
+
+def _history_rollups(
+    items: list[HistoryItem],
+) -> tuple[list[HistoryToolStat], list[HistoryFileStat]]:
     tool_counter: Counter[str] = Counter(item.tool for item in items if item.tool)
     item_types_by_tool: dict[str, set[str]] = defaultdict(set)
     for item in items:
@@ -66,32 +132,7 @@ def summarize_history(
         for name, count in tool_counter.most_common()
     ]
     files = [HistoryFileStat(path=path, count=count) for path, count in file_counter.most_common()]
-    subagent_ids = sorted(
-        {value for item in items for value in _subagent_thread_ids(item.raw or {})}
-    )
-    summary = HistoryThreadSummary(
-        ref=lane.ref,
-        id=lane.id,
-        handle=lane.handle,
-        source=lane.source,
-        status=lane.status,
-        cwd=lane.cwd,
-        first_event_at=_first_event_at(thread if isinstance(thread, dict) else {}),
-        last_event_at=sync.latest_event_at if sync is not None else None,
-        turns=len(turns),
-        items=len(items),
-        messages=sum(1 for item in items if _is_message(item)),
-        tool_calls=sum(tool_counter.values()),
-        unique_tools=sorted(tool_counter),
-        files_changed_count=len(files),
-        files_changed=files[:25],
-        transcript_bytes=transcript_bytes,
-        estimated_tokens=(transcript_bytes // 4) if transcript_bytes is not None else None,
-        subagents_count=len(subagent_ids),
-        subagent_thread_ids=subagent_ids,
-        worktree=worktree or HistoryWorktree(),
-    )
-    return summary, items, tools, files
+    return tools, files
 
 
 async def detect_worktree(cwd: str | None) -> HistoryWorktree:
@@ -197,6 +238,21 @@ def _history_item(
         tool=_tool_name(item),
         files=_file_paths(item),
         raw=dict(item) if include_raw else None,
+    )
+
+
+def _indexed_history_item(
+    item: ThreadItem, refs: list[ThreadItemRef], *, include_raw: bool
+) -> HistoryItem:
+    return HistoryItem(
+        turn_id=item.turn_id,
+        item_id=item.item_id,
+        type=item.item_type,
+        text=item.text,
+        role=item.role,
+        tool=item.tool,
+        files=sorted(ref.ref_value for ref in refs if ref.ref_type == "file"),
+        raw=item.payload if include_raw and item.raw_retained else None,
     )
 
 

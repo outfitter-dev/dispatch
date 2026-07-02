@@ -306,12 +306,19 @@ async def test_provider_event_history_index_roundtrips_and_dedupes(store: Regist
     assert (await store.list_thread_turns(lane="L1")) == [completed]
 
     item = await store.upsert_thread_item(
-        thread_item(),
+        thread_item(position=1),
         refs=[thread_item_ref(), thread_item_ref(ref_type="file", ref_value="README.md")],
     )
     refs = await store.list_thread_item_refs(item)
     assert [ref.ref_type for ref in refs] == ["file", "tool"]
     assert (await store.list_thread_items(lane="L1", turn_id="turn-1")) == [item]
+    older = await store.upsert_thread_item(thread_item(item_id="item-0", position=0))
+    newer = await store.upsert_thread_item(thread_item(item_id="item-2", position=2))
+    all_items = await store.list_thread_items(lane="L1", limit=None)
+    assert [found.item_id for found in all_items] == [newer.item_id, item.item_id, older.item_id]
+    assert [found.item_id for found in await store.list_thread_items(lane="L1", limit=1)] == [
+        newer.item_id
+    ]
 
     created = await store.upsert_message_receipt(message_receipt())
     accepted = await store.upsert_message_receipt(
@@ -419,6 +426,14 @@ async def test_v10_registry_migration_adds_provider_history_tables(tmp_path: Pat
             row = await cur.fetchone()
         assert row is not None
         assert int(row[0]) == SCHEMA_VERSION
+        async with migrated._conn.execute("PRAGMA table_info(thread_items)") as cur:
+            columns = {str(column["name"]) for column in await cur.fetchall()}
+        assert "position" in columns
+        async with migrated._conn.execute(
+            "PRAGMA index_info(idx_thread_items_lane_inserted)"
+        ) as cur:
+            index_columns = [str(column["name"]) for column in await cur.fetchall()]
+        assert index_columns == ["lane", "position", "inserted_at"]
     finally:
         await migrated.close()
 

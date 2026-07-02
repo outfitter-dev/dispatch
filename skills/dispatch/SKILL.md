@@ -272,7 +272,9 @@ Dispatch captures normalized history into its local SQLite registry. Default
 Live App Server events are stored as compact summaries; transcript reads index
 bounded turns, item text, tool names, and file/thread refs. Raw provider payloads
 stay gated by retention policy. Minimal capture keeps turn-level state but skips
-item-level transcript rows. Use debug capture only when developing or diagnosing
+item-level transcript rows. Normal `history` item/tool/file views render from
+the normalized index after refresh; `--raw` keeps its live App Server raw-payload
+behavior. Use debug capture only when developing or diagnosing
 reducers/search/provider adapters; debug retention can store bounded raw
 provider event and item payloads with truncation markers:
 
@@ -470,8 +472,9 @@ tools, visible subagent thread ids, worktree identity, and dirty changed-file
 names from each lane cwd. Overview filters include `--cwd`, `--source`,
 `--status`, `--has-tool`, `--changed/--clean`, and `--min-bytes`. Item views use
 `--type`, `--tool`, `--grep`, and optional `--raw`. History reads backfill the
-normalized local history index while still rendering from the App Server
-transcript payload.
+normalized local history index. Normal item/tool/file views render from that
+index after refresh; `--raw` intentionally reads the live App Server raw item
+payloads for jq-heavy inspection.
 
 Use `watch` for a bounded live event sample. It returns raw App
 Server method/params until a limit or timeout, and it is not an infinite tail:

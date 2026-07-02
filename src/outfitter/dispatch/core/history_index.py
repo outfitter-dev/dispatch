@@ -32,10 +32,14 @@ async def index_codex_thread_read(
         return
     now = registry.now_iso()
     provider_thread_id = _string(thread.get("id")) or lane.id
+    position = 0
+    seen_turn_ids: set[str] = set()
+    seen_item_ids: set[str] = set()
     for turn_index, raw_turn in enumerate(turns):
         if not isinstance(raw_turn, dict):
             continue
         turn_id = _string(raw_turn.get("id")) or f"turn-{turn_index}"
+        seen_turn_ids.add(turn_id)
         status = _turn_status(raw_turn.get("status"))
         created_at = _timestamp(raw_turn)
         turn_error = bound_text(_string(raw_turn.get("error")), policy)
@@ -63,6 +67,7 @@ async def index_codex_thread_read(
             if not isinstance(raw_item, dict):
                 continue
             item_id = _string(raw_item.get("id")) or f"{turn_id}:item-{item_index}"
+            seen_item_ids.add(item_id)
             item_text = bound_text(_item_text(raw_item), policy)
             payload = _retained_payload(raw_item, policy, is_error=_is_error_item(raw_item, status))
             item = ThreadItem(
@@ -76,11 +81,19 @@ async def index_codex_thread_read(
                 text=item_text.text if item_text is not None else None,
                 tool=_tool_name(raw_item),
                 created_at=_timestamp(raw_item),
+                position=position,
                 inserted_at=now,
                 payload=payload,
                 raw_retained=payload is not None,
             )
             await registry.upsert_thread_item(item, refs=_item_refs(item, raw_item))
+            position += 1
+    await registry.prune_thread_history_snapshot(
+        provider=_CODEX_PROVIDER,
+        provider_thread_id=provider_thread_id,
+        turn_ids=seen_turn_ids,
+        item_ids=seen_item_ids,
+    )
 
 
 def _turn_status(value: object) -> Literal["started", "completed", "failed", "unknown"]:

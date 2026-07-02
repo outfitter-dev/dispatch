@@ -19,19 +19,19 @@ Refs: `.agents/goals/2026-07-01-history-capture-policy/REFS.md`
 - Authority: commit, push, PR, mark ready, tracker updates, bounded subagents,
   and isolated local scenarios are allowed; merge, release, publish, storage
   default changes, and live user state mutation are not allowed.
-- Current state: Milestone 1 is complete and Milestone 2 implementation is
-  ready for local review.
+- Current state: Milestones 1-3 are complete and Milestone 4 implementation is
+  complete after clean final reviews.
 
 ## Readiness
 
 - Prompt checked: passed at 3873 characters.
 - Goal/prompt alignment checked: passed.
-- Review blockers: Milestone 2 local review pending.
+- Review blockers: none known.
 - Verification blockers: none known.
 - Tracker blockers: none known before implementation.
 - Authority blockers: merge/release/publish/storage-default changes require
   explicit approval and are out of scope.
-- Next action: commit Milestone 2 and run standing plus targeted local review.
+- Next action: submit the stack as draft PRs and record PR readiness.
 
 ## Goal Amendments
 
@@ -170,6 +170,61 @@ Refs: `.agents/goals/2026-07-01-history-capture-policy/REFS.md`
 - Next: Create `feat/db-backed-history-surfaces` and begin the DB-backed
   operator surface cutover.
 - Blockers: None known.
+
+2026-07-01 America/New_York - Milestone 4 DB-backed history surfaces
+- Changed: Created `feat/db-backed-history-surfaces` above
+  `feat/history-debug-capture`. Kept `thread/read` as the freshness source, then
+  rendered normal `history` item/tool/file views from normalized SQLite
+  `thread_items` and `thread_item_refs`. Preserved `history --raw` as a live App
+  Server raw-payload view. Updated README, usage docs, and the dispatch skill to
+  document the DB-backed normal views versus raw live inspection split.
+- Verified: focused handler/capture/storage tests passed; broader
+  client/reactor/handler/capture/config/doctor/registry/fixture tests passed;
+  ruff check, ruff format check, mypy, and `git diff --check` passed on touched
+  code/tests.
+- Result: Milestone 4 implementation is ready for local review.
+- Next: Commit the milestone and run standing plus targeted surface/API review.
+- Blockers: None known.
+
+2026-07-01 America/New_York - Milestone 4 review fixes
+- Changed: Fixed targeted P1 TSA-001 and P2 TSA-002. Removed the fixed
+  1000-row indexed history fetch cap, added explicit `thread_items.position`
+  storage with schema v12 migration for deterministic transcript ordering, and
+  added long-history tests proving normal items/tools/files render from complete
+  indexed rows while preserving requested item limits.
+- Verified: focused long-history/registry migration tests passed; broader
+  client/reactor/handler/capture/config/doctor/registry/fixture tests passed;
+  ruff check, ruff format check, mypy, and full `just check` passed with
+  381 selected tests and package build/content checks.
+- Result: First Milestone 4 review findings are fixed locally.
+- Next: Rerun standing plus targeted re-review.
+- Blockers: None known.
+
+2026-07-01 America/New_York - Milestone 4 stale-refresh review fix
+- Changed: Fixed targeted P1 TSA-003 by making `thread/read` indexing reconcile
+  the latest snapshot, pruning indexed `thread_items` and `thread_turns` that
+  are absent from the fresh App Server transcript. Added a two-read regression
+  test proving normal DB-backed history drops removed items while `--raw`
+  mirrors the current live payload.
+- Verified: focused stale-prune/long-history/registry tests passed; broader
+  client/reactor/handler/capture/config/doctor/registry/fixture tests passed;
+  ruff check, ruff format check, mypy, and full `just check` passed with
+  382 selected tests and package build/content checks.
+- Result: Second Milestone 4 review finding is fixed locally.
+- Next: Amend/squash the milestone commit and rerun standing plus targeted
+  re-review.
+- Blockers: None known.
+
+2026-07-01 America/New_York - Milestone 4 closed
+- Changed: Standing and targeted final re-reviews both passed clean against the
+  DB-backed history surface branch after the long-history, stale-prune, and
+  migration-index fixes.
+- Verified: Standing final review clean 5/5 with 0 open P0-P2; targeted final
+  review clean 5/5 with 0 remaining findings. Full `just check` stayed green
+  after the final migration-index guard.
+- Result: Milestone 4 DB-backed history surfaces is complete.
+- Next: Submit the stacked PRs as drafts and finalize PR readiness evidence.
+- Blockers: None known.
 ```
 
 ## Branch / PR Log
@@ -179,7 +234,7 @@ Refs: `.agents/goals/2026-07-01-history-capture-policy/REFS.md`
 | `feat/history-capture-policy` | `docs/history-capture-policy-goal` | pending | local milestone complete | Capture policy foundation. |
 | `feat/history-standard-capture` | `feat/history-capture-policy` | pending | local milestone complete | Standard Tier 1/Tier 2 capture. |
 | `feat/history-debug-capture` | `feat/history-standard-capture` | pending | local milestone complete | Debug retention mode. |
-| `feat/db-backed-history-surfaces` | `feat/history-debug-capture` | pending | not started | DB-backed history/search/status surfaces. |
+| `feat/db-backed-history-surfaces` | `feat/history-debug-capture` | pending | local milestone complete | DB-backed history views. |
 
 ## Review Log
 
@@ -195,6 +250,9 @@ Refs: `.agents/goals/2026-07-01-history-capture-policy/REFS.md`
 | milestone-3 pre-review | debug capture mode | not applicable | not scored | implementation ready | 0 | Review requests pending. |
 | milestone-3 round-1 | debug capture mode | `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-3/targeted-privacy-storage.json` | 3 | changes_requested | 1 | Targeted found P1 storage-bound mismatch between compact byte checks and default JSON persistence; fixed locally. Standing review still pending. |
 | milestone-3 final | debug capture mode | `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-3/standing.json`; `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-3/targeted-privacy-storage-rereview.json` | 5 / 5 | clean | 0 | Milestone 3 closed. |
+| milestone-4 round-1 | DB-backed history surfaces | `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-4/standing.json`; `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-4/targeted-surface-api.json` | 3 / 3 | changes_requested | 2 | Standing and targeted both found the fixed 1000-row fetch cap; targeted also found missing long-history/tool-file regression coverage. Fixed locally. |
+| milestone-4 round-2 | DB-backed history surfaces | `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-4/targeted-surface-api-rereview.json` | 3 | changes_requested | 1 | Prior findings fixed; targeted found stale indexed rows after fresh thread/read no longer contained them. Fixed locally; re-review pending. |
+| milestone-4 final | DB-backed history surfaces | `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-4/standing-final.json`; `.agents/goals/2026-07-01-history-capture-policy/tmp/reviews/milestone-4/targeted-surface-api-final.json` | 5 / 5 | clean | 0 | Milestone 4 closed. |
 
 ## Verification Log
 
@@ -235,6 +293,24 @@ Refs: `.agents/goals/2026-07-01-history-capture-policy/REFS.md`
 | `uv run ruff check src/outfitter/dispatch/client/events.py src/outfitter/dispatch/core/event_index.py src/outfitter/dispatch/registry/store.py tests/client/test_events.py tests/core/test_triggers.py tests/registry/test_store.py` | milestone 3 review-fix lint | passed | All checks passed. |
 | `uv run ruff format --check src/outfitter/dispatch/client/events.py src/outfitter/dispatch/core/event_index.py src/outfitter/dispatch/registry/store.py tests/client/test_events.py tests/core/test_triggers.py tests/registry/test_store.py` | milestone 3 review-fix format | passed | 6 files already formatted. |
 | `uv run mypy src/outfitter/dispatch/client/events.py src/outfitter/dispatch/core/event_index.py src/outfitter/dispatch/registry/store.py tests/client/test_events.py tests/core/test_triggers.py tests/registry/test_store.py` | milestone 3 review-fix types | passed | No issues found. |
+| `uv run pytest tests/core/test_handlers.py tests/core/test_capture.py tests/registry/test_store.py -q` | milestone 4 focused tests | passed | 139 passed. |
+| `uv run pytest tests/client/test_events.py tests/core/test_triggers.py tests/core/test_handlers.py tests/core/test_capture.py tests/test_config.py tests/test_doctor.py tests/registry/test_store.py tests/fixtures/test_corpus.py -q` | milestone 4 broader tests | passed | 202 passed. |
+| `uv run ruff check src/outfitter/dispatch/core/history.py src/outfitter/dispatch/core/handlers.py tests/core/test_handlers.py` | milestone 4 lint | passed | All checks passed. |
+| `uv run ruff format --check src/outfitter/dispatch/core/history.py src/outfitter/dispatch/core/handlers.py tests/core/test_handlers.py` | milestone 4 format | passed | 3 files already formatted. |
+| `uv run mypy src/outfitter/dispatch/core/history.py src/outfitter/dispatch/core/handlers.py tests/core/test_handlers.py` | milestone 4 types | passed | No issues found. |
+| `git diff --check` | milestone 4 whitespace | passed | No whitespace errors. |
+| `uv run pytest tests/core/test_handlers.py::test_history_indexed_views_do_not_truncate_before_filtering tests/registry/test_store.py::test_provider_event_history_index_roundtrips_and_dedupes tests/registry/test_store.py::test_v10_registry_migration_adds_provider_history_tables -q` | milestone 4 review-fix focused tests | passed | 3 passed. |
+| `uv run pytest tests/client/test_events.py tests/core/test_triggers.py tests/core/test_handlers.py tests/core/test_capture.py tests/test_config.py tests/test_doctor.py tests/registry/test_store.py tests/fixtures/test_corpus.py -q` | milestone 4 review-fix broader tests | passed | 203 passed. |
+| `uv run ruff check src/outfitter/dispatch/registry/models.py src/outfitter/dispatch/registry/store.py src/outfitter/dispatch/core/history_index.py src/outfitter/dispatch/core/handlers.py tests/fixtures/registry/builders.py tests/core/test_handlers.py tests/registry/test_store.py` | milestone 4 review-fix lint | passed | All checks passed. |
+| `uv run ruff format --check src/outfitter/dispatch/registry/models.py src/outfitter/dispatch/registry/store.py src/outfitter/dispatch/core/history_index.py src/outfitter/dispatch/core/handlers.py tests/fixtures/registry/builders.py tests/core/test_handlers.py tests/registry/test_store.py` | milestone 4 review-fix format | passed | 7 files already formatted. |
+| `uv run mypy src/outfitter/dispatch/registry/models.py src/outfitter/dispatch/registry/store.py src/outfitter/dispatch/core/history_index.py src/outfitter/dispatch/core/handlers.py tests/fixtures/registry/builders.py tests/core/test_handlers.py tests/registry/test_store.py` | milestone 4 review-fix types | passed | No issues found. |
+| `just check` | milestone 4 full gate after review fix | passed | Ruff, format, mypy, pytest 381 passed/9 deselected, build, package contents. |
+| `uv run pytest tests/core/test_handlers.py::test_history_refresh_prunes_stale_indexed_items tests/core/test_handlers.py::test_history_indexed_views_do_not_truncate_before_filtering tests/registry/test_store.py::test_provider_event_history_index_roundtrips_and_dedupes -q` | milestone 4 stale-prune focused tests | passed | 3 passed. |
+| `uv run pytest tests/client/test_events.py tests/core/test_triggers.py tests/core/test_handlers.py tests/core/test_capture.py tests/test_config.py tests/test_doctor.py tests/registry/test_store.py tests/fixtures/test_corpus.py -q` | milestone 4 stale-prune broader tests | passed | 204 passed. |
+| `uv run ruff check src/outfitter/dispatch/registry/models.py src/outfitter/dispatch/registry/store.py src/outfitter/dispatch/core/history_index.py src/outfitter/dispatch/core/handlers.py tests/fixtures/registry/builders.py tests/core/test_handlers.py tests/registry/test_store.py` | milestone 4 stale-prune lint | passed | All checks passed. |
+| `uv run ruff format --check src/outfitter/dispatch/registry/models.py src/outfitter/dispatch/registry/store.py src/outfitter/dispatch/core/history_index.py src/outfitter/dispatch/core/handlers.py tests/fixtures/registry/builders.py tests/core/test_handlers.py tests/registry/test_store.py` | milestone 4 stale-prune format | passed | 7 files already formatted. |
+| `uv run mypy src/outfitter/dispatch/registry/models.py src/outfitter/dispatch/registry/store.py src/outfitter/dispatch/core/history_index.py src/outfitter/dispatch/core/handlers.py tests/fixtures/registry/builders.py tests/core/test_handlers.py tests/registry/test_store.py` | milestone 4 stale-prune types | passed | No issues found. |
+| `just check` | milestone 4 full gate after stale-prune fix | passed | Ruff, format, mypy, pytest 382 passed/9 deselected, build, package contents. |
 
 ## Prompt / Goal Alignment
 
@@ -249,8 +325,13 @@ Refs: `.agents/goals/2026-07-01-history-capture-policy/REFS.md`
 | Item | State | Notes |
 | --- | --- | --- |
 | Dispatch Linear state | not changed during preparation | Executor may update or create issues if existing DIS issues do not cover discovered work. |
-| PR #48 | existing lower stack | Provider event history substrate. |
-| PR #49 | existing top stack | Archive-aware sync. |
+| PR #48 | ready, green lower stack | Provider event history substrate. |
+| PR #49 | ready, green lower stack | Archive-aware sync. |
+| PR #50 | ready, green | Goal packet: https://github.com/outfitter-dev/dispatch/pull/50 |
+| PR #51 | ready, green | Capture policy foundation: https://github.com/outfitter-dev/dispatch/pull/51 |
+| PR #52 | ready, green | Standard capture expansion: https://github.com/outfitter-dev/dispatch/pull/52 |
+| PR #53 | ready, green | Debug capture retention: https://github.com/outfitter-dev/dispatch/pull/53 |
+| PR #54 | ready, green | DB-backed history views: https://github.com/outfitter-dev/dispatch/pull/54 |
 
 ## Follow-Ups
 
@@ -258,4 +339,13 @@ Refs: `.agents/goals/2026-07-01-history-capture-policy/REFS.md`
 
 ## Final State
 
-- Not finalized.
+- Goal horizon reached: ready PR stack.
+- New stack: PRs #50-#54, all marked ready for review after CI succeeded.
+- Local final gate: `just check` passed with Ruff, format check, mypy, pytest
+  `382 passed / 9 deselected`, build, and package contents.
+- Milestone local reviews: all P0/P1/P2 findings resolved; Milestone 4 final
+  standing and targeted reviews both clean `5/5`.
+- Final git state at completion: `feat/db-backed-history-surfaces` clean, top
+  branch one commit above `feat/history-debug-capture`.
+- Deferred/out of scope: merge, release, publish, storage-default changes, and
+  live user state mutation.

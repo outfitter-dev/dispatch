@@ -73,9 +73,11 @@ metadata while keeping raw provider payloads gated. Live App Server events are
 stored as compact summaries; transcript reads index bounded turns, item text,
 tool names, and file/thread refs without retaining raw item payloads unless the
 retention policy allows it. Minimal capture keeps turn-level state but skips
-item-level transcript rows. Use `debug` only for development with bounded temp
-state; debug retention can store bounded raw provider event and item payloads
-with truncation markers for reducer/search diagnosis:
+item-level transcript rows. Normal `history` item/tool/file views render from
+the normalized index after refreshing from the App Server, while `history --raw`
+remains a live raw-payload inspection path. Use `debug` only for development
+with bounded temp state; debug retention can store bounded raw provider event
+and item payloads with truncation markers for reducer/search diagnosis:
 
 ```toml
 [history]

@@ -43,7 +43,7 @@ from .models import (
 from .refs import BASE58BTC_ALPHABET, CODEX_REF_SOURCE, codex_ref_payload, make_ref
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 _QUEUED_MESSAGES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS queued_messages (
@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS thread_items (
     text TEXT,
     tool TEXT,
     created_at TEXT,
+    position INTEGER,
     inserted_at TEXT NOT NULL,
     payload TEXT,
     raw_retained INTEGER NOT NULL DEFAULT 0,
@@ -120,7 +121,7 @@ CREATE TABLE IF NOT EXISTS thread_items (
     FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_thread_items_lane_inserted
-ON thread_items(lane, inserted_at);
+ON thread_items(lane, position, inserted_at);
 CREATE INDEX IF NOT EXISTS idx_thread_items_turn
 ON thread_items(provider, provider_thread_id, turn_id);
 
@@ -415,6 +416,8 @@ class Registry:
             await self._ensure_subscription_attribution_column()
         if user_version < 11:
             await self._ensure_provider_history_tables()
+        if user_version < 12:
+            await self._ensure_thread_item_position_column()
 
     async def _ensure_ref_columns(self) -> None:
         async with self._conn.execute("PRAGMA table_info(lanes)") as cur:
@@ -588,6 +591,18 @@ class Registry:
 
     async def _ensure_provider_history_tables(self) -> None:
         await self._conn.executescript(_PROVIDER_HISTORY_SCHEMA)
+
+    async def _ensure_thread_item_position_column(self) -> None:
+        async with self._conn.execute("PRAGMA table_info(thread_items)") as cur:
+            rows = await cur.fetchall()
+        columns = {str(row["name"]) for row in rows}
+        if "position" not in columns:
+            await self._conn.execute("ALTER TABLE thread_items ADD COLUMN position INTEGER")
+        await self._conn.execute("DROP INDEX IF EXISTS idx_thread_items_lane_inserted")
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_thread_items_lane_inserted "
+            "ON thread_items(lane, position, inserted_at)"
+        )
 
     async def _prune_orphan_lane_children(self) -> None:
         for table in (
@@ -1559,13 +1574,14 @@ class Registry:
         try:
             await self._conn.execute(
                 "INSERT INTO thread_items (provider, provider_thread_id, item_id, lane, "
-                "turn_id, item_type, role, text, tool, created_at, inserted_at, payload, "
-                "raw_retained) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "turn_id, item_type, role, text, tool, created_at, position, inserted_at, "
+                "payload, raw_retained) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(provider, provider_thread_id, item_id) DO UPDATE SET "
                 "lane = excluded.lane, turn_id = excluded.turn_id, item_type = excluded.item_type, "
                 "role = excluded.role, text = excluded.text, tool = excluded.tool, "
-                "created_at = excluded.created_at, inserted_at = excluded.inserted_at, "
-                "payload = excluded.payload, raw_retained = excluded.raw_retained",
+                "created_at = excluded.created_at, position = excluded.position, "
+                "inserted_at = excluded.inserted_at, payload = excluded.payload, "
+                "raw_retained = excluded.raw_retained",
                 (
                     item.provider,
                     item.provider_thread_id,
@@ -1577,6 +1593,7 @@ class Registry:
                     item.text,
                     item.tool,
                     item.created_at,
+                    item.position,
                     item.inserted_at,
                     _json_dump_compact(item.payload) if item.payload is not None else None,
                     int(item.raw_retained),
@@ -1620,7 +1637,7 @@ class Registry:
         return _row_to_thread_item(row)
 
     async def list_thread_items(
-        self, *, lane: str, turn_id: str | None = None, limit: int = 50
+        self, *, lane: str, turn_id: str | None = None, limit: int | None = 50
     ) -> list[ThreadItem]:
         clauses = ["lane = ?"]
         params: list[object] = [lane]
@@ -1628,8 +1645,10 @@ class Registry:
             clauses.append("turn_id = ?")
             params.append(turn_id)
         sql = "SELECT * FROM thread_items WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY inserted_at DESC LIMIT ?"
-        params.append(limit)
+        sql += " ORDER BY COALESCE(position, -1) DESC, inserted_at DESC, item_id DESC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
         async with self._conn.execute(sql, tuple(params)) as cur:
             rows = await cur.fetchall()
         return [_row_to_thread_item(row) for row in rows]
@@ -1642,6 +1661,47 @@ class Registry:
         ) as cur:
             rows = await cur.fetchall()
         return [ThreadItemRef.model_validate(_row_dict(row)) for row in rows]
+
+    async def prune_thread_history_snapshot(
+        self,
+        *,
+        provider: str,
+        provider_thread_id: str,
+        turn_ids: set[str],
+        item_ids: set[str],
+    ) -> None:
+        await self._delete_missing_values(
+            "thread_items",
+            provider=provider,
+            provider_thread_id=provider_thread_id,
+            id_column="item_id",
+            keep_ids=item_ids,
+        )
+        await self._delete_missing_values(
+            "thread_turns",
+            provider=provider,
+            provider_thread_id=provider_thread_id,
+            id_column="turn_id",
+            keep_ids=turn_ids,
+        )
+        await self._conn.commit()
+
+    async def _delete_missing_values(
+        self,
+        table: str,
+        *,
+        provider: str,
+        provider_thread_id: str,
+        id_column: str,
+        keep_ids: set[str],
+    ) -> None:
+        params: list[object] = [provider, provider_thread_id]
+        sql = f"DELETE FROM {table} WHERE provider = ? AND provider_thread_id = ?"
+        if keep_ids:
+            placeholders = ", ".join("?" for _ in keep_ids)
+            sql += f" AND {id_column} NOT IN ({placeholders})"
+            params.extend(sorted(keep_ids))
+        await self._conn.execute(sql, tuple(params))
 
     async def upsert_message_receipt(self, receipt: MessageReceipt) -> MessageReceipt:
         await self._conn.execute(
