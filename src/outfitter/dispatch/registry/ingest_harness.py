@@ -43,6 +43,8 @@ class EventIngestionHarnessResult:
     lanes: int
     events_requested: int
     concurrency: int
+    reader_enabled: bool
+    raw_retained: bool
     elapsed_ms: float
     events_per_second: float
     reader_samples: int
@@ -55,6 +57,8 @@ class EventIngestionHarnessResult:
             "lanes": self.lanes,
             "events_requested": self.events_requested,
             "concurrency": self.concurrency,
+            "reader_enabled": self.reader_enabled,
+            "raw_retained": self.raw_retained,
             "elapsed_ms": round(self.elapsed_ms, 3),
             "events_per_second": round(self.events_per_second, 3),
             "reader_samples": self.reader_samples,
@@ -126,6 +130,8 @@ async def _run_with_path(
         lanes=config.lanes,
         events_requested=config.events,
         concurrency=config.concurrency,
+        reader_enabled=config.reader,
+        raw_retained=config.raw_retained,
         elapsed_ms=elapsed_ms,
         events_per_second=events_per_second,
         reader_samples=reader_samples,
