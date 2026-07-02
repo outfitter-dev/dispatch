@@ -67,6 +67,22 @@ you decide whether to sync or restore them. Transcript reads through `tail`, `hi
 transcript-inclusive `get` still use App Server `thread/read(includeTurns:true)`
 as the canonical source and backfill Dispatch's normalized local history index.
 
+History capture is configurable in `~/.dispatch/config.toml`. The default
+`standard` mode captures operational facts and bounded searchable history
+metadata while keeping raw provider payloads gated. Use `debug` only for
+development with bounded temp state:
+
+```toml
+[history]
+capture = "standard" # minimal | standard | debug
+raw_payload_retention = "debug" # off | errors | debug | all
+max_text_bytes = 8192
+max_payload_bytes = 65536
+```
+
+`dispatch doctor` reports the active capture mode and warns when debug/raw
+retention is enabled.
+
 `new` reports whether the first message was accepted by the App Server, not whether
 assistant work completed. Use `get` to inspect the latest turn state and persisted
 App Server errors, or `watch` for a bounded live event sample. Slash commands in

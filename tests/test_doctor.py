@@ -142,6 +142,62 @@ def test_doctor_warns_for_stale_daemon_files(monkeypatch: MonkeyPatch, tmp_path:
     assert "dispatch down" in daemon.recovery
 
 
+def test_doctor_reports_capture_policy(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path / "dispatch-home"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+
+    report = run_doctor(DoctorOptions(app_server=False))
+
+    capture = next(check for check in report.checks if check.name == "capture_policy")
+    assert capture.status == "ok"
+    assert capture.summary == "history capture mode is standard"
+    assert capture.data["mode"] == "standard"
+    assert capture.data["raw_payloads_enabled"] is False
+
+
+def test_doctor_warns_for_debug_capture(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path / "dispatch-home"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setenv("DISPATCH_CAPTURE", "debug")
+
+    report = run_doctor(DoctorOptions(app_server=False))
+
+    capture = next(check for check in report.checks if check.name == "capture_policy")
+    assert capture.status == "warn"
+    assert capture.summary == "history capture debug/raw retention is enabled"
+    assert capture.data["mode"] == "debug"
+    assert capture.data["raw_payloads_enabled"] is True
+    assert capture.data["retains_any_raw_payloads"] is True
+
+
+def test_doctor_warns_for_error_raw_retention(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path / "dispatch-home"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setenv("DISPATCH_RAW_PAYLOAD_RETENTION", "errors")
+
+    report = run_doctor(DoctorOptions(app_server=False))
+
+    capture = next(check for check in report.checks if check.name == "capture_policy")
+    assert capture.status == "warn"
+    assert capture.data["raw_payload_retention"] == "errors"
+    assert capture.data["raw_payloads_enabled"] is True
+    assert capture.data["retains_any_raw_payloads"] is True
+
+
+def test_doctor_fails_for_invalid_capture_cap(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path / "dispatch-home"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setenv("DISPATCH_CAPTURE_MAX_PAYLOAD_BYTES", "0")
+
+    report = run_doctor(DoctorOptions(app_server=False))
+
+    capture = next(check for check in report.checks if check.name == "capture_policy")
+    assert capture.status == "fail"
+    assert capture.summary == "history capture policy is invalid"
+    assert capture.detail is not None
+    assert "history.max_payload_bytes" in capture.detail
+
+
 def test_doctor_warns_for_unversioned_registry_migration(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:

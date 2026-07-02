@@ -265,6 +265,25 @@ state is lifecycle metadata, not cleanup: dispatch does not delete provider
 events or normalized history evidence during `archive`, `restore`, sync
 reconciliation, or event indexing.
 
+## History Capture Policy
+
+Dispatch captures normalized history into its local SQLite registry. Default
+`standard` capture keeps operational facts and bounded searchable history facts.
+Raw provider payloads stay gated by retention policy. Use debug capture only
+when developing or diagnosing reducers/search/provider adapters:
+
+```toml
+[history]
+capture = "debug" # minimal | standard | debug
+raw_payload_retention = "debug" # off | errors | debug | all
+max_text_bytes = 8192
+max_payload_bytes = 65536
+```
+
+Prefer isolated `DISPATCH_HOME` and `CODEX_HOME` for debug capture. Use
+`dispatch doctor` to confirm the active capture mode; it warns when debug/raw
+retention is enabled.
+
 ## Discover Sessions
 
 `list` shows threads dispatch already manages. `list --unmanaged` lists
