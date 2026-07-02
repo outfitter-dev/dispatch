@@ -1,8 +1,8 @@
 # Execution Retro: local-substrate-stack
 
 Date started: 2026-07-02
-Date finalized: pending
-Status: active
+Date finalized: 2026-07-02
+Status: complete
 Spec: `.agents/goals/2026-07-02-local-substrate-stack/SPEC.md`
 Goal: `.agents/goals/2026-07-02-local-substrate-stack/GOAL.md`
 Prompt: `.agents/goals/2026-07-02-local-substrate-stack/PROMPT.md`
@@ -13,11 +13,11 @@ Refs: `.agents/goals/2026-07-02-local-substrate-stack/REFS.md`
 - Objective: Land as much of the local substrate stack as safely possible.
 - Completion horizon: merged.
 - Authority used: Created Linear issues and branch `feat/local-substrate-roadmap`.
-- Outcome: active; milestones 1 and 2 submitted, milestone 3 ready to submit.
-- Tracker/PR/source-control state: Linear `DIS-20` through `DIS-25` created; PR #59 opened for milestone 1; PR #60 opened for milestone 2.
+- Outcome: merged through milestone 3.
+- Tracker/PR/source-control state: Linear `DIS-20` through `DIS-25` created; `DIS-21`, `DIS-22`, and `DIS-25` closed; PRs #59, #60, and #61 merged.
 - Verification: packet checks, lint/format, registry tests, mypy, SQL compatibility spike, and synthetic event-ingestion harness passed.
 - Review state: milestone 1 through milestone 3 local reviews clean, 5/5, no P0/P1/P2.
-- Remaining risks: scope sprawl, storage abstraction overreach, semantic privacy risk, and gateway/log boundary drift.
+- Remaining risks: semantic privacy policy and multi-machine selected-state sync are still open in `DIS-23` and `DIS-24`.
 
 ## Readiness
 
@@ -27,7 +27,7 @@ Refs: `.agents/goals/2026-07-02-local-substrate-stack/REFS.md`
 - Verification blockers: none known.
 - Tracker blockers: none known.
 - Authority blockers: no release/publish, default backend migration, live data, cloud credentials, or paid API authority.
-- Next action: commit milestone 3, submit stacked PR, and continue if safe.
+- Next action: continue with `DIS-23` or `DIS-24` in a separate goal/stack.
 
 ## Execution Log
 
@@ -53,6 +53,13 @@ Refs: `.agents/goals/2026-07-02-local-substrate-stack/REFS.md`
 - Reviewed: milestone 3 local review clean 5/5; no P0/P1/P2.
 - Result: Event ingestion now has a repeatable local baseline harness, and the harness found a real registry write-concurrency bug.
 - Next: Commit, submit stacked PR, and update DIS-22.
+- Blockers: None known.
+
+2026-07-02 TBD - Merge/finalization
+- Changed: Marked PRs #59, #60, and #61 ready after local reviews and green CI; merged them through Graphite; synced `main`; closed `DIS-21`, `DIS-22`, and `DIS-25`; commented on parent `DIS-20`.
+- Verified: final rebased `just check` passed with ruff, format, mypy, pytest 392 passed / 9 deselected, package build, and package contents check; PR #61 CI and CodeQL completed successfully after merge.
+- Result: Local substrate roadmap, SQL compatibility contract, and synthetic event-ingestion harness are landed on `main`.
+- Next: `DIS-23` semantic search substrate and `DIS-24` multi-machine selected-state sync remain open.
 - Blockers: None known.
 ```
 
@@ -97,22 +104,24 @@ Refs: `.agents/goals/2026-07-02-local-substrate-stack/REFS.md`
 | Item | State | Notes |
 | --- | --- | --- |
 | DIS-20 | created | Parent local substrate roadmap. |
-| DIS-21 | created | Storage boundary and dual-backend contract tests. |
-| DIS-22 | created | Concurrent event-ingestion harness. |
+| DIS-21 | done | PR #60 merged; storage SQL compatibility contract landed. |
+| DIS-22 | done | PR #61 merged; synthetic event-ingestion harness landed. |
 | DIS-23 | created | Semantic search substrate and retention policy. |
 | DIS-24 | created | Multi-machine selected-state sync. |
-| DIS-25 | created | Cloud Gateway route-intent/not-log-sink boundary; milestone 1 docs address it. |
+| DIS-25 | done | PR #59 merged; Cloud Gateway route-intent/not-log-sink boundary clarified. |
 
 ## Follow-Ups
 
 - Continue beyond the SQL compatibility contract only if the next storage boundary step has a concrete call-site need. Do not introduce a broad storage framework for its own sake.
+- Use `scripts/measure_event_ingestion.py` to capture comparable baselines before changing storage engines or transaction shape.
+- Keep raw logs/transcripts local by default when designing `DIS-23` and `DIS-24`.
 
 ## Final State
 
-- Completion proof: pending.
-- Prompt length: pending.
-- Review report summary: pending.
-- Verification summary: pending.
-- Forbidden actions audit: pending.
-- Remaining P3s / risks: pending.
-- Final transcript proof: pending.
+- Completion proof: PR #59, PR #60, and PR #61 merged; local `main` synced to `a0407a4`.
+- Prompt length: 3530/4000 characters.
+- Review report summary: milestone 1, milestone 2, and milestone 3 local reviews were 5/5 with no unresolved P0/P1/P2.
+- Verification summary: final rebased `just check` passed with ruff, format, mypy, pytest 392 passed / 9 deselected, package build, and package contents check.
+- Forbidden actions audit: no release/publish, live user data ingestion, cloud credential use, default backend migration, or paid API work.
+- Remaining P3s / risks: semantic search and multi-machine sync remain open as `DIS-23` and `DIS-24`; the event-ingestion harness is synthetic single-process pressure, not live provider or multi-process proof.
+- Final transcript proof: stack merged and synced on 2026-07-02; parent `DIS-20` contains the landed-stack summary.
