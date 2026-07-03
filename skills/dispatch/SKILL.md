@@ -267,6 +267,12 @@ is a raw unmanaged Codex thread id, `sync` first registers it as an attached
 read/metadata-managed lane, then refreshes the index. That does not grant write
 authority.
 
+Sending to a raw unmanaged Codex thread id also performs that registration and
+quick sync first. The write still follows the attached-lane policy: without
+`allow_attached_writes`, Dispatch records the thread as managed/indexed and then
+refuses the turn-writing action with an authority error. With the policy enabled,
+the send path resumes the attached thread and starts the turn.
+
 Sync also reconciles known App Server archive membership for the target. Archive
 state is lifecycle metadata, not cleanup: dispatch does not delete provider
 events or normalized history evidence during `archive`, `restore`, sync
@@ -367,6 +373,7 @@ also the explicit registration step.
 
 ```bash
 uv run dispatch send @my-lane "Do the bounded thing."
+uv run dispatch send 019ead04-d2f4-77e2-acf7-f34d25456fa8 "Picking this up."
 uv run dispatch send @my-lane "Focus on docs first." --steer
 uv run dispatch send @my-lane "Stop and do this instead." --interject
 uv run dispatch send @my-lane "Context: use lane publicly, thread internally." --context

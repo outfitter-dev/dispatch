@@ -327,14 +327,17 @@ ATTACH = define_op(
 
 SEND = define_op(
     id="send",
-    summary="Send, steer, interject, queue, or inject context into a managed thread.",
+    summary=(
+        "Send, steer, interject, queue, or inject context into a managed thread. "
+        "A raw unmanaged Codex thread id is synced into Dispatch before the message path runs."
+    ),
     input=SendInput,
     output=ActionAck,
     intent="write",
     idempotent=False,
     handler=handlers.send_message,
     examples=[
-        Example("missing", input={"lane": "nope", "text": "hi"}, raises=NotFoundError),
+        Example("missing", input={"lane": "@nope", "text": "hi"}, raises=NotFoundError),
     ],
 )
 

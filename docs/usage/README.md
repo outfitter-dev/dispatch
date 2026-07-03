@@ -472,6 +472,7 @@ Use `send --context` for silent context injection. It adds model-visible context
 starting a turn:
 
 ```bash
+uv run dispatch send 019ead04-d2f4-77e2-acf7-f34d25456fa8 "Picking this up."
 uv run dispatch send @docs-review "Context: check lane capabilities before writing." --context
 ```
 
@@ -739,6 +740,9 @@ registered in dispatch; `list` shows managed threads (owned or already attached)
 separate from both for already managed threads. When you explicitly run `sync` against a
 raw unmanaged Codex thread id, dispatch first registers it as an attached read/metadata
 managed lane, then refreshes the local index. That does not grant write authority.
+Sending to a raw unmanaged Codex thread id follows the same pickup path before the
+message action runs: Dispatch registers the thread, quick-syncs/indexes it, then
+applies the attached-lane write policy.
 
 ## Attached Lanes
 

@@ -1479,6 +1479,70 @@ async def test_send_to_attached_lane_raises_authority(store: Registry) -> None:
     assert "allow_attached_writes" in str(exc.value)
 
 
+async def test_send_to_unmanaged_thread_registers_and_indexes_before_policy_gate(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    client.threads["raw-thread"] = ThreadInfo(
+        id="raw-thread",
+        name="@desktop",
+        cwd="/workspace",
+        preview="existing thread",
+    )
+    ctx = make_ctx(store, client)
+
+    with pytest.raises(AuthorityError) as exc:
+        await handlers.send(LaneTextInput(lane="raw-thread", text="hello"), ctx)
+
+    assert "source=attached" in str(exc.value)
+    lane = await store.find_lane("raw-thread")
+    assert lane is not None
+    assert lane.source == "attached"
+    assert lane.handle == "@desktop"
+    sync = await store.get_lane_sync("raw-thread")
+    assert sync is not None
+    assert sync.state == "metadata"
+    assert sync.preview == "existing thread"
+    log = await store.recent_actions(limit=5)
+    assert any(action.op == "send-manage" and action.lane == "raw-thread" for action in log)
+    assert any(
+        name == "thread_read" and kw["thread_id"] == "raw-thread" and kw["include_turns"] is False
+        for name, kw in client.calls
+    )
+    assert not any(name == "turn_start" for name, _ in client.calls)
+
+
+async def test_send_to_unmanaged_thread_registers_then_sends_when_policy_allows(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    client.threads["raw-thread"] = ThreadInfo(id="raw-thread", name="@desktop", cwd="/workspace")
+    ctx = make_ctx(store, client, policy=RuntimePolicy(allow_attached_writes=True))
+
+    sent = await handlers.send(LaneTextInput(lane="raw-thread", text="hello"), ctx)
+
+    assert sent.accepted is True
+    assert sent.id == "raw-thread"
+    assert sent.source == "attached"
+    assert sent.writable is True
+    assert sent.capabilities.send is True
+    assert [name for name, _ in client.calls][:3] == [
+        "thread_read",
+        "thread_resume",
+        "turn_start",
+    ]
+    assert any(
+        name == "turn_start"
+        and kw["thread_id"] == "raw-thread"
+        and kw["text"] == "hello"
+        and kw["cwd"] == "/workspace"
+        for name, kw in client.calls
+    )
+    receipts = await store.list_message_receipts(lane="raw-thread")
+    assert len(receipts) == 1
+    assert receipts[0].status == "sent"
+
+
 async def test_attached_lane_policy_allows_send_and_context_injection(store: Registry) -> None:
     client = FakeLaneClient()
     ctx = make_ctx(store, client, policy=RuntimePolicy(allow_attached_writes=True))
