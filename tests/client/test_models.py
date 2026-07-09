@@ -6,6 +6,7 @@ from outfitter.dispatch.client.models import (
     AppModel,
     ConfigInfo,
     InitializeResult,
+    ModelListParams,
     ModelListResult,
     ModelServiceTier,
     SandboxPolicy,
@@ -91,6 +92,11 @@ def test_turn_start_includes_effort_when_set() -> None:
     assert params.model_dump(by_alias=True, exclude_none=True)["effort"] == "low"
 
 
+def test_turn_start_accepts_model_defined_effort() -> None:
+    params = TurnStartParams(thread_id="t1", input=[TextInput(text="hi")], cwd="/w", effort="ultra")
+    assert params.model_dump(by_alias=True, exclude_none=True)["effort"] == "ultra"
+
+
 def test_turn_start_includes_optional_overrides_when_set() -> None:
     params = TurnStartParams(
         thread_id="t1",
@@ -126,6 +132,15 @@ def test_thread_list_result_reads_data_key() -> None:
     )
     assert [t.id for t in result.data] == ["a", "b"]
     assert result.next_cursor == "c1"
+
+
+def test_model_list_params_include_pagination_and_hidden_catalog() -> None:
+    params = ModelListParams(cursor="next", include_hidden=True, limit=100)
+    assert params.model_dump(by_alias=True, exclude_none=True) == {
+        "cursor": "next",
+        "includeHidden": True,
+        "limit": 100,
+    }
 
 
 def test_thread_list_params_include_current_native_filters() -> None:
@@ -169,6 +184,10 @@ def test_thread_info_keeps_sync_metadata_fields() -> None:
             "path": "/tmp/rollout.jsonl",
             "modelProvider": "openai",
             "threadSource": "user",
+            "agentNickname": "review-agent",
+            "agentRole": "reviewer",
+            "cliVersion": "0.144.0",
+            "recencyAt": 124,
             "updatedAt": 123,
         }
     )
@@ -178,6 +197,10 @@ def test_thread_info_keeps_sync_metadata_fields() -> None:
     assert thread.path == "/tmp/rollout.jsonl"
     assert thread.model_provider == "openai"
     assert thread.thread_source == "user"
+    assert thread.agent_nickname == "review-agent"
+    assert thread.agent_role == "reviewer"
+    assert thread.cli_version == "0.144.0"
+    assert thread.recency_at == 124
     assert thread.updated_at == 123
 
 
@@ -214,6 +237,8 @@ def test_config_and_model_catalog_wire_models_accept_camel_case() -> None:
         hidden=False,
         default_reasoning_effort="medium",
         supported_reasoning_efforts=["low", "medium", "high", "xhigh"],
+        input_modalities=["text", "image"],
+        supports_personality=True,
         service_tiers=[
             ModelServiceTier(
                 id="priority",
@@ -278,6 +303,7 @@ def test_thread_fork_rollback_and_compact_params() -> None:
         sandbox="workspace-write",
         approval_policy="on-request",
         model="test-model",
+        last_turn_id="turn-7",
         ephemeral=True,
     )
     assert fork.model_dump(by_alias=True, exclude_none=True) == {
@@ -286,6 +312,7 @@ def test_thread_fork_rollback_and_compact_params() -> None:
         "sandbox": "workspace-write",
         "approvalPolicy": "on-request",
         "model": "test-model",
+        "lastTurnId": "turn-7",
         "ephemeral": True,
     }
     assert ThreadRollbackParams(thread_id="t1", num_turns=2).model_dump(

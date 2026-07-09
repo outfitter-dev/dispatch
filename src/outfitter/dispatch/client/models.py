@@ -20,10 +20,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
 ThreadSandbox = Literal["read-only", "workspace-write", "danger-full-access"]
-ApprovalPolicy = Literal["never", "untrusted", "on-request", "on-failure"]
+ApprovalPolicy = Literal["never", "untrusted", "on-request"]
 ApprovalsReviewer = Literal["user", "auto_review", "guardian_subagent"]
 SandboxPolicyType = Literal["readOnly", "workspaceWrite", "externalSandbox", "dangerFullAccess"]
-Effort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+# App Server 0.144 advertises model-defined efforts rather than a closed enum.
+Effort = str
 ReasoningSummary = Literal["auto", "concise", "detailed", "none"]
 Personality = Literal["none", "friendly", "pragmatic"]
 Decision = Literal["accept", "acceptForSession", "decline", "cancel"]
@@ -115,6 +116,9 @@ class AppModel(WireModel):
     default_service_tier: str | None = None
     service_tiers: list[ModelServiceTier] = Field(default_factory=list)
     additional_speed_tiers: list[str] = Field(default_factory=list)
+    input_modalities: list[str] = Field(default_factory=list)
+    supports_personality: bool | None = None
+    upgrade: str | None = None
 
     @field_validator("supported_reasoning_efforts", mode="before")
     @classmethod
@@ -135,6 +139,12 @@ class AppModel(WireModel):
 class ModelListResult(WireModel):
     data: list[AppModel] = Field(default_factory=list)
     next_cursor: str | None = None
+
+
+class ModelListParams(WireModel):
+    cursor: str | None = None
+    include_hidden: bool | None = None
+    limit: int | None = None
 
 
 # --- shared shapes ------------------------------------------------------------
@@ -166,6 +176,9 @@ class ThreadInfo(WireModel):
     session_id: str | None = None
     forked_from_id: str | None = None
     parent_thread_id: str | None = None
+    agent_nickname: str | None = None
+    agent_role: str | None = None
+    cli_version: str | None = None
     ephemeral: bool | None = None
     status: ThreadStatus | None = None
     cwd: str | None = None
@@ -180,6 +193,7 @@ class ThreadInfo(WireModel):
     service_tier: str | None = None
     created_at: int | None = None
     updated_at: int | None = None
+    recency_at: int | None = None
     turns: list[dict[str, object]] = Field(default_factory=list)
 
 
@@ -216,6 +230,7 @@ class ThreadForkParams(WireModel):
     service_tier: str | None = None
     model: str | None = None
     model_provider: str | None = None
+    last_turn_id: str | None = None
     ephemeral: bool = False
 
 
@@ -306,6 +321,7 @@ class ThreadListResult(WireModel):
 
     data: list[ThreadInfo] = []
     next_cursor: str | None = None
+    backwards_cursor: str | None = None
 
 
 class ThreadSearchMatch(WireModel):
@@ -337,7 +353,7 @@ class TurnStartParams(WireModel):
     approval_policy: ApprovalPolicy | None = None
     approvals_reviewer: ApprovalsReviewer | None = None
     sandbox_policy: SandboxPolicy | None = None
-    effort: Effort | None = None
+    effort: Effort | None = Field(default=None, min_length=1)
     summary: ReasoningSummary | None = None
     model: str | None = None
     service_tier: str | None = None

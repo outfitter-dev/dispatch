@@ -27,6 +27,9 @@
         }
       ],
       "defaultServiceTier": null,
+      "inputModalities": ["text", "image"],
+      "supportsPersonality": true,
+      "upgrade": null,
       "serviceTiers": [
         {
           "id": "priority",
@@ -62,8 +65,35 @@
         }
       ],
       "defaultServiceTier": null,
+      "inputModalities": ["text"],
+      "supportsPersonality": true,
+      "upgrade": null,
       "serviceTiers": []
+    },
+    {
+      "id": "gpt-5.6-sol",
+      "model": "gpt-5.6-sol",
+      "displayName": "GPT-5.6 Sol",
+      "description": "Fixture for model-defined reasoning efforts.",
+      "isDefault": false,
+      "hidden": false,
+      "defaultReasoningEffort": "low",
+      "supportedReasoningEfforts": [
+        {"reasoningEffort": "low", "description": "Fast responses."},
+        {"reasoningEffort": "max", "description": "Maximum reasoning."},
+        {"reasoningEffort": "ultra", "description": "Ultra reasoning."}
+      ],
+      "defaultServiceTier": null,
+      "inputModalities": ["text", "image"],
+      "supportsPersonality": false,
+      "upgrade": null,
+      "serviceTiers": [
+        {
+          "id": "priority",
+          "name": "Fast",
+          "description": "1.5x speed, increased usage"
+        }
+      ]
     }
   ]
 }
-

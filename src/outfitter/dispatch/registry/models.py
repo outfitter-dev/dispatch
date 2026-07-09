@@ -55,6 +55,9 @@ class ModelCatalogEntry(BaseModel):
     default_service_tier: str | None = None
     service_tiers: list[ServiceTierEntry] = Field(default_factory=list)
     additional_speed_tiers: list[str] = Field(default_factory=list)
+    input_modalities: list[str] = Field(default_factory=list)
+    supports_personality: bool | None = None
+    upgrade: str | None = None
     first_seen_at: str
     last_seen_at: str
     source: str = "app-server"

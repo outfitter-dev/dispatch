@@ -178,13 +178,16 @@ async def test_thread_fork_rollback_and_compact_methods(
 ) -> None:
     c, fake = client
     fake.auto = _result_for("thread/fork", {"thread": {"id": "F1", "forkedFromId": "L1"}})
-    fork = await c.thread_fork("L1", cwd="/w", sandbox="workspace-write", ephemeral=True)
+    fork = await c.thread_fork(
+        "L1", cwd="/w", sandbox="workspace-write", last_turn_id="T7", ephemeral=True
+    )
     assert fork.id == "F1"
     assert fork.forked_from_id == "L1"
     assert fake.sent[-1]["params"] == {
         "threadId": "L1",
         "cwd": "/w",
         "sandbox": "workspace-write",
+        "lastTurnId": "T7",
         "ephemeral": True,
     }
 
@@ -233,7 +236,44 @@ async def test_config_read_and_model_list_parse_current_catalog_shape(
     assert models[0].supported_reasoning_efforts == ["low", "medium", "high", "xhigh"]
     assert models[0].service_tiers[0].id == "priority"
     assert models[0].service_tiers[0].name == "Fast"
-    assert fake.sent[-1] == {"id": 2, "method": "model/list", "params": {}}
+    assert fake.sent[-1] == {
+        "id": 2,
+        "method": "model/list",
+        "params": {"includeHidden": True},
+    }
+
+
+async def test_model_list_reads_every_catalog_page(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+
+    def responder(message: dict[str, object]) -> list[dict[str, object]]:
+        if message.get("method") != "model/list":
+            return []
+        params = message.get("params")
+        cursor = params.get("cursor") if isinstance(params, dict) else None
+        if cursor is None:
+            return [
+                {
+                    "id": message["id"],
+                    "result": {"data": [{"id": "m1"}], "nextCursor": "c1"},
+                }
+            ]
+        return [{"id": message["id"], "result": {"data": [{"id": "m2"}]}}]
+
+    fake.auto = responder
+    models = await c.model_list()
+
+    assert [model.id for model in models] == ["m1", "m2"]
+    assert fake.sent == [
+        {"id": 1, "method": "model/list", "params": {"includeHidden": True}},
+        {
+            "id": 2,
+            "method": "model/list",
+            "params": {"cursor": "c1", "includeHidden": True},
+        },
+    ]
 
 
 async def test_thread_list_sends_current_native_filters(

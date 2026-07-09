@@ -267,6 +267,52 @@ async def test_model_catalog_and_lane_model_settings_roundtrip(store: Registry) 
     assert await store.list_model_catalog() == [got]
 
 
+async def test_v13_migration_adds_model_capability_columns(tmp_path: Path) -> None:
+    db = tmp_path / "registry-v12-model-catalog.db"
+    conn = await aiosqlite.connect(db)
+    await conn.executescript(
+        """
+        CREATE TABLE model_catalog (
+            id TEXT NOT NULL,
+            provider TEXT NOT NULL DEFAULT 'openai',
+            display_name TEXT,
+            description TEXT,
+            is_default INTEGER,
+            hidden INTEGER,
+            default_reasoning_effort TEXT,
+            supported_reasoning_efforts TEXT NOT NULL DEFAULT '[]',
+            default_service_tier TEXT,
+            service_tiers TEXT NOT NULL DEFAULT '[]',
+            additional_speed_tiers TEXT NOT NULL DEFAULT '[]',
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'app-server',
+            PRIMARY KEY(provider, id)
+        );
+        INSERT INTO model_catalog (
+            id, provider, supported_reasoning_efforts, service_tiers,
+            additional_speed_tiers, first_seen_at, last_seen_at
+        ) VALUES ('legacy', 'openai', '["low"]', '[]', '[]', 'before', 'before');
+        PRAGMA user_version = 12;
+        """
+    )
+    await conn.commit()
+    await conn.close()
+
+    migrated = await Registry.open(db, now=_clock)
+    try:
+        model = await migrated.get_model_catalog_entry("legacy")
+        assert model is not None
+        assert model.input_modalities == []
+        assert model.supports_personality is None
+        assert model.upgrade is None
+        async with migrated._conn.execute("PRAGMA table_info(model_catalog)") as cur:
+            columns = {str(row["name"]) for row in await cur.fetchall()}
+        assert {"input_modalities", "supports_personality", "upgrade"} <= columns
+    finally:
+        await migrated.close()
+
+
 async def test_lane_model_settings_roundtrip(store: Registry) -> None:
     now = store.now_iso()
     lane = await store.add_lane(id="L1", handle="@alpha", source="own")

@@ -15,6 +15,7 @@ from outfitter.dispatch.client.errors import AppServerError as ClientAppServerEr
 from outfitter.dispatch.client.errors import TransportError
 from outfitter.dispatch.client.events import LaneIdle, TurnFailed, TurnStarted
 from outfitter.dispatch.client.models import (
+    AppModel,
     ApprovalPolicy,
     ApprovalsReviewer,
     Effort,
@@ -364,6 +365,34 @@ async def test_new_lane_rejects_unadvertised_service_tier_with_catalog_guidance(
         )
 
 
+async def test_new_lane_accepts_model_defined_reasoning_effort(
+    store: Registry, tmp_path: Path
+) -> None:
+    client = FakeLaneClient()
+    client.models_result.append(
+        AppModel(
+            id="gpt-5.6-sol",
+            supported_reasoning_efforts=["low", "max", "ultra"],
+        )
+    )
+    ctx = make_ctx(store, client)
+
+    out = await handlers.new_lane(
+        NewInput(
+            name="sol",
+            cwd=str(tmp_path),
+            model="gpt-5.6-sol",
+            effort="ultra",
+            send=False,
+        ),
+        ctx,
+    )
+
+    assert out.model.reasoning_effort == "ultra"
+    call = next(kw for name, kw in client.calls if name == "thread_start")
+    assert call["model"] == "gpt-5.6-sol"
+
+
 async def test_models_refreshes_catalog_and_reports_fast_alias(store: Registry) -> None:
     client = FakeLaneClient()
     ctx = make_ctx(store, client)
@@ -376,6 +405,8 @@ async def test_models_refreshes_catalog_and_reports_fast_alias(store: Registry) 
     assert refreshed.models[0].id == "gpt-5.5"
     assert refreshed.models[0].aliases == {"fast": "priority"}
     assert refreshed.models[0].service_tiers[0].id == "priority"
+    assert refreshed.models[0].input_modalities == ["text", "image"]
+    assert refreshed.models[0].supports_personality is True
     assert cached.source == "registry"
     cached_by_id = {model.id: model for model in cached.models}
     assert cached_by_id["gpt-5.5"].aliases == {"fast": "priority"}
@@ -1415,6 +1446,7 @@ async def test_fork_registers_new_owned_lane(store: Registry) -> None:
             cwd="/fork",
             sandbox="workspace-write",
             approval_policy="on-request",
+            last_turn_id="turn-7",
             ephemeral=True,
         ),
         ctx,
@@ -1431,6 +1463,7 @@ async def test_fork_registers_new_owned_lane(store: Registry) -> None:
         and kw["thread_id"] == "lane-1"
         and kw["sandbox"] == "workspace-write"
         and kw["approval_policy"] == "on-request"
+        and kw["last_turn_id"] == "turn-7"
         for name, kw in client.calls
     )
 

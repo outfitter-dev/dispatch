@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from outfitter.dispatch.client.events import (
     LaneIdle,
@@ -42,10 +42,27 @@ def test_app_server_protocol_fixtures_validate_against_wire_models() -> None:
     assert config.service_tier == "fast"
     assert catalog.data[0].supported_reasoning_efforts == ["low", "medium", "high", "xhigh"]
     assert catalog.data[0].service_tiers[0].id == "priority"
+    assert catalog.data[0].input_modalities == ["text", "image"]
+    assert catalog.data[0].supports_personality is True
+    assert catalog.data[2].supported_reasoning_efforts == ["low", "max", "ultra"]
     assert legacy_catalog.data[0].additional_speed_tiers == ["fast"]
     assert thread_list.data[0].model == "gpt-5.5"
     assert thread_list.next_cursor == "cursor-1"
     assert thread.turns[0]["id"] == "turn-1"
+
+
+def test_app_server_protocol_manifest_tracks_v0144_capabilities() -> None:
+    manifest = cast(dict[str, Any], load_json("app_server", "protocol_manifest", "current.json"))
+
+    assert manifest["codex_cli_version"] == "0.144.0"
+    assert len(manifest["client_requests"]["stable"]) == 87
+    assert "account/usage/read" in manifest["client_requests"]["stable"]
+    assert "thread/delete" in manifest["client_requests"]["stable"]
+    assert "thread/items/list" in manifest["client_requests"]["experimental_only"]
+    assert "thread/deleted" in manifest["server_notifications"]
+    assert "supportsPersonality" in manifest["selected_shapes"]["model_fields"]
+    assert "lastTurnId" in manifest["selected_shapes"]["thread_fork_fields"]
+    assert "backwardsCursor" in manifest["selected_shapes"]["thread_list_result_fields"]
 
 
 def test_history_v2_fixture_summarizes_tools_files_and_subagents() -> None:

@@ -80,7 +80,11 @@ class NewInput(BaseModel):
     )
     model: str | None = Field(default=None, description="Model override.")
     model_provider: str | None = Field(default=None, description="Model provider override.")
-    effort: Effort | None = Field(default=None, description="Initial turn reasoning effort.")
+    effort: Effort | None = Field(
+        default=None,
+        min_length=1,
+        description="Initial turn reasoning effort advertised by the selected model.",
+    )
     summary: ReasoningSummary | None = Field(default=None, description="Reasoning summary mode.")
     personality: Personality | None = Field(default=None, description="Personality override.")
     service_tier: str | None = Field(default=None, description="Service tier override.")
@@ -372,6 +376,10 @@ class ForkInput(BaseModel):
         default=None, description="Developer instructions override."
     )
     service_tier: str | None = Field(default=None, description="Service tier override.")
+    last_turn_id: str | None = Field(
+        default=None,
+        description="Fork history through this turn id, inclusive.",
+    )
     ephemeral: bool = Field(default=False, description="Create an ephemeral fork.")
 
 
@@ -1001,6 +1009,9 @@ class ModelCatalogItem(BaseModel):
     supported_reasoning_efforts: list[str] = Field(default_factory=list)
     default_service_tier: str | None = None
     service_tiers: list[ModelServiceTierView] = Field(default_factory=list)
+    input_modalities: list[str] = Field(default_factory=list)
+    supports_personality: bool | None = None
+    upgrade: str | None = None
     aliases: dict[str, str] = Field(default_factory=dict)
     last_seen_at: str
 

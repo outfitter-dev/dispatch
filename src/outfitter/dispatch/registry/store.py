@@ -46,7 +46,7 @@ from .models import (
 from .refs import BASE58BTC_ALPHABET, CODEX_REF_SOURCE, codex_ref_payload, make_ref
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 @dataclass(frozen=True)
@@ -344,6 +344,9 @@ CREATE TABLE IF NOT EXISTS model_catalog (
     default_service_tier TEXT,
     service_tiers TEXT NOT NULL DEFAULT '[]',
     additional_speed_tiers TEXT NOT NULL DEFAULT '[]',
+    input_modalities TEXT NOT NULL DEFAULT '[]',
+    supports_personality INTEGER,
+    upgrade TEXT,
     first_seen_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
     source TEXT NOT NULL DEFAULT 'app-server',
@@ -508,6 +511,8 @@ class Registry:
             await self._ensure_provider_history_tables()
         if user_version < 12:
             await self._ensure_thread_item_position_column()
+        if user_version < 13:
+            await self._ensure_model_catalog_capability_columns()
 
     async def _ensure_ref_columns(self) -> None:
         async with self._conn.execute("PRAGMA table_info(lanes)") as cur:
@@ -546,6 +551,9 @@ class Registry:
                 default_service_tier TEXT,
                 service_tiers TEXT NOT NULL DEFAULT '[]',
                 additional_speed_tiers TEXT NOT NULL DEFAULT '[]',
+                input_modalities TEXT NOT NULL DEFAULT '[]',
+                supports_personality INTEGER,
+                upgrade TEXT,
                 first_seen_at TEXT NOT NULL,
                 last_seen_at TEXT NOT NULL,
                 source TEXT NOT NULL DEFAULT 'app-server',
@@ -565,6 +573,21 @@ class Registry:
             );
             """
         )
+
+    async def _ensure_model_catalog_capability_columns(self) -> None:
+        async with self._conn.execute("PRAGMA table_info(model_catalog)") as cur:
+            rows = await cur.fetchall()
+        columns = {str(row["name"]) for row in rows}
+        column_defs = {
+            "input_modalities": "TEXT NOT NULL DEFAULT '[]'",
+            "supports_personality": "INTEGER",
+            "upgrade": "TEXT",
+        }
+        for name, definition in column_defs.items():
+            if name not in columns:
+                await self._conn.execute(
+                    f"ALTER TABLE model_catalog ADD COLUMN {name} {definition}"
+                )
 
     async def _ensure_lane_runtime_settings_table(self) -> None:
         await self._conn.executescript(
@@ -1385,7 +1408,8 @@ class Registry:
                 "INSERT INTO model_catalog (id, provider, display_name, description, "
                 "is_default, hidden, default_reasoning_effort, supported_reasoning_efforts, "
                 "default_service_tier, service_tiers, additional_speed_tiers, first_seen_at, "
-                "last_seen_at, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "input_modalities, supports_personality, upgrade, last_seen_at, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(provider, id) DO UPDATE SET display_name = excluded.display_name, "
                 "description = excluded.description, is_default = excluded.is_default, "
                 "hidden = excluded.hidden, "
@@ -1394,6 +1418,9 @@ class Registry:
                 "default_service_tier = excluded.default_service_tier, "
                 "service_tiers = excluded.service_tiers, "
                 "additional_speed_tiers = excluded.additional_speed_tiers, "
+                "input_modalities = excluded.input_modalities, "
+                "supports_personality = excluded.supports_personality, "
+                "upgrade = excluded.upgrade, "
                 "last_seen_at = excluded.last_seen_at, source = excluded.source",
                 (
                     model.id,
@@ -1408,6 +1435,9 @@ class Registry:
                     json.dumps([tier.model_dump(mode="python") for tier in model.service_tiers]),
                     json.dumps(model.additional_speed_tiers),
                     first_seen_at,
+                    json.dumps(model.input_modalities),
+                    _bool_or_none(model.supports_personality),
+                    model.upgrade,
                     model.last_seen_at,
                     model.source,
                 ),
@@ -2381,6 +2411,10 @@ def _row_to_model_catalog_entry(row: aiosqlite.Row) -> ModelCatalogEntry:
     data["supported_reasoning_efforts"] = _json_str_list(data["supported_reasoning_efforts"])
     data["service_tiers"] = _json_service_tiers(data["service_tiers"])
     data["additional_speed_tiers"] = _json_str_list(data["additional_speed_tiers"])
+    data["input_modalities"] = _json_str_list(data["input_modalities"])
+    data["supports_personality"] = (
+        None if data["supports_personality"] is None else bool(data["supports_personality"])
+    )
     return ModelCatalogEntry.model_validate(data)
 
 

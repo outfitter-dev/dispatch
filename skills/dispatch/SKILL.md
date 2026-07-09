@@ -217,8 +217,10 @@ uv run dispatch schema models
 
 Omit model/tier values when Codex defaults are acceptable. If a preset uses a
 user-facing tier such as `fast`, Dispatch resolves it through `model/list`
-service tiers before starting the thread. Do not guess current model ids from
-memory; use the catalog output and its `aliases` field.
+service tiers before starting the thread. The catalog also reports model-defined
+reasoning efforts, input modalities, personality support, and upgrade targets.
+Do not guess current model ids or effort names from memory; use the catalog
+output and its `aliases` field.
 
 Attached lanes are existing desktop Codex threads registered by raw thread id:
 
@@ -228,8 +230,8 @@ uv run dispatch attach <codex-thread-id> --sync
 ```
 
 Attached lanes are managed by dispatch but turn-writing/history-mutating
-commands such as `send`, `stop`, `goal set`, `goal clear`, `lane fork`,
-`lane rollback`, or `lane compact` are blocked by default. ADR-0005 and
+operations such as send, stop, goal mutation, fork, rollback, or compact are
+blocked by default. ADR-0005 and
 ADR-0018 keep this boundary locked because desktop Codex and dispatch run
 separate app-server processes and there is no cross-process write interlock.
 Local operators can opt in with `[policy] allow_attached_writes = true` in
@@ -591,6 +593,8 @@ selects an `op` inside the tool. In this repo, the workspace-local Codex plugin
 lives at `plugins/dispatch`. It exposes these skills and the same MCP registry.
 Use the daemon-read MCP tool's `models` op before setting explicit model or
 service-tier arguments.
+The thread-write MCP tool's `fork` op accepts `last_turn_id` to fork through one
+completed turn, inclusive.
 If the plugin does not appear immediately, restart Codex for the workspace.
 Installed PyPI packages also include read-only copies of these skills and the
 plugin bundle under `outfitter.dispatch.assets`; use the repo copies for editing.

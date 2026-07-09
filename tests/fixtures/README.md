@@ -14,8 +14,8 @@ Rules:
 
 Layout:
 
-- `app_server/` — raw App Server result payloads and notifications.
+- `app_server/` — raw App Server result payloads and notifications, plus the
+  compact generated protocol manifest refreshed by `just app-server-manifest`.
 - `transcripts/` — Codex persisted JSONL source files for sync parsing.
 - `registry/` — builders for registry rows and migration test setup.
 - `cli_smoke/` — notes and recipes for install/first-run smoke checks.
-
