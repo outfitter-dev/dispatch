@@ -50,6 +50,7 @@ _CUSTOM_ROUTES: tuple[CliRoute, ...] = (
     CliRoute(("subscribe",), "subscribe", ("target", "spec")),
     CliRoute(("inbox", "list"), "inbox-list"),
     CliRoute(("inbox", "ack"), "inbox-ack", ("id",)),
+    CliRoute(("request", "respond"), "server-request-respond", ("id", "response")),
     CliRoute(("trigger", "list"), "trigger-list"),
     CliRoute(("goal", "set"), "goal-set", ("lane", "objective")),
 )
@@ -65,6 +66,7 @@ _SIMPLE_ROUTES: tuple[CliRoute, ...] = (
     CliRoute(("restore",), "restore", ("target",)),
     CliRoute(("models",), "models"),
     CliRoute(("inbox", "read"), "inbox-read", ("id",)),
+    CliRoute(("request", "list"), "server-request-list"),
     CliRoute(("subscriptions",), "subscription-list"),
     CliRoute(("unsubscribe",), "unsubscribe", ("id",)),
     CliRoute(("goal", "status"), "goal-get", ("lane",)),
@@ -138,6 +140,12 @@ def derive_cli(
         app,
         ("inbox", "ack"),
         _inbox_ack_command(registry.get("inbox-ack"), invoke, renderer),
+        groups,
+    )
+    _register_command(
+        app,
+        ("request", "respond"),
+        _server_request_respond_command(registry.get("server-request-respond"), invoke, renderer),
         groups,
     )
     _register_command(
@@ -941,6 +949,30 @@ def _inbox_ack_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..
         )
         render(op, result)
         _ignore_json(json)
+
+    command.__doc__ = op.summary
+    return command
+
+
+def _server_request_respond_command(
+    op: Op, invoke: Invoker, render: Renderer
+) -> Callable[..., None]:
+    def command(
+        id: Annotated[int, typer.Argument(help="Dispatch-local interactive request id.")],
+        response: Annotated[str, typer.Argument(help="JSON protocol result object.")],
+        json_output: Annotated[
+            bool, typer.Option("--json", help="Render machine-readable JSON output.")
+        ] = False,
+    ) -> None:
+        try:
+            parsed = json.loads(response)
+        except ValueError as exc:
+            raise typer.BadParameter("response must be valid JSON", param_hint="response") from exc
+        if not isinstance(parsed, dict):
+            raise typer.BadParameter("response must be a JSON object", param_hint="response")
+        result = invoke(op.id, {"id": id, "response": parsed})
+        render(op, result)
+        _ignore_json(json_output)
 
     command.__doc__ = op.summary
     return command

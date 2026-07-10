@@ -31,6 +31,12 @@ def test_registry_sql_exercise_sets_schema_version_and_rolls_back(tmp_path: Path
         assert user_version is not None
         assert int(user_version[0]) == SCHEMA_VERSION
 
+        server_requests = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+            ("server_requests",),
+        ).fetchone()
+        assert server_requests is not None
+
         rolled_back = conn.execute(
             "SELECT COUNT(*) FROM actions_log WHERE op = ?",
             ("probe",),

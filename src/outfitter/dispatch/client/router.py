@@ -13,7 +13,14 @@ import asyncio
 from collections.abc import AsyncIterator, Callable
 
 from .errors import AppServerError, ClientError
-from .events import LaneEvent, project_notification, project_server_request
+from .events import (
+    LaneEvent,
+    ServerRequestReceived,
+    project_approval_request,
+    project_notification,
+    project_server_request_received,
+)
+from .models import JsonRpcId, is_json_rpc_id
 
 
 class Subscription[T]:
@@ -60,7 +67,7 @@ class Broadcaster[T]:
 
         return Subscription(queue, _remove)
 
-    def publish(self, key: str, item: T) -> None:
+    def publish(self, key: str | None, item: T) -> None:
         for sub_key, queue in self._subs:
             if sub_key is None or sub_key == key:
                 queue.put_nowait(item)
@@ -75,16 +82,17 @@ class Router:
     """Routes parsed wire messages to pending requests and event streams."""
 
     def __init__(self) -> None:
-        self._pending: dict[int, asyncio.Future[dict[str, object]]] = {}
+        self._pending: dict[JsonRpcId, asyncio.Future[dict[str, object]]] = {}
         self.events: Broadcaster[LaneEvent] = Broadcaster()
         self.raw: Broadcaster[dict[str, object]] = Broadcaster()
+        self.requests: Broadcaster[ServerRequestReceived] = Broadcaster()
 
-    def new_request(self, request_id: int) -> asyncio.Future[dict[str, object]]:
+    def new_request(self, request_id: JsonRpcId) -> asyncio.Future[dict[str, object]]:
         fut: asyncio.Future[dict[str, object]] = asyncio.get_running_loop().create_future()
         self._pending[request_id] = fut
         return fut
 
-    def discard_request(self, request_id: int) -> None:
+    def discard_request(self, request_id: JsonRpcId) -> None:
         """Drop a pending request whose awaiter was cancelled (e.g. a bounded
         ``wait_for`` timed out). Prevents ``_pending`` from growing without bound
         across repeated timeouts; a late response for this id is then ignored."""
@@ -93,14 +101,14 @@ class Router:
     def handle(self, message: dict[str, object]) -> None:
         mid = message.get("id")
         method = message.get("method")
-        if isinstance(mid, int) and ("result" in message or "error" in message):
+        if is_json_rpc_id(mid) and ("result" in message or "error" in message):
             self._resolve(mid, message)
-        elif isinstance(mid, int) and isinstance(method, str):
+        elif is_json_rpc_id(mid) and isinstance(method, str):
             self._server_request(mid, method, message.get("params"))
         elif isinstance(method, str):
             self._notification(method, message.get("params"))
 
-    def _resolve(self, request_id: int, message: dict[str, object]) -> None:
+    def _resolve(self, request_id: JsonRpcId, message: dict[str, object]) -> None:
         fut = self._pending.pop(request_id, None)
         if fut is None or fut.done():
             return
@@ -111,7 +119,7 @@ class Router:
                 msg = err.get("message")
                 fut.set_exception(
                     AppServerError(
-                        code if isinstance(code, int) else -1,
+                        code if type(code) is int else -1,
                         msg if isinstance(msg, str) else "unknown error",
                         err.get("data"),
                     )
@@ -122,12 +130,16 @@ class Router:
         result = message.get("result")
         fut.set_result(result if isinstance(result, dict) else {})
 
-    def _server_request(self, request_id: int, method: str, params: object) -> None:
+    def _server_request(self, request_id: JsonRpcId, method: str, params: object) -> None:
         p = params if isinstance(params, dict) else {}
-        lane = p.get("threadId")
-        if isinstance(lane, str):
-            self.raw.publish(lane, {"id": request_id, "method": method, "params": p})
-        event = project_server_request(request_id, method, p)
+        request = project_server_request_received(request_id, method, p)
+        self.requests.publish(request.lane_id, request)
+        if request.lane_id is not None:
+            self.raw.publish(
+                request.lane_id,
+                {"id": request_id, "method": method, "params": p},
+            )
+        event = project_approval_request(request)
         if event is not None:
             self.events.publish(event.lane_id, event)
 
@@ -146,3 +158,4 @@ class Router:
         self._pending.clear()
         self.events.close()
         self.raw.close()
+        self.requests.close()

@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 import pytest_asyncio
 
+from outfitter.dispatch.client.models import ThreadInfo
 from outfitter.dispatch.core.reactor import Reactor
 from outfitter.dispatch.core.triggers import TriggerRunner
 from outfitter.dispatch.daemon.supervisor import Supervisor
@@ -52,6 +53,8 @@ async def test_supervisor_restarts_and_restores_lanes_on_crash(store: Registry) 
         for name, kw in clients[0].calls
     )
     assert ctx.client is clients[0]
+    first_provider_session_id = ctx.provider_session_id
+    assert first_provider_session_id
 
     # Simulate app-server crash (stdout EOF → wait_closed returns).
     clients[0].closed.set()
@@ -65,6 +68,8 @@ async def test_supervisor_restarts_and_restores_lanes_on_crash(store: Registry) 
         for name, kw in clients[1].calls
     )
     assert ctx.client is clients[1]
+    assert ctx.provider_session_id
+    assert ctx.provider_session_id != first_provider_session_id
 
     await supervisor.stop()
     await asyncio.wait_for(task, timeout=1)
@@ -93,6 +98,37 @@ async def test_supervisor_recovers_and_drains_idle_queue_on_start(store: Registr
     assert any(
         name == "turn_start" and kw["text"] == "resume queued" for name, kw in clients[0].calls
     )
+
+    await supervisor.stop()
+    await asyncio.wait_for(task, timeout=1)
+
+
+async def test_supervisor_starts_reactor_before_restoring_lanes(store: Registry) -> None:
+    await store.add_lane(id="O1", handle="@own", source="own", status="idle")
+    ctx = make_ctx(store)
+    reactor_started = asyncio.Event()
+    resume_observations: list[bool] = []
+
+    class OrderedClient(FakeSupervisedClient):
+        async def thread_resume(
+            self, thread_id: str, *, exclude_turns: bool | None = None
+        ) -> ThreadInfo:
+            resume_observations.append(reactor_started.is_set())
+            return await super().thread_resume(thread_id, exclude_turns=exclude_turns)
+
+    async def make_client() -> OrderedClient:
+        return OrderedClient()
+
+    async def run_reactor() -> None:
+        reactor_started.set()
+        await asyncio.Event().wait()
+
+    supervisor = Supervisor(ctx, make_client, run_reactor, backoff=0)
+    first = await make_client()
+    task = asyncio.create_task(supervisor.supervise(first))
+    await asyncio.sleep(0.05)
+
+    assert resume_observations == [True]
 
     await supervisor.stop()
     await asyncio.wait_for(task, timeout=1)

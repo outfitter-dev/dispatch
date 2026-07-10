@@ -20,6 +20,7 @@ import aiosqlite
 from outfitter.dispatch.contracts.errors import NotFoundError
 
 from .models import (
+    SERVER_REQUEST_TEXT_LIMIT,
     ActionAdapter,
     ActionRecord,
     Guard,
@@ -35,6 +36,9 @@ from .models import (
     ModelCatalogEntry,
     ProviderEvent,
     QueuedMessage,
+    ServerRequest,
+    ServerRequestOutcome,
+    ServerRequestState,
     ServiceTierEntry,
     Subscription,
     ThreadItem,
@@ -46,7 +50,7 @@ from .models import (
 from .refs import BASE58BTC_ALPHABET, CODEX_REF_SOURCE, codex_ref_payload, make_ref
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 @dataclass(frozen=True)
@@ -74,6 +78,12 @@ class ThreadHistorySummaryStats:
     tools: list[ThreadHistoryToolStat]
     files_changed_count: int
     files: list[ThreadHistoryFileStat]
+
+
+@dataclass(frozen=True)
+class ServerRequestObservation:
+    request: ServerRequest
+    inserted: bool
 
 
 def _ref_exists_sql(ref_type: str, *, operator: str = "instr", exact: bool = False) -> str:
@@ -253,6 +263,33 @@ CREATE TABLE IF NOT EXISTS lane_runtime_state (
 );
 """
 
+_SERVER_REQUESTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS server_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL CHECK (provider = 'codex'),
+    provider_session_id TEXT NOT NULL,
+    provider_thread_id TEXT,
+    provider_thread_key TEXT NOT NULL,
+    request_id_json TEXT NOT NULL,
+    lane TEXT,
+    method TEXT NOT NULL,
+    category TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending'
+        CHECK (state IN ('pending', 'responding', 'responded', 'denied', 'timed_out', 'failed')),
+    received_at TEXT NOT NULL,
+    deadline_at TEXT,
+    resolved_at TEXT,
+    response_summary TEXT,
+    error TEXT,
+    UNIQUE(provider, provider_session_id, provider_thread_key, request_id_json),
+    FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_server_requests_pending
+ON server_requests(provider, provider_session_id, state, deadline_at, received_at);
+CREATE INDEX IF NOT EXISTS idx_server_requests_lane_pending
+ON server_requests(lane, provider_session_id, state, received_at);
+"""
+
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
@@ -418,6 +455,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     FOREIGN KEY(last_inbox_message_id) REFERENCES inbox_messages(id) ON DELETE SET NULL
 );
 {_PROVIDER_HISTORY_SCHEMA}
+{_SERVER_REQUESTS_SCHEMA}
 """
 
 REGISTRY_SCHEMA_SQL = _SCHEMA
@@ -513,6 +551,8 @@ class Registry:
             await self._ensure_thread_item_position_column()
         if user_version < 13:
             await self._ensure_model_catalog_capability_columns()
+        if user_version < 14:
+            await self._ensure_server_requests_table()
 
     async def _ensure_ref_columns(self) -> None:
         async with self._conn.execute("PRAGMA table_info(lanes)") as cur:
@@ -588,6 +628,9 @@ class Registry:
                 await self._conn.execute(
                     f"ALTER TABLE model_catalog ADD COLUMN {name} {definition}"
                 )
+
+    async def _ensure_server_requests_table(self) -> None:
+        await self._conn.executescript(_SERVER_REQUESTS_SCHEMA)
 
     async def _ensure_lane_runtime_settings_table(self) -> None:
         await self._conn.executescript(
@@ -1625,6 +1668,278 @@ class Registry:
             rows = await cur.fetchall()
         return [_row_to_provider_event(row) for row in rows]
 
+    # --- server requests ------------------------------------------------------
+
+    async def observe_server_request(self, request: ServerRequest) -> ServerRequest:
+        """Persist a pending Codex request without reopening a terminal outcome."""
+
+        return (await self.observe_server_request_once(request)).request
+
+    async def observe_server_request_once(self, request: ServerRequest) -> ServerRequestObservation:
+        """Persist a request and report whether this call won the insert."""
+
+        if request.state != "pending":
+            raise ValueError("only pending server requests may be observed")
+        thread_key = _server_request_thread_key(request.provider_thread_id)
+        request_id_json = _json_dump_compact(request.request_id)
+        async with self._write_lock:
+            cur = await self._conn.execute(
+                "INSERT INTO server_requests (provider, provider_session_id, provider_thread_id, "
+                "provider_thread_key, request_id_json, lane, method, category, state, "
+                "received_at, deadline_at, resolved_at, response_summary, error) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(provider, provider_session_id, provider_thread_key, request_id_json) "
+                "DO NOTHING",
+                (
+                    request.provider,
+                    request.provider_session_id,
+                    request.provider_thread_id,
+                    thread_key,
+                    request_id_json,
+                    request.lane,
+                    request.method,
+                    request.category,
+                    request.state,
+                    request.received_at,
+                    request.deadline_at,
+                    request.resolved_at,
+                    request.response_summary,
+                    request.error,
+                ),
+            )
+            await self._conn.commit()
+        saved = await self.get_server_request(
+            provider=request.provider,
+            provider_session_id=request.provider_session_id,
+            provider_thread_id=request.provider_thread_id,
+            request_id=request.request_id,
+        )
+        if saved is None:
+            raise RuntimeError("server request upsert did not return a row")
+        return ServerRequestObservation(request=saved, inserted=cur.rowcount == 1)
+
+    async def get_server_request(
+        self,
+        *,
+        provider: str,
+        provider_session_id: str,
+        provider_thread_id: str | None,
+        request_id: int | str,
+    ) -> ServerRequest | None:
+        async with self._conn.execute(
+            "SELECT * FROM server_requests WHERE provider = ? AND provider_session_id = ? "
+            "AND provider_thread_key = ? AND request_id_json = ?",
+            (
+                provider,
+                provider_session_id,
+                _server_request_thread_key(provider_thread_id),
+                _json_dump_compact(request_id),
+            ),
+        ) as cur:
+            row = await cur.fetchone()
+        return _row_to_server_request(row) if row is not None else None
+
+    async def get_server_request_by_id(self, request_id: int) -> ServerRequest | None:
+        """Return a request by its dispatch-local operator selector."""
+
+        async with self._conn.execute(
+            "SELECT * FROM server_requests WHERE id = ?", (request_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return _row_to_server_request(row) if row is not None else None
+
+    async def list_server_requests(
+        self,
+        *,
+        state: ServerRequestState | None = "pending",
+        lane: str | None = None,
+        limit: int = 50,
+    ) -> list[ServerRequest]:
+        sql = "SELECT * FROM server_requests"
+        params: list[object] = []
+        clauses: list[str] = []
+        if state is not None:
+            clauses.append("state = ?")
+            params.append(state)
+        if lane is not None:
+            clauses.append("lane = ?")
+            params.append(lane)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY deadline_at, received_at, request_id_json LIMIT ?"
+        params.append(limit)
+        async with self._conn.execute(sql, tuple(params)) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_server_request(row) for row in rows]
+
+    async def list_pending_server_requests(
+        self,
+        *,
+        lane: str | None = None,
+        provider_session_id: str | None = None,
+        limit: int = 50,
+    ) -> list[ServerRequest]:
+        if provider_session_id is None:
+            return await self.list_server_requests(lane=lane, limit=limit)
+
+        sql = "SELECT * FROM server_requests WHERE state = 'pending'"
+        params: list[object] = []
+        if lane is not None:
+            sql += " AND lane = ?"
+            params.append(lane)
+        if provider_session_id is not None:
+            sql += " AND provider_session_id = ?"
+            params.append(provider_session_id)
+        sql += " ORDER BY deadline_at, received_at, request_id_json LIMIT ?"
+        params.append(limit)
+        async with self._conn.execute(sql, tuple(params)) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_server_request(row) for row in rows]
+
+    async def claim_server_request(
+        self,
+        *,
+        provider: str,
+        provider_session_id: str,
+        provider_thread_id: str | None,
+        request_id: int | str,
+    ) -> ServerRequest | None:
+        """Atomically reserve a pending request for one response sender."""
+
+        thread_key = _server_request_thread_key(provider_thread_id)
+        request_id_json = _json_dump_compact(request_id)
+        async with self._write_lock:
+            cur = await self._conn.execute(
+                "UPDATE server_requests SET state = 'responding' WHERE provider = ? "
+                "AND provider_session_id = ? AND provider_thread_key = ? "
+                "AND request_id_json = ? AND state = 'pending'",
+                (provider, provider_session_id, thread_key, request_id_json),
+            )
+            await self._conn.commit()
+        if cur.rowcount != 1:
+            return None
+        return await self.get_server_request(
+            provider=provider,
+            provider_session_id=provider_session_id,
+            provider_thread_id=provider_thread_id,
+            request_id=request_id,
+        )
+
+    async def claim_server_request_by_id(self, request_id: int) -> ServerRequest | None:
+        """Atomically reserve a pending request using its local selector."""
+
+        async with self._write_lock:
+            cur = await self._conn.execute(
+                "UPDATE server_requests SET state = 'responding' "
+                "WHERE id = ? AND state = 'pending'",
+                (request_id,),
+            )
+            await self._conn.commit()
+        if cur.rowcount != 1:
+            return None
+        return await self.get_server_request_by_id(request_id)
+
+    async def finalize_server_request(
+        self,
+        *,
+        provider: str,
+        provider_session_id: str,
+        provider_thread_id: str | None,
+        request_id: int | str,
+        state: ServerRequestOutcome,
+        response_summary: str | None = None,
+        error: str | None = None,
+        resolved_at: str | None = None,
+    ) -> ServerRequest | None:
+        """Persist a terminal result only for the sender that holds the claim."""
+
+        thread_key = _server_request_thread_key(provider_thread_id)
+        request_id_json = _json_dump_compact(request_id)
+        async with self._write_lock:
+            cur = await self._conn.execute(
+                "UPDATE server_requests SET state = ?, resolved_at = ?, response_summary = ?, "
+                "error = ? WHERE provider = ? AND provider_session_id = ? "
+                "AND provider_thread_key = ? AND request_id_json = ? AND state = 'responding'",
+                (
+                    state,
+                    resolved_at or self.now_iso(),
+                    _bound_server_request_text(response_summary),
+                    _bound_server_request_text(error),
+                    provider,
+                    provider_session_id,
+                    thread_key,
+                    request_id_json,
+                ),
+            )
+            await self._conn.commit()
+        if cur.rowcount != 1:
+            return None
+        return await self.get_server_request(
+            provider=provider,
+            provider_session_id=provider_session_id,
+            provider_thread_id=provider_thread_id,
+            request_id=request_id,
+        )
+
+    async def finalize_server_request_by_id(
+        self,
+        request_id: int,
+        *,
+        state: ServerRequestOutcome,
+        response_summary: str | None = None,
+        error: str | None = None,
+        resolved_at: str | None = None,
+    ) -> ServerRequest | None:
+        """Persist a claimed request's terminal result using its local selector."""
+
+        async with self._write_lock:
+            cur = await self._conn.execute(
+                "UPDATE server_requests SET state = ?, resolved_at = ?, response_summary = ?, "
+                "error = ? WHERE id = ? AND state = 'responding'",
+                (
+                    state,
+                    resolved_at or self.now_iso(),
+                    _bound_server_request_text(response_summary),
+                    _bound_server_request_text(error),
+                    request_id,
+                ),
+            )
+            await self._conn.commit()
+        if cur.rowcount != 1:
+            return None
+        return await self.get_server_request_by_id(request_id)
+
+    async def fail_open_server_requests_except_session(
+        self,
+        current_session_id: str,
+        *,
+        error: str = "app-server connection replaced before a response was sent",
+    ) -> int:
+        """Terminalize rows that cannot be answered after an App Server reconnect."""
+
+        async with self._write_lock:
+            cur = await self._conn.execute(
+                "UPDATE server_requests SET state = 'failed', resolved_at = ?, "
+                "response_summary = NULL, error = ? WHERE provider_session_id != ? "
+                "AND state IN ('pending', 'responding')",
+                (self.now_iso(), _bound_server_request_text(error), current_session_id),
+            )
+            await self._conn.commit()
+        return cur.rowcount
+
+    async def list_open_server_requests_except_session(
+        self, current_session_id: str
+    ) -> list[ServerRequest]:
+        """Return pending/responding rows that a replacement connection cannot answer."""
+
+        async with self._conn.execute(
+            "SELECT * FROM server_requests WHERE provider_session_id != ? "
+            "AND state IN ('pending', 'responding') ORDER BY id",
+            (current_session_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_server_request(row) for row in rows]
+
     async def upsert_thread_turn(self, turn: ThreadTurn) -> ThreadTurn:
         async with self._transaction():
             await self._upsert_thread_turn_row(turn)
@@ -2338,6 +2653,14 @@ def _json_dump_compact(value: object) -> str:
     return json.dumps(value, separators=(",", ":"))
 
 
+def _server_request_thread_key(provider_thread_id: str | None) -> str:
+    return "threadless" if provider_thread_id is None else f"thread:{provider_thread_id}"
+
+
+def _bound_server_request_text(value: str | None) -> str | None:
+    return value[:SERVER_REQUEST_TEXT_LIMIT] if value is not None else None
+
+
 def _json_str_list(value: object) -> list[str]:
     if not value:
         return []
@@ -2436,6 +2759,15 @@ def _row_to_provider_event(row: aiosqlite.Row) -> ProviderEvent:
     data["payload"] = json.loads(str(payload)) if payload else None
     data["raw_retained"] = bool(data["raw_retained"])
     return ProviderEvent.model_validate(data)
+
+
+def _row_to_server_request(row: aiosqlite.Row) -> ServerRequest:
+    data = _row_dict(row)
+    request_id = json.loads(str(data.pop("request_id_json")))
+    if not isinstance(request_id, int | str) or isinstance(request_id, bool):
+        raise ValueError("server request id must be an int or string")
+    data["request_id"] = request_id
+    return ServerRequest.model_validate(data)
 
 
 def _row_to_thread_item(row: aiosqlite.Row) -> ThreadItem:

@@ -31,6 +31,8 @@ async def test_registry_has_the_v1_ops() -> None:
         "inbox-list",
         "inbox-read",
         "inbox-ack",
+        "server-request-list",
+        "server-request-respond",
         "subscribe",
         "subscription-list",
         "unsubscribe",

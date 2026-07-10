@@ -10,6 +10,7 @@ import pytest_asyncio
 from outfitter.dispatch.client.events import (
     ApprovalRequested,
     LaneIdle,
+    ServerRequestReceived,
     ThreadArchived,
     ThreadUnarchived,
     TokenUsageUpdated,
@@ -493,18 +494,19 @@ async def test_reactor_subscription_can_disable_dispatch_attribution(store: Regi
     assert "dispatch (sub):" not in text
 
 
-async def test_reactor_auto_declines_unhandled_approval(store: Registry) -> None:
+async def test_lane_event_reactor_leaves_response_to_generic_request_manager(
+    store: Registry,
+) -> None:
     client = FakeLaneClient()
     ctx = make_ctx(store, client)
     reactor = Reactor(ctx, TriggerRunner(ctx, lambda: _T0))
     await store.add_lane(id="L1", handle="@x", source="own", status="busy")
     await reactor.handle(ApprovalRequested("L1", 7, "command"))
-    assert any(
-        name == "respond_approval" and kw["decision"] == "decline" for name, kw in client.calls
-    )
+    assert not any(name == "respond_approval" for name, _ in client.calls)
+    assert (await store.get_lane("L1")).status == "busy"
 
 
-async def test_reactor_approval_trigger_suppresses_auto_decline(store: Registry) -> None:
+async def test_generic_approval_request_fires_waiting_trigger(store: Registry) -> None:
     client = FakeLaneClient()
     ctx = make_ctx(store, client)
     reactor = Reactor(ctx, TriggerRunner(ctx, lambda: _T0))
@@ -518,12 +520,20 @@ async def test_reactor_approval_trigger_suppresses_auto_decline(store: Registry)
             action=BriefAction(text="approval pending on @x"),
         )
     )
-    await reactor.handle(ApprovalRequested("L1", 7, "command"))
-    assert not any(name == "respond_approval" for name, _ in client.calls)
+    client.server_request_log.append(
+        ServerRequestReceived(
+            method="item/permissions/requestApproval",
+            request_id=7,
+            category="approval",
+            thread_id="L1",
+            raw_params={"permissions": {}},
+        )
+    )
+    await reactor.run()
     assert any(name == "inject_items" for name, _ in client.calls)
 
 
-async def test_reactor_approval_subscription_suppresses_auto_decline(store: Registry) -> None:
+async def test_generic_approval_subscription_uses_local_request_id(store: Registry) -> None:
     client = FakeLaneClient()
     ctx = make_ctx(store, client)
     reactor = Reactor(ctx, TriggerRunner(ctx, lambda: _T0))
@@ -545,19 +555,25 @@ async def test_reactor_approval_subscription_suppresses_auto_decline(store: Regi
         )
     )
 
-    await reactor.handle(ApprovalRequested("target", 7, "command"))
+    client.server_request_log.append(
+        ServerRequestReceived(
+            method="execCommandApproval",
+            request_id="wire-7",
+            category="approval",
+            conversation_id="target",
+        )
+    )
+    await reactor.run()
 
-    assert not any(name == "respond_approval" for name, _ in client.calls)
     messages = await store.list_inbox_messages(lane="subscriber")
     assert len(messages) == 1
     assert messages[0].payload["event"] == "approval"
+    assert messages[0].payload["request_id"] == 1
 
 
-async def test_reactor_guard_suppressed_approval_trigger_still_suppresses_decline(
+async def test_generic_approval_trigger_still_honors_dedupe_guard(
     store: Registry,
 ) -> None:
-    # A registered handler whose guard suppresses this firing must NOT be overridden
-    # by an auto-decline (the user registered a handler).
     client = FakeLaneClient()
     ctx = make_ctx(store, client)
     reactor = Reactor(ctx, TriggerRunner(ctx, lambda: _T0))
@@ -572,7 +588,17 @@ async def test_reactor_guard_suppressed_approval_trigger_still_suppresses_declin
             guard=Guard(dedupe=True),
         )
     )
-    await reactor.handle(ApprovalRequested("L1", 1, "command"))  # fires
-    await reactor.handle(ApprovalRequested("L1", 2, "command"))  # dedupe-suppressed
-    declines = [kw for name, kw in client.calls if name == "respond_approval"]
-    assert declines == []  # never auto-declined despite the second firing being suppressed
+    client.server_request_log.extend(
+        [
+            ServerRequestReceived(
+                method="item/commandExecution/requestApproval",
+                request_id=request_id,
+                category="approval",
+                thread_id="L1",
+            )
+            for request_id in (1, 2)
+        ]
+    )
+    await reactor.run()
+    injections = [call for name, call in client.calls if name == "inject_items"]
+    assert len(injections) == 1

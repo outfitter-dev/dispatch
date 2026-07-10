@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from outfitter.dispatch.client.events import ApprovalRequested, TurnStarted
+from outfitter.dispatch.client.events import ApprovalRequested, ServerRequestReceived, TurnStarted
 from outfitter.dispatch.client.router import Broadcaster, Router
 
 
@@ -46,9 +46,18 @@ async def test_discard_request_drops_pending_and_ignores_late_response() -> None
     assert not fut.done()
 
 
+async def test_router_resolves_string_response_ids() -> None:
+    router = Router()
+    fut = router.new_request("request-7")
+    router.handle({"id": "request-7", "result": {"ok": True}})
+    assert await asyncio.wait_for(fut, timeout=1) == {"ok": True}
+
+
 async def test_router_routes_server_request_to_approval_event() -> None:
     router = Router()
     events = router.events.subscribe("L1")
+    requests = router.requests.subscribe("L1")
+    all_requests = router.requests.subscribe(None)
     router.handle(
         {
             "id": 99,
@@ -58,3 +67,56 @@ async def test_router_routes_server_request_to_approval_event() -> None:
     )
     event = await asyncio.wait_for(events.__anext__(), timeout=1)
     assert event == ApprovalRequested("L1", 99, "file_change", "I1", None)
+    expected = ServerRequestReceived(
+        method="item/fileChange/requestApproval",
+        request_id=99,
+        category="approval",
+        thread_id="L1",
+        item_id="I1",
+    )
+    assert await asyncio.wait_for(requests.__anext__(), timeout=1) == expected
+    assert await asyncio.wait_for(all_requests.__anext__(), timeout=1) == expected
+
+
+async def test_router_routes_threadless_and_legacy_server_requests_to_generic_streams() -> None:
+    router = Router()
+    all_requests = router.requests.subscribe(None)
+    legacy_requests = router.requests.subscribe("legacy-1")
+
+    router.handle(
+        {
+            "id": "auth-1",
+            "method": "account/chatgptAuthTokens/refresh",
+            "params": {"credential": "not logged"},
+        }
+    )
+    auth = await asyncio.wait_for(all_requests.__anext__(), timeout=1)
+    assert auth.request_id == "auth-1"
+    assert auth.category == "auth"
+    assert auth.lane_id is None
+
+    router.handle(
+        {
+            "id": "attestation-1",
+            "method": "attestation/generate",
+            "params": {"conversationId": "legacy-1"},
+        }
+    )
+    expected = ServerRequestReceived(
+        method="attestation/generate",
+        request_id="attestation-1",
+        category="attestation",
+        conversation_id="legacy-1",
+    )
+    assert await asyncio.wait_for(legacy_requests.__anext__(), timeout=1) == expected
+    assert await asyncio.wait_for(all_requests.__anext__(), timeout=1) == expected
+
+
+async def test_router_publishes_unknown_server_requests() -> None:
+    router = Router()
+    requests = router.requests.subscribe(None)
+    router.handle({"id": "future-1", "method": "future/request", "params": {}})
+    request = await asyncio.wait_for(requests.__anext__(), timeout=1)
+    assert request == ServerRequestReceived(
+        method="future/request", request_id="future-1", category="unknown"
+    )

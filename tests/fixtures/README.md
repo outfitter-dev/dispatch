@@ -19,3 +19,4 @@ Layout:
 - `transcripts/` — Codex persisted JSONL source files for sync parsing.
 - `registry/` — builders for registry rows and migration test setup.
 - `cli_smoke/` — notes and recipes for install/first-run smoke checks.
+- `mcp/` — tiny synthetic stdio servers exercised by live App Server integration tests.

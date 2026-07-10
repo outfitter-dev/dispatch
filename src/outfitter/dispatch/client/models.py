@@ -14,7 +14,7 @@ Encodes the verified gotchas (``docs/research/app-server-verification.md``):
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, TypeGuard
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
@@ -28,6 +28,16 @@ Effort = str
 ReasoningSummary = Literal["auto", "concise", "detailed", "none"]
 Personality = Literal["none", "friendly", "pragmatic"]
 Decision = Literal["accept", "acceptForSession", "decline", "cancel"]
+type JsonRpcId = int | str
+type ServerRequestCategory = Literal[
+    "approval",
+    "auth",
+    "attestation",
+    "tool_call",
+    "user_input",
+    "elicitation",
+    "unknown",
+]
 SortDirection = Literal["asc", "desc"]
 ThreadSortKey = Literal["created_at", "updated_at"]
 ThreadListCwdFilter = str | list[str]
@@ -57,6 +67,23 @@ class WireModel(BaseModel):
         populate_by_name=True,
         extra="ignore",
     )
+
+
+def is_json_rpc_id(value: object) -> TypeGuard[JsonRpcId]:
+    """Return whether ``value`` is a JSON-RPC request/response id.
+
+    ``bool`` is an ``int`` subclass in Python but is not a supported protocol id.
+    """
+
+    return type(value) in (int, str)
+
+
+class JsonRpcError(WireModel):
+    """A JSON-RPC error envelope sent in response to a server request."""
+
+    code: int
+    message: str
+    data: object | None = None
 
 
 # --- initialize ---------------------------------------------------------------

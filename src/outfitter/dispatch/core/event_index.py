@@ -286,18 +286,6 @@ def _runtime_state(
         return _state(lane, now, status="archived")
     if isinstance(event, ThreadUnarchived):
         return _state(lane, now, status="idle")
-    if isinstance(event, ApprovalRequested):
-        return _state(
-            lane,
-            now,
-            status="waiting_approval",
-            active_turn_id=event.turn_id or lane.active_turn_id,
-            latest_turn_id=event.turn_id or lane.latest_turn_id,
-            latest_turn_status=lane.latest_turn_status,
-            needs_attention=True,
-            attention_kind="approval",
-            attention_detail=event.kind,
-        )
     return None
 
 

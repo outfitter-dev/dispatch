@@ -6,6 +6,7 @@ from outfitter.dispatch.client.models import (
     AppModel,
     ConfigInfo,
     InitializeResult,
+    JsonRpcError,
     ModelListParams,
     ModelListResult,
     ModelServiceTier,
@@ -24,6 +25,7 @@ from outfitter.dispatch.client.models import (
     ThreadStartParams,
     TurnStartParams,
     TurnSteerParams,
+    is_json_rpc_id,
 )
 from tests.fixtures import load_json
 
@@ -34,6 +36,16 @@ def test_thread_start_sandbox_is_string_enum() -> None:
     assert dumped["sandbox"] == "workspace-write"  # STRING, not an object
     assert "approvalPolicy" not in dumped
     assert dumped["ephemeral"] is True
+
+
+def test_json_rpc_ids_exclude_boolean_values_and_errors_use_wire_aliases() -> None:
+    assert is_json_rpc_id(7)
+    assert is_json_rpc_id("server-request-7")
+    assert not is_json_rpc_id(True)
+    assert not is_json_rpc_id(None)
+    assert JsonRpcError(code=-32001, message="denied", data={"reason": "policy"}).model_dump(
+        by_alias=True, exclude_none=True
+    ) == {"code": -32001, "message": "denied", "data": {"reason": "policy"}}
 
 
 def test_thread_start_omits_policy_fields_when_inheriting_codex_config() -> None:

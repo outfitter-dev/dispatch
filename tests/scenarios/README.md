@@ -9,6 +9,7 @@ them intentionally:
 
 ```bash
 just scenario -- tests/scenarios/basic_coordination.toml
+just scenario -- tests/scenarios/interactive_requests.toml
 ```
 
 The runner creates temporary `DISPATCH_HOME`, `CODEX_HOME`, and work directories
@@ -22,4 +23,3 @@ Keep scenarios:
 - synthetic, with no private thread content;
 - cheap (`effort = "low"` and a small preferred model when available);
 - focused on user/agent workflows rather than one-off protocol details.
-

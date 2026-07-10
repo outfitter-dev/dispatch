@@ -9,14 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from types import TracebackType
 from typing import Self
 
 from pydantic import BaseModel
 
 from .errors import ClientError, ProtocolError, TransportError
-from .events import LaneEvent
+from .events import LaneEvent, ServerRequestReceived
 from .models import (
     AppModel,
     ApprovalPolicy,
@@ -28,6 +28,8 @@ from .models import (
     InitializeParams,
     InitializeResult,
     InjectItemsParams,
+    JsonRpcError,
+    JsonRpcId,
     ModelListParams,
     ModelListResult,
     Personality,
@@ -162,7 +164,14 @@ class AppServerClient:
     ) -> InitializeResult:
         params = InitializeParams(
             client_info=client_info,
-            capabilities=capabilities if capabilities is not None else {"experimentalApi": True},
+            capabilities=(
+                capabilities
+                if capabilities is not None
+                else {
+                    "experimentalApi": True,
+                    "mcpServerOpenaiFormElicitation": True,
+                }
+            ),
         )
         result = await self._request("initialize", _dump(params))
         await self._notify("initialized", {})
@@ -434,9 +443,26 @@ class AppServerClient:
 
     # --- approvals ------------------------------------------------------------
 
-    async def respond_approval(self, request_id: int, decision: Decision) -> None:
+    async def respond_server_request(
+        self,
+        request_id: JsonRpcId,
+        *,
+        result: Mapping[str, object] | None = None,
+        error: JsonRpcError | None = None,
+    ) -> None:
+        """Reply to a server request with exactly one JSON-RPC result or error."""
+        if (result is None) == (error is None):
+            raise ProtocolError("server request response requires exactly one of result or error")
+        message: dict[str, object] = {"id": request_id}
+        if result is not None:
+            message["result"] = dict(result)
+        elif error is not None:
+            message["error"] = _dump(error)
+        await self._transport.send(message)
+
+    async def respond_approval(self, request_id: JsonRpcId, decision: Decision) -> None:
         """Reply to a server->client approval request on the same stream."""
-        await self._transport.send({"id": request_id, "result": {"decision": decision}})
+        await self.respond_server_request(request_id, result={"decision": decision})
 
     # --- event streams --------------------------------------------------------
 
@@ -447,6 +473,10 @@ class AppServerClient:
     def raw_events(self, lane: str | None = None) -> AsyncIterator[dict[str, object]]:
         """Raw notifications/server-requests for one lane (content for ``show``)."""
         return self._router.raw.subscribe(lane)
+
+    def server_requests(self, lane: str | None = None) -> AsyncIterator[ServerRequestReceived]:
+        """Server requests for one lane, or all requests including threadless ones."""
+        return self._router.requests.subscribe(lane)
 
     async def close(self) -> None:
         if self._closed:

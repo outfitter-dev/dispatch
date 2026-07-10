@@ -1,0 +1,19 @@
+name = "interactive_requests"
+description = "Prove the Dispatch daemon answers a real App Server approval without hanging."
+timeout_seconds = 180
+poll_seconds = 1
+preferred_model = "gpt-5.3-codex-spark"
+allow_model_fallback = true
+effort = "low"
+parallel = false
+owned_interactive_requests = "permissive"
+
+[[lanes]]
+alias = "approval"
+name = "scenario-approval"
+prompt = "Create approval-proof.txt containing exactly APPROVAL_OK, then reply APPROVAL_OK."
+expect_contains = "APPROVAL_OK"
+sandbox = "workspace-write"
+approval_policy = "untrusted"
+expect_file = "approval-proof.txt"
+expect_file_contains = "APPROVAL_OK"

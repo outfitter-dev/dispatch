@@ -7,12 +7,12 @@ real app-server (ADR-0006). mypy enforces it matches the protocol.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timedelta
 
 import structlog
 
-from outfitter.dispatch.client.events import LaneEvent
+from outfitter.dispatch.client.events import LaneEvent, ServerRequestReceived
 from outfitter.dispatch.client.models import (
     AppModel,
     ApprovalPolicy,
@@ -20,6 +20,8 @@ from outfitter.dispatch.client.models import (
     ConfigInfo,
     Decision,
     Effort,
+    JsonRpcError,
+    JsonRpcId,
     ModelServiceTier,
     Personality,
     ReasoningSummary,
@@ -82,6 +84,7 @@ class FakeLaneClient:
         ]
         self.goal_result: ThreadGoal | None = None
         self.event_log: list[LaneEvent] = []
+        self.server_request_log: list[ServerRequestReceived] = []
         self.raw_log: list[dict[str, object]] = []
 
     def _record(self, name: str, **kwargs: object) -> None:
@@ -342,11 +345,28 @@ class FakeLaneClient:
     async def inject_items(self, thread_id: str, items: list[dict[str, object]]) -> None:
         self._record("inject_items", thread_id=thread_id, items=items)
 
-    async def respond_approval(self, request_id: int, decision: Decision) -> None:
+    async def respond_server_request(
+        self,
+        request_id: JsonRpcId,
+        *,
+        result: Mapping[str, object] | None = None,
+        error: JsonRpcError | None = None,
+    ) -> None:
+        self._record(
+            "respond_server_request",
+            request_id=request_id,
+            result=dict(result) if result is not None else None,
+            error=error.model_dump(mode="python") if error is not None else None,
+        )
+
+    async def respond_approval(self, request_id: JsonRpcId, decision: Decision) -> None:
         self._record("respond_approval", request_id=request_id, decision=decision)
 
     def events(self, lane: str | None = None) -> AsyncIterator[LaneEvent]:
         return _aiter(self.event_log)
+
+    def server_requests(self, lane: str | None = None) -> AsyncIterator[ServerRequestReceived]:
+        return _aiter(self.server_request_log)
 
     def raw_events(self, lane: str | None = None) -> AsyncIterator[dict[str, object]]:
         return _aiter(self.raw_log)

@@ -51,6 +51,10 @@ from .models import (
     SearchInput,
     SearchOutput,
     SendInput,
+    ServerRequestList,
+    ServerRequestListInput,
+    ServerRequestRespondInput,
+    ServerRequestRespondResult,
     ShowInput,
     StatusInput,
     StatusOutput,
@@ -580,6 +584,34 @@ INBOX_ACK = define_op(
     examples=[Example("needs-target", input={}, raises=ValidationError)],
 )
 
+SERVER_REQUEST_LIST = define_op(
+    id="server-request-list",
+    summary="List durable App Server interactive requests.",
+    input=ServerRequestListInput,
+    output=ServerRequestList,
+    intent="read",
+    idempotent=True,
+    handler=handlers.server_request_list,
+    examples=[Example("empty", input={"limit": 50}, output={"requests": []})],
+)
+
+SERVER_REQUEST_RESPOND = define_op(
+    id="server-request-respond",
+    summary="Respond once to a pending App Server interactive request.",
+    input=ServerRequestRespondInput,
+    output=ServerRequestRespondResult,
+    intent="write",
+    idempotent=False,
+    handler=handlers.server_request_respond,
+    examples=[
+        Example(
+            "missing",
+            input={"id": 999, "response": {"decision": "decline"}},
+            raises=NotFoundError,
+        )
+    ],
+)
+
 SUBSCRIBE = define_op(
     id="subscribe",
     summary="Subscribe a thread to events from another managed thread.",
@@ -855,6 +887,8 @@ _ALL = (
     INBOX_LIST,
     INBOX_READ,
     INBOX_ACK,
+    SERVER_REQUEST_LIST,
+    SERVER_REQUEST_RESPOND,
     SUBSCRIBE,
     SUBSCRIPTION_LIST,
     UNSUBSCRIBE,

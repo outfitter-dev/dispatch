@@ -14,13 +14,13 @@ mypy enforces that conformance, so the protocol can't silently drift.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
 import structlog
 
-from outfitter.dispatch.client.events import LaneEvent
+from outfitter.dispatch.client.events import LaneEvent, ServerRequestReceived
 from outfitter.dispatch.client.models import (
     AppModel,
     ApprovalPolicy,
@@ -28,6 +28,8 @@ from outfitter.dispatch.client.models import (
     ConfigInfo,
     Decision,
     Effort,
+    JsonRpcError,
+    JsonRpcId,
     Personality,
     ReasoningSummary,
     SandboxPolicy,
@@ -171,9 +173,19 @@ class LaneClient(Protocol):
 
     async def inject_items(self, thread_id: str, items: list[dict[str, object]]) -> None: ...
 
-    async def respond_approval(self, request_id: int, decision: Decision) -> None: ...
+    async def respond_server_request(
+        self,
+        request_id: JsonRpcId,
+        *,
+        result: Mapping[str, object] | None = None,
+        error: JsonRpcError | None = None,
+    ) -> None: ...
+
+    async def respond_approval(self, request_id: JsonRpcId, decision: Decision) -> None: ...
 
     def events(self, lane: str | None = None) -> AsyncIterator[LaneEvent]: ...
+
+    def server_requests(self, lane: str | None = None) -> AsyncIterator[ServerRequestReceived]: ...
 
     def raw_events(self, lane: str | None = None) -> AsyncIterator[dict[str, object]]: ...
 
@@ -188,3 +200,4 @@ class Ctx:
     abort: asyncio.Event
     policy: RuntimePolicy = field(default_factory=RuntimePolicy)
     capture: CapturePolicy = field(default_factory=CapturePolicy)
+    provider_session_id: str = ""

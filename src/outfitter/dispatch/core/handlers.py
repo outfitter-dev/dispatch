@@ -46,6 +46,7 @@ from outfitter.dispatch.registry.models import (
     LaneSync,
     MessageReceipt,
     ModelCatalogEntry,
+    ServerRequest,
     ServiceTierSource,
     Subscription,
     SubscriptionAckPolicy,
@@ -129,6 +130,11 @@ from .models import (
     SearchMatch,
     SearchOutput,
     SendInput,
+    ServerRequestList,
+    ServerRequestListInput,
+    ServerRequestRespondInput,
+    ServerRequestRespondResult,
+    ServerRequestView,
     ServiceTierView,
     ShowInput,
     StagedFile,
@@ -152,6 +158,8 @@ from .models import (
     WatchOutput,
 )
 from .selectors import resolve_managed_selector, resolve_thread_selector
+from .server_request_policy import expected_response
+from .server_requests import respond_to_server_request
 from .staging import StageContent, stage_session
 from .sync import scan_codex_jsonl
 from .turn_settings import (
@@ -1197,6 +1205,45 @@ async def inbox_ack(inp: InboxAckInput, ctx: Ctx) -> InboxAckResult:
         else await _resolve_self(ctx, inp.caller_thread_id)
     )
     return InboxAckResult(acked=await ctx.registry.ack_inbox_messages_for_lane(lane.id))
+
+
+async def _server_request_view(request: ServerRequest, ctx: Ctx) -> ServerRequestView:
+    if request.id is None:
+        raise RuntimeError("persisted interactive request has no local id")
+    lane = await ctx.registry.find_lane(request.lane) if request.lane is not None else None
+    return ServerRequestView(
+        id=request.id,
+        lane_ref=lane.ref if lane is not None else None,
+        lane=request.lane,
+        method=request.method,
+        category=request.category,
+        state=request.state,
+        received_at=request.received_at,
+        deadline_at=request.deadline_at,
+        resolved_at=request.resolved_at,
+        response_summary=request.response_summary,
+        error=request.error,
+        expected_response=expected_response(request.method),
+    )
+
+
+async def server_request_list(inp: ServerRequestListInput, ctx: Ctx) -> ServerRequestList:
+    lane = await _resolve(ctx, inp.lane) if inp.lane is not None else None
+    requests = await ctx.registry.list_server_requests(
+        state=inp.state,
+        lane=lane.id if lane is not None else None,
+        limit=inp.limit,
+    )
+    return ServerRequestList(
+        requests=[await _server_request_view(request, ctx) for request in requests]
+    )
+
+
+async def server_request_respond(
+    inp: ServerRequestRespondInput, ctx: Ctx
+) -> ServerRequestRespondResult:
+    request = await respond_to_server_request(ctx, inp.id, inp.response)
+    return ServerRequestRespondResult(request=await _server_request_view(request, ctx))
 
 
 async def subscribe(inp: SubscribeInput, ctx: Ctx) -> SubscriptionView:

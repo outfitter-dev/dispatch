@@ -15,9 +15,15 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+import structlog
 
 from outfitter.dispatch.client.client import AppServerClient
 from outfitter.dispatch.client.events import LaneEvent, TurnCompleted
+from outfitter.dispatch.client.models import SandboxPolicy
+from outfitter.dispatch.config import RuntimePolicy
+from outfitter.dispatch.contracts.context import Ctx
+from outfitter.dispatch.core.server_requests import ServerRequestManager, respond_to_server_request
+from outfitter.dispatch.registry.store import Registry
 
 from ._drive import run_turn, run_turn_autoapprove
 
@@ -76,6 +82,185 @@ async def test_approval_accept_resumes_write_turn(client: AppServerClient, work_
     notes = work_dir / "notes.txt"
     assert notes.exists(), "approval-accepted write turn did not create the file"
     assert "HELLO" in notes.read_text()
+
+
+async def test_dispatch_request_manager_completes_real_approval(
+    client: AppServerClient, work_dir: Path
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=work_dir, check=True)
+    thread = await client.thread_start(
+        cwd=str(work_dir), sandbox="workspace-write", approval_policy="untrusted", ephemeral=True
+    )
+    registry = await Registry.open()
+    await registry.add_lane(id=thread.id, handle="@approval-probe", source="own", status="idle")
+    ctx = Ctx(
+        client=client,
+        registry=registry,
+        log=structlog.get_logger(),
+        abort=asyncio.Event(),
+        policy=RuntimePolicy(owned_interactive_requests="permissive"),
+        provider_session_id="integration-app-server",
+    )
+    manager = ServerRequestManager(ctx)
+    manager_task = asyncio.create_task(manager.run())
+    await asyncio.sleep(0)  # register the eager generic request subscription
+    raw = client.raw_events(thread.id)
+    try:
+        await client.turn_start(
+            thread.id,
+            "Create a file named managed.txt whose entire contents are exactly: MANAGED",
+            str(work_dir),
+            approval_policy="untrusted",
+            sandbox_policy=SandboxPolicy(type="workspaceWrite"),
+            effort="low",
+        )
+        async with asyncio.timeout(200):
+            async for message in raw:
+                if message.get("method") == "turn/completed":
+                    break
+        requests = await registry.list_server_requests(state=None)
+        assert requests
+        assert {request.state for request in requests} == {"responded"}
+        assert (work_dir / "managed.txt").read_text().strip() == "MANAGED"
+    finally:
+        manager_task.cancel()
+        await asyncio.gather(manager_task, return_exceptions=True)
+        await registry.close()
+
+
+async def test_dispatch_request_manager_completes_plan_mode_user_input(
+    client: AppServerClient, work_dir: Path
+) -> None:
+    thread = await client.thread_start(cwd=str(work_dir), sandbox="read-only", ephemeral=True)
+    config = await client.config_read()
+    await client._request(  # test-only experimental setup; the request path is under test elsewhere
+        "thread/settings/update",
+        {
+            "threadId": thread.id,
+            "collaborationMode": {
+                "mode": "plan",
+                "settings": {
+                    "model": config.model or "gpt-5.5",
+                    "reasoning_effort": "low",
+                },
+            },
+        },
+    )
+    registry = await Registry.open()
+    await registry.add_lane(id=thread.id, handle="@input-probe", source="own", status="idle")
+    ctx = Ctx(
+        client=client,
+        registry=registry,
+        log=structlog.get_logger(),
+        abort=asyncio.Event(),
+        provider_session_id="integration-app-server",
+    )
+    manager_task = asyncio.create_task(ServerRequestManager(ctx).run())
+    await asyncio.sleep(0)
+    raw = client.raw_events(thread.id)
+
+    async def answer_request() -> int:
+        async with asyncio.timeout(90):
+            while True:
+                requests = await registry.list_server_requests(state="pending", lane=thread.id)
+                if requests:
+                    request = requests[0]
+                    assert request.category == "user_input"
+                    assert request.id is not None
+                    await respond_to_server_request(
+                        ctx, request.id, {"answers": {"color": {"answers": ["blue"]}}}
+                    )
+                    return request.id
+                await asyncio.sleep(0.05)
+
+    answer_task = asyncio.create_task(answer_request())
+    try:
+        await client.turn_start(
+            thread.id,
+            (
+                "Use request_user_input to ask id color with options red and blue. "
+                "After the answer, reply with the selected color only."
+            ),
+            str(work_dir),
+            effort="low",
+        )
+        async with asyncio.timeout(150):
+            async for message in raw:
+                if message.get("method") == "turn/completed":
+                    break
+        request_id = await answer_task
+        completed = await registry.get_server_request_by_id(request_id)
+        assert completed is not None
+        assert completed.state == "responded"
+    finally:
+        answer_task.cancel()
+        manager_task.cancel()
+        await asyncio.gather(answer_task, manager_task, return_exceptions=True)
+        await registry.close()
+
+
+async def test_dispatch_request_manager_completes_real_mcp_elicitation(
+    elicitation_client: AppServerClient, work_dir: Path
+) -> None:
+    client = elicitation_client
+    thread = await client.thread_start(
+        cwd=str(work_dir),
+        sandbox="read-only",
+        developer_instructions=(
+            "When asked to choose a color, call the dispatch_elicitation_probe ask_color tool."
+        ),
+        ephemeral=True,
+    )
+    registry = await Registry.open()
+    await registry.add_lane(id=thread.id, handle="@elicitation-probe", source="own")
+    ctx = Ctx(
+        client=client,
+        registry=registry,
+        log=structlog.get_logger(),
+        abort=asyncio.Event(),
+        provider_session_id="integration-app-server",
+    )
+    manager_task = asyncio.create_task(ServerRequestManager(ctx).run())
+    await asyncio.sleep(0)
+    raw = client.raw_events(thread.id)
+
+    async def answer_elicitation() -> int:
+        async with asyncio.timeout(90):
+            while True:
+                requests = await registry.list_server_requests(state="pending", lane=thread.id)
+                if requests:
+                    request = requests[0]
+                    assert request.category == "elicitation"
+                    assert request.id is not None
+                    await respond_to_server_request(
+                        ctx,
+                        request.id,
+                        {"action": "accept", "content": {"color": "blue"}},
+                    )
+                    return request.id
+                await asyncio.sleep(0.05)
+
+    answer_task = asyncio.create_task(answer_elicitation())
+    try:
+        await client.turn_start(
+            thread.id,
+            "Call the color-choice tool, then reply with its selected color only.",
+            str(work_dir),
+            effort="low",
+        )
+        async with asyncio.timeout(150):
+            async for message in raw:
+                if message.get("method") == "turn/completed":
+                    break
+        request_id = await answer_task
+        completed = await registry.get_server_request_by_id(request_id)
+        assert completed is not None
+        assert completed.state == "responded"
+    finally:
+        answer_task.cancel()
+        manager_task.cancel()
+        await asyncio.gather(answer_task, manager_task, return_exceptions=True)
+        await registry.close()
 
 
 async def test_persisted_resume_yields_live_events(client: AppServerClient, work_dir: Path) -> None:

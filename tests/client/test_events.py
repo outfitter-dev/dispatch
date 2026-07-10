@@ -8,6 +8,7 @@ from outfitter.dispatch.client.events import (
     GoalUpdated,
     ItemCompleted,
     LaneIdle,
+    ServerRequestReceived,
     StatusChanged,
     ThreadArchived,
     ThreadCompacted,
@@ -15,9 +16,12 @@ from outfitter.dispatch.client.events import (
     TurnCompleted,
     TurnFailed,
     TurnStarted,
+    classify_server_request,
     project_notification,
     project_server_request,
+    project_server_request_received,
 )
+from tests.fixtures import load_json
 
 
 def test_turn_started_and_completed_carry_lane_and_turn() -> None:
@@ -99,3 +103,55 @@ def test_file_change_approval_request_projects_as_file_change() -> None:
 
 def test_non_approval_server_request_projects_to_none() -> None:
     assert project_server_request(1, "item/tool/requestUserInput", {"threadId": "L1"}) is None
+
+
+def test_server_request_categories_cover_the_protocol_manifest_and_unknown_methods() -> None:
+    manifest = load_json("app_server", "protocol_manifest", "current.json")
+    methods = manifest["server_requests"]
+    assert isinstance(methods, list)
+    assert all(isinstance(method, str) for method in methods)
+    categories = {
+        method: classify_server_request(method) for method in methods if isinstance(method, str)
+    }
+    assert categories == {
+        "account/chatgptAuthTokens/refresh": "auth",
+        "applyPatchApproval": "approval",
+        "attestation/generate": "attestation",
+        "execCommandApproval": "approval",
+        "item/commandExecution/requestApproval": "approval",
+        "item/fileChange/requestApproval": "approval",
+        "item/permissions/requestApproval": "approval",
+        "item/tool/call": "tool_call",
+        "item/tool/requestUserInput": "user_input",
+        "mcpServer/elicitation/request": "elicitation",
+    }
+    assert classify_server_request("future/request") == "unknown"
+
+
+def test_generic_server_request_preserves_threadless_and_legacy_request_shapes() -> None:
+    auth = project_server_request_received(
+        "auth-7",
+        "account/chatgptAuthTokens/refresh",
+        {"audience": "app-server"},
+    )
+    assert auth == ServerRequestReceived(
+        method="account/chatgptAuthTokens/refresh",
+        request_id="auth-7",
+        category="auth",
+    )
+    assert auth.lane_id is None
+    assert auth.raw_params == {"audience": "app-server"}
+
+    legacy = project_server_request_received(
+        "approval-9",
+        "item/fileChange/requestApproval",
+        {"conversationId": "legacy-1", "itemId": "I1", "turnId": "T1"},
+    )
+    assert legacy.conversation_id == "legacy-1"
+    assert legacy.thread_id is None
+    assert legacy.lane_id == "legacy-1"
+    assert project_server_request(
+        "approval-9",
+        "item/fileChange/requestApproval",
+        {"conversationId": "legacy-1", "itemId": "I1", "turnId": "T1"},
+    ) == ApprovalRequested("legacy-1", "approval-9", "file_change", "I1", "T1")

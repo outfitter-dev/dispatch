@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+from .models import JsonRpcId, ServerRequestCategory
+
 ApprovalKind = Literal["command", "file_change"]
 
 
@@ -52,7 +54,7 @@ class ApprovalRequested(LaneEvent):
     """A server->client approval request. ``request_id`` is the JSON-RPC id to
     reply on; file-change requests carry no diff (correlate by ``item_id``)."""
 
-    request_id: int
+    request_id: JsonRpcId
     kind: ApprovalKind
     item_id: str | None = None
     turn_id: str | None = None
@@ -103,9 +105,38 @@ class ThreadUnarchived(LaneEvent):
     pass
 
 
+@dataclass(frozen=True)
+class ServerRequestReceived:
+    """A server->client JSON-RPC request, independent of a lane event.
+
+    Auth and attestation requests can be threadless. Raw params stay in memory
+    only and are omitted from the repr to reduce accidental credential exposure.
+    """
+
+    method: str
+    request_id: JsonRpcId
+    category: ServerRequestCategory
+    thread_id: str | None = None
+    conversation_id: str | None = None
+    turn_id: str | None = None
+    item_id: str | None = None
+    raw_params: dict[str, object] = field(compare=False, repr=False, default_factory=dict)
+
+    @property
+    def lane_id(self) -> str | None:
+        """Return the thread key, including the legacy ``conversationId`` form."""
+
+        return self.thread_id or self.conversation_id
+
+
 def _thread_id(params: dict[str, object]) -> str | None:
     tid = params.get("threadId")
     return tid if isinstance(tid, str) else None
+
+
+def _conversation_id(params: dict[str, object]) -> str | None:
+    cid = params.get("conversationId")
+    return cid if isinstance(cid, str) else None
 
 
 def _str(params: dict[str, object], key: str) -> str | None:
@@ -157,23 +188,83 @@ def project_notification(method: str, params: dict[str, object]) -> list[LaneEve
             return []
 
 
-def project_server_request(
-    request_id: int, method: str, params: dict[str, object]
-) -> LaneEvent | None:
-    """Project a server->client request (approvals) into a LaneEvent, or None."""
-    lane = _thread_id(params)
+_SERVER_REQUEST_CATEGORIES: dict[str, ServerRequestCategory] = {
+    "account/chatgptAuthTokens/refresh": "auth",
+    "applyPatchApproval": "approval",
+    "attestation/generate": "attestation",
+    "execCommandApproval": "approval",
+    "item/commandExecution/requestApproval": "approval",
+    "item/fileChange/requestApproval": "approval",
+    "item/permissions/requestApproval": "approval",
+    "item/tool/call": "tool_call",
+    "item/tool/requestUserInput": "user_input",
+    "mcpServer/elicitation/request": "elicitation",
+}
+
+
+def classify_server_request(method: str) -> ServerRequestCategory:
+    """Classify known App Server server-request methods, preserving unknowns."""
+
+    return _SERVER_REQUEST_CATEGORIES.get(method, "unknown")
+
+
+def project_server_request_received(
+    request_id: JsonRpcId, method: str, params: dict[str, object]
+) -> ServerRequestReceived:
+    """Normalize every server->client request, including threadless requests."""
+
+    return ServerRequestReceived(
+        method=method,
+        request_id=request_id,
+        category=classify_server_request(method),
+        thread_id=_thread_id(params),
+        conversation_id=_conversation_id(params),
+        turn_id=_str(params, "turnId"),
+        item_id=_str(params, "itemId"),
+        raw_params=params,
+    )
+
+
+def project_approval_request(request: ServerRequestReceived) -> ApprovalRequested | None:
+    """Retain the normalized lane-event projection for supported approvals."""
+
+    lane = request.lane_id
     if lane is None:
         return None
-    item = _str(params, "itemId")
-    turn = _str(params, "turnId")
-    raw: dict[str, object] = {"id": request_id, "method": method, "params": params}
-    match method:
+    raw: dict[str, object] = {
+        "id": request.request_id,
+        "method": request.method,
+        "params": request.raw_params,
+    }
+    match request.method:
         case "item/commandExecution/requestApproval":
-            return ApprovalRequested(lane, request_id, "command", item, turn, raw_payload=raw)
+            return ApprovalRequested(
+                lane,
+                request.request_id,
+                "command",
+                request.item_id,
+                request.turn_id,
+                raw_payload=raw,
+            )
         case "item/fileChange/requestApproval":
-            return ApprovalRequested(lane, request_id, "file_change", item, turn, raw_payload=raw)
+            return ApprovalRequested(
+                lane,
+                request.request_id,
+                "file_change",
+                request.item_id,
+                request.turn_id,
+                raw_payload=raw,
+            )
         case _:
             return None
+
+
+def project_server_request(
+    request_id: JsonRpcId, method: str, params: dict[str, object]
+) -> ApprovalRequested | None:
+    """Compatibility wrapper for the legacy approval LaneEvent projection."""
+
+    return project_approval_request(project_server_request_received(request_id, method, params))
 
 
 def _active_flags(params: dict[str, object]) -> tuple[str, ...]:

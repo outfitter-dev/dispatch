@@ -9,7 +9,9 @@ or auth is unavailable (e.g. CI), so these never block the unit gate.
 
 from __future__ import annotations
 
+import json
 import shutil
+import sys
 import tempfile
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
@@ -71,6 +73,21 @@ def _path() -> str:
 
 @pytest_asyncio.fixture
 async def client(codex_home: Path) -> AsyncIterator[AppServerClient]:
+    c = await connect(codex_home)
+    try:
+        yield c
+    finally:
+        await c.close()
+
+
+@pytest_asyncio.fixture
+async def elicitation_client(codex_home: Path) -> AsyncIterator[AppServerClient]:
+    server = Path(__file__).parents[1] / "fixtures" / "mcp" / "elicitation_server.py"
+    (codex_home / "config.toml").write_text(
+        "[mcp_servers.dispatch_elicitation_probe]\n"
+        f"command = {json.dumps(sys.executable)}\n"
+        f"args = [{json.dumps(str(server))}]\n"
+    )
     c = await connect(codex_home)
     try:
         yield c

@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from typing import Literal
 
 from outfitter.dispatch.client.events import (
-    ApprovalRequested,
     LaneEvent,
     LaneIdle,
     TurnCompleted,
@@ -22,7 +21,7 @@ from outfitter.dispatch.registry.models import Lane, Subscription
 from . import queue
 from .message_attribution import codex_thread_link, render_dispatch_message
 
-SubscriptionEvent = Literal["completed", "failed", "idle", "approval", "activity"]
+SubscriptionEvent = Literal["completed", "failed", "idle", "approval", "attention", "activity"]
 
 
 @dataclass(frozen=True)
@@ -54,15 +53,43 @@ async def process_event_subscriptions(ctx: Ctx, lane: Lane, event: LaneEvent) ->
     return matched
 
 
+async def process_server_request_subscriptions(
+    ctx: Ctx,
+    lane: Lane,
+    *,
+    request_id: int,
+    category: str,
+    method: str,
+) -> int:
+    """Route non-approval interactive requests through needs-attention subscriptions."""
+
+    info = SubscriptionEventInfo(
+        "approval" if category == "approval" else "attention",
+        request_id=request_id,
+        detail=f"{category}: {method}",
+    )
+    matched = 0
+    for subscription in await ctx.registry.list_subscriptions(target_lane=lane.id, state="active"):
+        if not _matches(subscription, info.name):
+            continue
+        matched += 1
+        try:
+            await _deliver_subscription(ctx, lane, subscription, info)
+        except Exception:
+            ctx.log.exception(
+                "subscription.delivery_failed",
+                subscription=subscription.id,
+                lane=lane.id,
+                event_name=info.name,
+            )
+    return matched
+
+
 def _event_info(event: LaneEvent) -> SubscriptionEventInfo | None:
     if isinstance(event, TurnCompleted):
         return SubscriptionEventInfo("completed", turn_id=event.turn_id)
     if isinstance(event, TurnFailed):
         return SubscriptionEventInfo("failed", turn_id=event.turn_id, detail=event.message)
-    if isinstance(event, ApprovalRequested):
-        return SubscriptionEventInfo(
-            "approval", turn_id=event.turn_id, request_id=event.request_id, detail=event.kind
-        )
     if isinstance(event, LaneIdle):
         return SubscriptionEventInfo("idle")
     return SubscriptionEventInfo("activity")
@@ -78,8 +105,10 @@ def _matches(subscription: Subscription, event_name: SubscriptionEvent) -> bool:
             return event_name == "failed"
         case "idle":
             return event_name == "idle"
-        case "approval" | "needs-attention":
+        case "approval":
             return event_name == "approval"
+        case "needs-attention":
+            return event_name in {"approval", "attention"}
         case "activity":
             return True
 

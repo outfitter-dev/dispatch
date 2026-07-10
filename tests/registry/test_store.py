@@ -13,7 +13,12 @@ import pytest
 import pytest_asyncio
 
 from outfitter.dispatch.contracts.errors import NotFoundError
-from outfitter.dispatch.registry.models import LaneRuntimeSettings, LaneSync, Subscription
+from outfitter.dispatch.registry.models import (
+    SERVER_REQUEST_TEXT_LIMIT,
+    LaneRuntimeSettings,
+    LaneSync,
+    Subscription,
+)
 from outfitter.dispatch.registry.refs import BASE58BTC_ALPHABET, codex_ref_payload
 from outfitter.dispatch.registry.store import SCHEMA_VERSION, Registry
 from tests.fixtures.registry.builders import (
@@ -23,6 +28,7 @@ from tests.fixtures.registry.builders import (
     message_receipt,
     model_catalog_entry,
     provider_event,
+    server_request,
     thread_item,
     thread_item_ref,
     thread_turn,
@@ -430,6 +436,196 @@ async def test_provider_event_history_index_roundtrips_and_dedupes(store: Regist
     assert runtime.status == "busy"
     assert runtime.latest_turn_status == "started"
     assert await store.get_lane_runtime_state("L1") == runtime
+
+
+async def test_server_requests_roundtrip_dedupe_and_preserve_int_string_ids(
+    store: Registry,
+) -> None:
+    await store.add_lane(id="L1", handle="@lane", source="own")
+    numeric = await store.observe_server_request(server_request(request_id=1))
+    duplicate = await store.observe_server_request(
+        server_request(request_id=1, received_at="2026-06-11T12:01:00+00:00")
+    )
+    string = await store.observe_server_request(server_request(request_id="1"))
+
+    assert duplicate == numeric
+    pending = await store.list_pending_server_requests()
+    assert {request.request_id for request in pending} == {1, "1"}
+    all_requests = await store.list_server_requests(state=None)
+    assert {request.request_id for request in all_requests} == {1, "1"}
+    assert (
+        await store.get_server_request(
+            provider="codex",
+            provider_session_id="app-server-1",
+            provider_thread_id="thread-1",
+            request_id="1",
+        )
+        == string
+    )
+
+
+async def test_server_request_observation_reports_atomic_insert_winner(store: Registry) -> None:
+    await store.add_lane(id="L1", handle="@lane", source="own")
+    first, duplicate = await asyncio.gather(
+        store.observe_server_request_once(server_request(request_id=7)),
+        store.observe_server_request_once(server_request(request_id=7)),
+    )
+
+    assert first.request.id == duplicate.request.id
+    assert {first.inserted, duplicate.inserted} == {True, False}
+
+
+async def test_server_requests_support_threadless_recovery_and_terminal_claims(
+    store: Registry,
+) -> None:
+    observed = await store.observe_server_request(
+        server_request(provider_thread_id=None, lane=None, request_id="approval-1")
+    )
+    assert observed.id is not None
+
+    assert await store.list_pending_server_requests() == [observed]
+    human_claim, timeout_claim = await asyncio.gather(
+        store.claim_server_request_by_id(observed.id),
+        store.claim_server_request_by_id(observed.id),
+    )
+
+    claim = human_claim or timeout_claim
+    assert claim is not None
+    assert claim.state == "responding"
+    assert (human_claim is None) != (timeout_claim is None)
+    assert await store.list_server_requests(state="responding") == [claim]
+    assert await store.list_pending_server_requests() == []
+    final = await store.finalize_server_request_by_id(
+        observed.id,
+        state="responded" if human_claim is not None else "timed_out",
+        response_summary="accepted by operator" if human_claim is not None else None,
+        error="deadline elapsed" if timeout_claim is not None else None,
+    )
+    assert final is not None
+    assert final.resolved_at == store.now_iso()
+    assert final.state in {"responded", "timed_out"}
+    assert (
+        await store.observe_server_request(
+            server_request(provider_thread_id=None, lane=None, request_id="approval-1")
+        )
+    ) == final
+    assert (await store.get_server_request_by_id(observed.id)) == final
+
+
+async def test_server_request_claim_bounds_terminal_summary_and_error(store: Registry) -> None:
+    await store.observe_server_request(server_request(lane=None))
+    request = await store.get_server_request(
+        provider="codex",
+        provider_session_id="app-server-1",
+        provider_thread_id="thread-1",
+        request_id=1,
+    )
+    assert request is not None
+    assert request.id is not None
+    assert (
+        await store.finalize_server_request_by_id(request.id, state="failed", error="not claimed")
+    ) is None
+    claimed = await store.claim_server_request_by_id(request.id)
+    assert claimed is not None
+    assert claimed.state == "responding"
+    finalized = await store.finalize_server_request_by_id(
+        request.id,
+        state="failed",
+        response_summary="s" * (SERVER_REQUEST_TEXT_LIMIT + 1),
+        error="e" * (SERVER_REQUEST_TEXT_LIMIT + 1),
+    )
+
+    assert finalized is not None
+    assert finalized.response_summary == "s" * SERVER_REQUEST_TEXT_LIMIT
+    assert finalized.error == "e" * SERVER_REQUEST_TEXT_LIMIT
+    assert await store.finalize_server_request_by_id(request.id, state="responded") is None
+
+
+async def test_server_request_pending_rows_survive_reopen(tmp_path: Path) -> None:
+    db = tmp_path / "pending-requests.sqlite3"
+    original = await Registry.open(db, now=_clock)
+    await original.observe_server_request(server_request(provider_thread_id=None, lane=None))
+    await original.close()
+
+    recovered = await Registry.open(db, now=_clock)
+    try:
+        pending = await recovered.list_pending_server_requests()
+        assert [(request.provider_thread_id, request.request_id) for request in pending] == [
+            (None, 1)
+        ]
+    finally:
+        await recovered.close()
+
+
+async def test_server_request_restart_reuses_wire_ids_and_fails_old_open_rows(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "request-restart.sqlite3"
+    original = await Registry.open(db, now=_clock)
+    terminal = await original.observe_server_request(
+        server_request(provider_session_id="app-server-1", lane=None, request_id=1)
+    )
+    assert terminal.id is not None
+    assert await original.claim_server_request_by_id(terminal.id) is not None
+    assert (
+        await original.finalize_server_request_by_id(terminal.id, state="responded")
+    ) is not None
+    old_pending = await original.observe_server_request(
+        server_request(provider_session_id="app-server-1", lane=None, request_id=2)
+    )
+    old_responding = await original.observe_server_request(
+        server_request(provider_session_id="app-server-1", lane=None, request_id=3)
+    )
+    assert old_responding.id is not None
+    assert await original.claim_server_request_by_id(old_responding.id) is not None
+    await original.close()
+
+    recovered = await Registry.open(db, now=_clock)
+    try:
+        reused = await recovered.observe_server_request(
+            server_request(provider_session_id="app-server-2", lane=None, request_id=1)
+        )
+        failed = await recovered.fail_open_server_requests_except_session(
+            "app-server-2", error="connection restarted"
+        )
+
+        assert failed == 2
+        assert reused.state == "pending"
+        assert (await recovered.get_server_request_by_id(terminal.id)).state == "responded"  # type: ignore[union-attr]
+        assert old_pending.id is not None
+        assert (await recovered.get_server_request_by_id(old_pending.id)).state == "failed"  # type: ignore[union-attr]
+        assert (await recovered.get_server_request_by_id(old_responding.id)).state == "failed"  # type: ignore[union-attr]
+        assert await recovered.list_pending_server_requests(provider_session_id="app-server-2") == [
+            reused
+        ]
+    finally:
+        await recovered.close()
+
+
+async def test_v13_registry_migration_adds_server_requests(tmp_path: Path) -> None:
+    db = tmp_path / "registry-v13.db"
+    async with aiosqlite.connect(db) as conn:
+        await conn.execute("PRAGMA user_version = 13")
+        await conn.commit()
+
+    migrated = await Registry.open(db, now=_clock)
+    try:
+        saved = await migrated.observe_server_request(
+            server_request(provider_thread_id=None, lane=None)
+        )
+        assert saved.provider_thread_id is None
+        async with migrated._conn.execute("PRAGMA table_info(server_requests)") as cur:
+            columns = {str(row["name"]) for row in await cur.fetchall()}
+        assert {
+            "id",
+            "provider_session_id",
+            "provider_thread_key",
+            "request_id_json",
+            "response_summary",
+            "error",
+        } <= columns
+    finally:
+        await migrated.close()
 
 
 async def test_thread_history_snapshot_batches_rows_prunes_and_summarizes(
