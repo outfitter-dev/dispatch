@@ -1,28 +1,31 @@
-# Codex App Server — verification against local binary (refreshed 2026-06-09)
+# Codex App Server — verification against local binary (refreshed 2026-07-09)
 
 Verifies the "Codex App Server Technical Report (§1–15)" against the actually installed binary. Report is accurate for its pinned era (~CLI 0.132); several conclusions are already stale on the newer local binary.
 
 ## Ground truth on this machine
 
-Refreshed 2026-06-09:
+Refreshed 2026-07-09:
 
-- `~/.local/bin/codex` and `/Applications/Codex.app/Contents/Resources/codex`
-  both report `codex-cli 0.137.0-alpha.4`.
-- `codex app-server daemon version` could not connect because the managed daemon
-  control socket was absent:
-  `~/.codex/app-server-control/app-server-control.sock` did not exist.
-- Desktop `Codex.app` still spawns separate
-  `codex app-server --listen stdio://` processes per active thread. A Desktop
-  SSH/proxy process was also visible for a remote `mini` host, but that proxy is
-  not yet a supported Dispatch transport.
+- `/Applications/ChatGPT.app/Contents/Resources/codex` reports
+  `codex-cli 0.144.0-alpha.4`. The latest stable npm/GitHub release is
+  `0.144.0`; its generated request inventory matches the bundled alpha used for
+  the local probes.
+- `codex app-server daemon version` reports a running managed daemon with CLI
+  `0.144.0-alpha.4` and App Server `0.142.5`. Dispatch's current production
+  topology still spawns its own stdio App Server from the resolved `codex`
+  binary; it does not silently inherit the managed daemon's older protocol.
+- The June process survey also found per-thread desktop stdio servers and an
+  SSH/proxy process for a remote host. Those observations were not re-probed in
+  this schema refresh and remain transport research, not a supported Dispatch
+  dependency.
 
 Original 2026-06-02 behavioral probes ran against `codex-cli 0.136.0-alpha.2`
 with a managed daemon reporting `appServerVersion:"0.135.0-alpha.1"`. Keep the
 empirical findings below unless re-probed; update schema facts per binary.
 
-The Python SDK (`openai-codex`) pinned an older app-server binary during the
-2026-06-02 review. Re-verify before adopting it; Dispatch still drives the
-installed `codex` binary directly.
+The public Python SDK (`openai-codex 0.1.0b3`) still pins
+`openai-codex-cli-bin==0.137.0a4`. Dispatch therefore does not depend on that
+package; it continues to drive the installed `codex` binary directly.
 
 ## Biggest delta vs the report: daemon + proxy = attach to a running server
 
@@ -42,17 +45,19 @@ Regenerate any time (read-only, no network):
 codex app-server generate-json-schema --out <DIR>                # stable
 codex app-server generate-json-schema --experimental --out <DIR> # + gated
 ```
-Current 0.137.0-alpha.4 generated schema files: stable = 256, experimental =
-312. Current method counts: stable client requests = 82, experimental client
-requests = 112; server request/notification counts did not materially change in
-the refresh. Protocol is namespaced `v1/` (just Initialize) + `v2/` (everything
-else). Initialize is still v1 and returns `{codexHome, platformFamily,
-platformOs, userAgent}`.
+Current 0.144.0 generated schema files: stable = 267, experimental = 337.
+Current method counts: stable client requests = 87, experimental client requests
+= 122, server requests = 10, server notifications = 68. Protocol is namespaced
+`v1/` (just Initialize) + `v2/` (everything else). Initialize is still v1 and
+returns `{codexHome, platformFamily, platformOs, userAgent}`. The compact,
+generated inventory is checked in at
+`tests/fixtures/app_server/protocol_manifest/current.json`; refresh it with
+`just app-server-manifest`.
 
 ### Client → server methods (STABLE — non-experimental)
-Lifecycle/threads/turns: `thread/start resume fork read list loaded/list archive unarchive unsubscribe metadata/update name/set rollback inject_items compact/start goal/{get,set,clear} approveGuardianDeniedAction shellCommand`, `turn/start steer interrupt`. Accounts/models/config: `account/{read,login/start,login/cancel,logout, rateLimits/read,sendAddCreditsNudgeEmail}`, `model/list`, `modelProvider/capabilities/read`, `config/{read,value/write,batchWrite, mcpServer/reload}`, `configRequirements/read`, `permissionProfile/list`. Tools/ecosystem: `skills/{list,config/write,extraRoots/set}`, `plugin/{install,installed,list,read,uninstall,skill/read,share/*}`, `marketplace/{add,remove,upgrade}`, `hooks/list`, `app/list`, `review/start`, `mcpServer/{tool/call,resource/read,oauth/login}`, `mcpServerStatus/list`. System: `command/exec{,/write,/resize,/terminate}`, full `fs/*` (`readFile writeFile readDirectory createDirectory copy remove getMetadata watch unwatch`), stable `fuzzyFileSearch`, `externalAgentConfig/{detect,import}`, `feedback/upload`, `experimentalFeature/{list,enablement/set}`, `windowsSandbox/{readiness,setupStart}`.
+Lifecycle/threads/turns: `thread/start resume fork read list loaded/list archive unarchive delete unsubscribe metadata/update name/set rollback inject_items compact/start goal/{get,set,clear} approveGuardianDeniedAction shellCommand`, `turn/start steer interrupt`. Accounts/models/config: `account/{read,login/start,login/cancel,logout, usage/read,workspaceMessages/read,rateLimits/read,rateLimitResetCredit/consume,sendAddCreditsNudgeEmail}`, `model/list`, `modelProvider/capabilities/read`, `config/{read,value/write,batchWrite,mcpServer/reload}`, `configRequirements/read`, `permissionProfile/list`. Tools/ecosystem: `skills/{list,config/write,extraRoots/set}`, `plugin/{install,installed,list,read,uninstall,skill/read,share/*}`, `marketplace/{add,remove,upgrade}`, `hooks/list`, `app/list`, `review/start`, `mcpServer/{tool/call,resource/read,oauth/login}`, `mcpServerStatus/list`, `externalAgentConfig/{detect,import,import/readHistories}`. System: `command/exec{,/write,/resize,/terminate}`, full `fs/*` (`readFile writeFile readDirectory createDirectory copy remove getMetadata watch unwatch`), stable `fuzzyFileSearch`, `feedback/upload`, `experimentalFeature/{list,enablement/set}`, `windowsSandbox/{readiness,setupStart}`.
 
-0.137 parameter deltas Dispatch should care about:
+0.144 deltas Dispatch should care about:
 
 - `thread/list` now accepts native `archived`, `cwd`, `searchTerm`,
   `modelProviders`, `sourceKinds`, and sort filters. Dispatch should prefer
@@ -62,7 +67,10 @@ Lifecycle/threads/turns: `thread/start resume fork read list loaded/list archive
   Dispatch resolves explicit `service_tier` values before projecting them
   through configured `new` turns.
 - `model/list` is the authoritative catalog for model ids, reasoning-effort
-  support, and service tiers. Prefer `serviceTiers` over the deprecated
+  support, input modalities, personality support, upgrade targets, and service
+  tiers. Reasoning effort is now a model-defined non-empty string, not a closed
+  protocol enum; current models advertise values including `max` and `ultra`.
+  Prefer `serviceTiers` over the deprecated
   `additionalSpeedTiers`; user-facing labels such as `fast` can map to a
   server-facing tier id such as `priority` when the catalog advertises a tier
   named `Fast`.
@@ -71,9 +79,17 @@ Lifecycle/threads/turns: `thread/start resume fork read list loaded/list archive
   truth but does not send omitted model/tier values just to mirror config.
 - `thread/resume` accepts `excludeTurns` / `initialTurnsPage`, useful for future
   live observation without heavy initial history hydration.
+- `thread/fork.lastTurnId` forks history through a specific completed turn,
+  inclusive. Dispatch exposes it as `last_turn_id` in the authored fork op and
+  its derived MCP schema.
+- `thread/list` responses now include `backwardsCursor`; thread rows include
+  `recencyAt`, `cliVersion`, and subagent nickname/role metadata.
+- Stable account usage/workspace-message methods and permanent `thread/delete`
+  exist, but Dispatch does not yet expose them. Credits and permanent deletion
+  need explicit product/policy decisions rather than implicit pass-throughs.
 
 ### Client → server methods (EXPERIMENTAL-gated — diff stable↔exp)
-`process/{spawn,kill,writeStdin,resizePty}` (unsandboxed; matches report's warning), `thread/{search, turns/list, turns/items/list, settings/update, memoryMode/set, increment/decrementElicitation, backgroundTerminals/clean}`, `thread/realtime/{start,stop,appendAudio,appendText,listVoices}`, `remoteControl/{enable,disable,status/read,pairing/start,client/list,client/revoke}`, `collaborationMode/list`, `environment/add`, experimental `fuzzyFileSearch/session{Start,Update,Stop}`, `memory/reset`, `mockExperimentalMethod`.
+`process/{spawn,kill,writeStdin,resizePty}` (unsandboxed; matches report's warning), `thread/{search,turns/list,items/list,settings/update,memoryMode/set,increment_elicitation,decrement_elicitation,backgroundTerminals/{clean,list,terminate}}`, `thread/realtime/{start,stop,appendAudio,appendSpeech,appendText,listVoices}`, `remoteControl/{enable,disable,status/read,pairing/{start,status},client/{list,revoke}}`, `collaborationMode/list`, `environment/{add,info}`, experimental `fuzzyFileSearch/session{Start,Update,Stop}`, `memory/reset`, `mock/experimentalMethod`.
 > Note: `thread/turns/list` and `thread/search` are EXPERIMENTAL here — the report
 > listed turns/list as Supported. The realtime *control* verbs are gated, but the
 > realtime *notifications* below ship in stable.
@@ -82,15 +98,17 @@ Lifecycle/threads/turns: `thread/start resume fork read list loaded/list archive
 `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`, `item/permissions/requestApproval`, `item/tool/call`, `item/tool/requestUserInput`, `mcpServer/elicitation/request`, `account/chatgptAuthTokens/refresh`, `attestation/generate`.
 
 ### Server → client notifications (reducer event grammar)
-Turn/item: `turn/{started,completed,diff/updated,plan/updated}`, `item/{started,completed}`, `item/agentMessage/delta`, `item/reasoning/{textDelta,summaryTextDelta,summaryPartAdded}`, `item/commandExecution/{outputDelta,terminalInteraction}`, `item/fileChange/{outputDelta,patchUpdated}`, `item/plan/delta`, `item/mcpToolCall/progress`. Thread: `thread/{started,closed,archived,unarchived,compacted,status/changed, tokenUsage/updated,name/updated,settings/updated,goal/{set→updated,cleared}}`. NEW safety/automation layers absent from report:
+Turn/item: `turn/{started,completed,diff/updated,plan/updated,moderationMetadata}`, `item/{started,completed}`, `item/agentMessage/delta`, `item/reasoning/{textDelta,summaryTextDelta,summaryPartAdded}`, `item/commandExecution/{outputDelta,terminalInteraction}`, `item/fileChange/{outputDelta,patchUpdated}`, `item/plan/delta`, `item/mcpToolCall/progress`. Thread: `thread/{started,closed,archived,unarchived,deleted,compacted,status/changed,tokenUsage/updated,name/updated,settings/updated,goal/{set→updated,cleared}}`. NEW safety/automation layers absent from report:
 - **Guardian / auto-approval review**: `item/autoApprovalReview/{started,completed}` + client method `thread/approveGuardianDeniedAction` + `GuardianWarningNotification`.
 - **Hooks**: `hook/{started,completed}` + `hooks/list`.
 - **Realtime (voice)**: `thread/realtime/{started,closed,error,itemAdded,sdp, outputAudio/delta,transcript/{delta,done}}` — ships in stable schema.
 - **Remote control**: `remoteControl/status/changed`.
-- **Fs watch**: `fs/changed`; **model**: `model/{rerouted,verification}`; `serverRequest/resolved`; `skills/changed`; `app/list/updated`.
+- **Fs watch**: `fs/changed`; **model**: `model/{rerouted,verification,safetyBuffering/updated}`; `serverRequest/resolved`; `skills/changed`; `app/list/updated`.
 
 ## What still holds from the report
-- Python SDK = the real App Server client (`CodexClient` launches `app-server --listen stdio://`, does `initialize`→`initialized`, exposes `approval_handler` defaulting to **auto-accept** — override before any writes).
+- Python SDK is a real App Server client, but its public package currently pins
+  the older `0.137.0a4` binary. Dispatch's direct installed-binary client remains
+  the compatibility path.
 - TS SDK = `codex exec --experimental-json` wrapper, not App Server.
 - Pin the binary + generate schemas from it; treat experimental as moving ground.
 - `thread/shellCommand` runs outside sandbox; `process/spawn` unsandboxed.
@@ -161,7 +179,8 @@ Two WS clients (A, B), one `ws://` server. **Earlier "partial fan-out" was wrong
 - Lifecycle: initialize → initialized → thread/start → turn/start → stream → resume.
 - Approval responder: reply `{id,result:{decision}}`; watch `waitingOnApproval` flag + `serverRequest/resolved`; correlate file diffs by `itemId`.
 - Sandbox: thread `sandbox:"read-only|workspace-write|danger-full-access"`; turn `sandboxPolicy:{type:"readOnly|workspaceWrite|externalSandbox|dangerFullAccess"}`.
-- Schema: regenerate per binary; current 0.137.0-alpha.4 generated 256 stable /
-  312 experimental schema files.
+- Schema: regenerate per binary; current 0.144.0 generated 267 stable / 337
+  experimental schema files. The checked-in compact manifest makes drift
+  reviewable without committing hundreds of generated schema files.
 
 Scratch this session: schema at path in `/tmp/codex-appserver-scratch-path`; probe scripts `/tmp/codex_{stdio,ws,fanout,lab4}.py`.

@@ -514,7 +514,10 @@ QUERY = define_op(
 
 MODELS = define_op(
     id="models",
-    summary="List available Codex models and service tiers from the App Server catalog.",
+    summary=(
+        "List Codex models, reasoning efforts, modalities, personality support, "
+        "and service tiers from the App Server catalog."
+    ),
     input=ModelsInput,
     output=ModelCatalogOutput,
     intent="read",

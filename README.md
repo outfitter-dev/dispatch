@@ -99,8 +99,9 @@ assistant work completed. Use `get` to inspect the latest turn state and persist
 App Server errors, or `watch` for a bounded live event sample. Slash commands in
 `--text` are plain text; use `--goal` when creating a native App Server goal.
 Use `dispatch models` before pinning model or service-tier presets; Dispatch
-resolves aliases such as `fast` from the live App Server model catalog and keeps
-omitted model/tier values on Codex defaults.
+resolves aliases such as `fast` from the live App Server model catalog, accepts
+model-defined reasoning efforts, reports input/personality capabilities, and
+keeps omitted model/tier values on Codex defaults.
 
 For the operator guide, CLI/MCP examples, triggers, and plugin setup, start at
 [`docs/usage/README.md`](docs/usage/README.md).

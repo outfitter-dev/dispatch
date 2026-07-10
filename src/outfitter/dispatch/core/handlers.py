@@ -2189,6 +2189,7 @@ async def fork(inp: ForkInput, ctx: Ctx) -> LaneRef:
         service_tier=explicit_service_tier,
         model=inp.model,
         model_provider=inp.model_provider,
+        last_turn_id=inp.last_turn_id,
         ephemeral=inp.ephemeral,
     )
     handle = _handle(inp.name)
@@ -2350,6 +2351,9 @@ def _model_catalog_item(entry: ModelCatalogEntry) -> ModelCatalogItem:
             )
             for tier in entry.service_tiers
         ],
+        input_modalities=entry.input_modalities,
+        supports_personality=entry.supports_personality,
+        upgrade=entry.upgrade,
         aliases=aliases,
         last_seen_at=entry.last_seen_at,
     )

@@ -75,7 +75,10 @@ Open/attach lanes (owned rw; attached observe-only unless ADR-0005 cleared), sen
 ## Risk register
 - **Cross-process contention** (own vs desktop app-server, shared `~/.codex`): bounded by the Phase-1 spike; gates ADR-0005. Advisory lock is dispatch-local.
 - **Single-stream backpressure:** one stdio connection multiplexes all lanes; head-of-line under concurrent turns untested → Phase-1 spike (F).
-- **App-server version drift:** pin the binary; drive it directly (not `openai-codex`, which pins older CLI 0.132 vs local 0.136); regenerate schema per binary.
+- **App-server version drift:** record the binary and drive it directly. The
+  public `openai-codex 0.1.0b3` package pins CLI `0.137.0a4`, behind Dispatch's
+  `0.144.0` compatibility baseline; regenerate the compact protocol manifest
+  per binary.
 - **MCP transport:** stdio first; SSE/streamable-HTTP later.
 - **Scheduler correctness:** injectable clock for deterministic time-trigger tests.
 - **Graphite sync:** repo must be synced to the Graphite account before `gt submit` works (current blocker; PRs opened via `gh` until then).

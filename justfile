@@ -26,6 +26,10 @@ pypi-smoke *args:
 scenario *args:
     uv run python scripts/run_scenario.py {{args}}
 
+# Refresh the compact App Server compatibility manifest from generated schemas.
+app-server-manifest *args:
+    uv run python scripts/refresh_app_server_manifest.py {{args}}
+
 # Lint with ruff.
 lint:
     uv run ruff check .

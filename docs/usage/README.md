@@ -278,11 +278,14 @@ uv run dispatch schema models
 ```
 
 `models` refreshes from App Server `model/list` by default and reports the
-configured default from `config/read`, each model's reasoning efforts, service
-tiers, and aliases. For example, the user-facing `fast` alias resolves through
-the advertised service tier named `Fast` and may send `serviceTier:"priority"`
-to the App Server. If a requested tier is unavailable for the selected/default
-model, `new` fails before starting the thread and prints the available tiers.
+configured default from `config/read`, every page of the catalog, each model's
+reasoning efforts, input modalities, personality support, upgrade target,
+service tiers, and aliases. Reasoning efforts are model-defined strings; do not
+assume the old `low` through `xhigh` set covers current models. For example, the
+user-facing `fast` alias resolves through the advertised service tier named
+`Fast` and may send `serviceTier:"priority"` to the App Server. If a requested
+model, effort, or tier is unavailable, `new` fails before starting the thread
+and prints the available choices.
 `--no-refresh` reads the local catalog cache plus current config defaults. On a
 first run, an empty cache reports `catalog_state: "empty"` plus a hint to run
 `dispatch models` without `--no-refresh`.
@@ -957,6 +960,8 @@ read/write/destroy, and daemon read tools. The daemon read tool includes the
 `models` op so agents can discover valid model/service-tier choices without
 guessing. Each grouped call chooses an `op` inside the tool, and that op's
 arguments/schema still derive from the same contract registry.
+The thread-write tool's `fork` op accepts `last_turn_id`, which asks App Server
+to fork history through that completed turn, inclusive.
 Structured MCP outputs that identify a managed thread include the dispatch `ref`, full
 Codex id, title/handle, managed/source/status, and cwd when available.
 

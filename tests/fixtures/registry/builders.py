@@ -58,6 +58,9 @@ def model_catalog_entry(
         default_service_tier="priority",
         service_tiers=service_tiers if service_tiers is not None else [service_tier_entry()],
         additional_speed_tiers=["fast"],
+        input_modalities=["text", "image"],
+        supports_personality=True,
+        upgrade="gpt-next",
         first_seen_at=seen_at,
         last_seen_at=seen_at,
     )

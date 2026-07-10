@@ -67,6 +67,8 @@ class FakeLaneClient:
                 id="gpt-5.5",
                 default_reasoning_effort="xhigh",
                 supported_reasoning_efforts=["low", "medium", "high", "xhigh"],
+                input_modalities=["text", "image"],
+                supports_personality=True,
                 service_tiers=[
                     ModelServiceTier(
                         id="priority",
@@ -151,6 +153,7 @@ class FakeLaneClient:
         service_tier: str | None = None,
         model: str | None = None,
         model_provider: str | None = None,
+        last_turn_id: str | None = None,
         ephemeral: bool = False,
     ) -> ThreadInfo:
         self._record(
@@ -165,6 +168,7 @@ class FakeLaneClient:
             service_tier=service_tier,
             model=model,
             model_provider=model_provider,
+            last_turn_id=last_turn_id,
             ephemeral=ephemeral,
         )
         fork = ThreadInfo(id=f"{thread_id}-fork", ephemeral=ephemeral, cwd=cwd)

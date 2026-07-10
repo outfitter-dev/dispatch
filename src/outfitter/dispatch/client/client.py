@@ -15,7 +15,7 @@ from typing import Self
 
 from pydantic import BaseModel
 
-from .errors import ClientError, TransportError
+from .errors import ClientError, ProtocolError, TransportError
 from .events import LaneEvent
 from .models import (
     AppModel,
@@ -28,6 +28,7 @@ from .models import (
     InitializeParams,
     InitializeResult,
     InjectItemsParams,
+    ModelListParams,
     ModelListResult,
     Personality,
     ReasoningSummary,
@@ -175,8 +176,20 @@ class AppServerClient:
         return ConfigInfo.model_validate(payload)
 
     async def model_list(self) -> list[AppModel]:
-        result = await self._request("model/list", {})
-        return ModelListResult.model_validate(result).data
+        models: list[AppModel] = []
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        while True:
+            params = ModelListParams(cursor=cursor, include_hidden=True)
+            result = await self._request("model/list", _dump(params))
+            page = ModelListResult.model_validate(result)
+            models.extend(page.data)
+            cursor = page.next_cursor
+            if cursor is None:
+                return models
+            if cursor in seen_cursors:
+                raise ProtocolError(f"model/list repeated pagination cursor {cursor!r}")
+            seen_cursors.add(cursor)
 
     # --- threads --------------------------------------------------------------
 
@@ -240,6 +253,7 @@ class AppServerClient:
         service_tier: str | None = None,
         model: str | None = None,
         model_provider: str | None = None,
+        last_turn_id: str | None = None,
         ephemeral: bool = False,
     ) -> ThreadInfo:
         params = ThreadForkParams(
@@ -253,6 +267,7 @@ class AppServerClient:
             service_tier=service_tier,
             model=model,
             model_provider=model_provider,
+            last_turn_id=last_turn_id,
             ephemeral=ephemeral,
         )
         result = await self._request("thread/fork", _dump(params))

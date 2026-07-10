@@ -89,6 +89,7 @@ class LaneClient(Protocol):
         service_tier: str | None = None,
         model: str | None = None,
         model_provider: str | None = None,
+        last_turn_id: str | None = None,
         ephemeral: bool = False,
     ) -> ThreadInfo: ...
 

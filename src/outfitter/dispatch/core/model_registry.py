@@ -72,13 +72,18 @@ async def resolve_model_settings(
     reasoning_effort: str | None,
     service_tier: str | None,
 ) -> ResolvedModelSettings:
-    if service_tier is None:
+    if (
+        service_tier is None
+        and reasoning_effort is None
+        and model is None
+        and model_provider is None
+    ):
         config = await ctx.client.config_read()
         configured_tier = config.service_tier
         return ResolvedModelSettings(
-            model_provider=model_provider or config.model_provider,
-            model=model or config.model,
-            reasoning_effort=reasoning_effort or config.model_reasoning_effort,
+            model_provider=config.model_provider,
+            model=config.model,
+            reasoning_effort=config.model_reasoning_effort,
             requested_service_tier=None,
             resolved_service_tier=configured_tier,
             service_tier_name=None,
@@ -90,7 +95,7 @@ async def resolve_model_settings(
     resolved_model = model or snapshot.config.model
     if resolved_model is None:
         raise ValidationError(
-            f"service_tier {service_tier!r} needs a model; set --model or configure a Codex default"
+            "explicit model settings need a model; set --model or configure a Codex default"
         )
 
     entry = _find_model(snapshot.models, resolved_model, provider=provider)
@@ -98,7 +103,24 @@ async def resolve_model_settings(
         available = ", ".join(item.id for item in snapshot.models) or "none"
         raise ValidationError(f"unknown model {resolved_model!r}; available models: {available}")
 
-    resolved_tier, tier_name = _resolve_service_tier(entry, service_tier)
+    if (
+        reasoning_effort is not None
+        and entry.supported_reasoning_efforts
+        and reasoning_effort not in entry.supported_reasoning_efforts
+    ):
+        available_efforts = ", ".join(entry.supported_reasoning_efforts)
+        raise ValidationError(
+            f"model {resolved_model!r} does not advertise reasoning effort "
+            f"{reasoning_effort!r}; available reasoning efforts: {available_efforts}"
+        )
+
+    if service_tier is None:
+        resolved_tier = snapshot.config.service_tier
+        tier_name = None
+        tier_source: ServiceTierSource = "configured_default" if resolved_tier else "unknown"
+    else:
+        resolved_tier, tier_name = _resolve_service_tier(entry, service_tier)
+        tier_source = "dispatch"
     return ResolvedModelSettings(
         model_provider=provider,
         model=resolved_model,
@@ -106,7 +128,7 @@ async def resolve_model_settings(
         requested_service_tier=service_tier,
         resolved_service_tier=resolved_tier,
         service_tier_name=tier_name,
-        service_tier_source="dispatch",
+        service_tier_source=tier_source,
     )
 
 
@@ -128,6 +150,9 @@ def _catalog_entry(
             for tier in model.service_tiers
         ],
         additional_speed_tiers=model.additional_speed_tiers,
+        input_modalities=model.input_modalities,
+        supports_personality=model.supports_personality,
+        upgrade=model.upgrade,
         first_seen_at=refreshed_at,
         last_seen_at=refreshed_at,
         source=source,
