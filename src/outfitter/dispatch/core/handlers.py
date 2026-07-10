@@ -418,6 +418,24 @@ async def _resolve(ctx: Ctx, ref: str) -> Lane:
     return resolved.lane
 
 
+async def _resolve_message_target(ctx: Ctx, ref: str) -> Lane:
+    resolved = await resolve_thread_selector(ctx, ref, allow_unmanaged_raw=True, allow_fuzzy=False)
+    if resolved.lane is not None:
+        return resolved.lane
+    try:
+        thread = await asyncio.wait_for(
+            _read_thread_metadata(ctx, resolved.thread_id), _ATTACH_METADATA_TIMEOUT_S
+        )
+    except TimeoutError as exc:
+        raise AppServerError(
+            f"send timed out: thread/read metadata for {resolved.thread_id!r} exceeded "
+            f"{_ATTACH_METADATA_TIMEOUT_S:.0f}s (no lane registered)"
+        ) from exc
+    lane = await _register_attached_thread(thread, ctx, sync=True, audit_op="send-manage")
+    ctx.log.info("lane.send_manage", lane=lane.id, handle=lane.handle)
+    return lane
+
+
 async def _find_lane(ctx: Ctx, ref: str) -> Lane | None:
     try:
         return (await resolve_managed_selector(ctx, ref, allow_fuzzy=False)).lane
@@ -960,7 +978,7 @@ async def _record_queue_receipt(
 
 
 async def send(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
-    lane = await _resolve(ctx, inp.lane)
+    lane = await _resolve_message_target(ctx, inp.lane)
     _require_writable(lane, ctx)
     try:
         await _prepare_attached_write(lane, ctx)
@@ -1003,7 +1021,7 @@ async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
         case "context":
             return await brief(LaneTextInput(lane=inp.lane, text=text), ctx)
         case "interject":
-            lane = await _resolve(ctx, inp.lane)
+            lane = await _resolve_message_target(ctx, inp.lane)
             _require_writable(lane, ctx)
             turn_id = _require_active_turn(lane, "interject")
             try:
@@ -1038,7 +1056,7 @@ async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
             await ctx.registry.log_action("send", lane=lane.id, detail=text[:120])
             return ActionAck(**_managed_identity(lane, ctx), op="interject")
         case "queue":
-            lane = await _resolve(ctx, inp.lane)
+            lane = await _resolve_message_target(ctx, inp.lane)
             _require_writable(lane, ctx)
             message = await ctx.registry.enqueue_message(lane=lane.id, text=text)
             await _record_queue_receipt(ctx, lane, message.id, status="created")
@@ -1054,7 +1072,7 @@ async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
 
 
 async def steer(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
-    lane = await _resolve(ctx, inp.lane)
+    lane = await _resolve_message_target(ctx, inp.lane)
     _require_writable(lane, ctx)
     turn_id = _require_active_turn(lane, "steer")
     await _prepare_attached_write(lane, ctx)
@@ -1064,7 +1082,7 @@ async def steer(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
 
 
 async def brief(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
-    lane = await _resolve(ctx, inp.lane)
+    lane = await _resolve_message_target(ctx, inp.lane)
     _require_writable(lane, ctx)
     item: dict[str, object] = {
         "type": "message",
