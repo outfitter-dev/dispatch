@@ -2,7 +2,7 @@
 
 Date started: 2026-07-09
 Date finalized: pending
-Status: Active - DIS-47 final review
+Status: Active - full-stack review repairs
 Spec: `.agents/goals/2026-07-09-app-server-adoption/SPEC.md`
 Goal: `.agents/goals/2026-07-09-app-server-adoption/GOAL.md`
 Prompt: `.agents/goals/2026-07-09-app-server-adoption/PROMPT.md`
@@ -13,32 +13,44 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 - Objective: land the clear App Server 0.144 adoption work.
 - Completion horizon: merged, tracker-reconciled, dogfooded, clean `main`.
 - Authority used: Linear planning plus a dedicated Graphite packet commit.
-- Outcome: preparation, DIS-42, DIS-44, DIS-45, DIS-35, DIS-39, DIS-18, and
-  DIS-46 are merged; DIS-47 is implemented, fully gated, and locally reviewed.
-- Tracker/PR/source-control state: PRs #73-#83 merged; DIS-47 is on its dedicated
-  Graphite branch above current `main`. Release/publish work remains outside this goal.
+- Outcome: preparation, DIS-42, DIS-44, DIS-45, DIS-35, DIS-39, DIS-18, DIS-46,
+  and DIS-47 are merged. Goal-wide review found cross-milestone repairs now in progress.
+- Tracker/PR/source-control state: PRs #73-#84 merged; DIS-41 and every scoped child
+  are Done; `main` is synchronized and clean at `00f7f32`. Release/publish work remained
+  outside this goal.
 - Verification: prompt gate passed at 3,752 characters with no placeholders.
-- Review state: earlier milestones are clean. DIS-47 round one found eight code/data
-  and seven surface issues; subsequent rounds verified every implementation repair.
-  Code round five and surface round three are both 5/5 clean with no open P0-P2.
-- Remaining risks: hosted PR checks, merge reconciliation, and the goal-wide clean-main pass.
+- Review state: milestone reviews are clean. Full-stack round one found five P1 and four
+  P2 findings across cumulative behavior and closeout evidence; repairs are active.
+- Remaining risks: unresolved full-stack findings and hosted review threads block closeout.
 
 ## Readiness
 
 - Prompt checked: passed at 3,752 characters with no unresolved placeholders.
 - Goal/prompt alignment checked: passed manually after the final prompt gate.
-- Review blockers: none for preparation.
+- Review blockers: full-stack round one findings must be fixed and independently re-reviewed.
 - Verification blockers: none known.
-- Tracker blockers: none; issues and Linear adoption plan exist.
+- Tracker blockers: merged issue states are reconciled, but the goal closeout remains active.
 - Authority blockers: release/publish intentionally excluded.
-- Next action: submit and merge DIS-47, reconcile Linear, then run the final
-  full-stack/dogfood pass on clean `main`.
+- Next action: finish full-stack repairs, reconcile hosted threads, rerun the full gate and
+  targeted live proof, merge this closeout branch, then verify clean `main`.
 
 ## Goal Amendments
 
 | Time | Change | Reason | Approved By |
 | --- | --- | --- | --- |
 | 2026-07-09 | Initial execution contract | User requested an ambitious direct-start goal | Matt |
+| 2026-07-11 | Supersede one combined live scenario with the milestone scenario/integration matrix | A single scenario would duplicate costly interactive, history, capacity, permission, topology, and image turns while reducing failure isolation. Equivalent acceptance is proven by the three checked-in milestone scenarios plus targeted isolated integration tests recorded below. | Execution coordinator under delegated autonomy |
+
+The superseding matrix covers the promised combined scenario behavior without one brittle fixture:
+
+| Capability | Isolated proof |
+| --- | --- |
+| interactive approvals, user input, MCP elicitation | `interactive_requests.toml` plus three targeted real request-manager integrations |
+| canonical item ingestion and query | `canonical_item_ingestion.toml` |
+| bounded resume/history backfill | `bounded_history_sync.toml` plus targeted paging/fallback integration |
+| topology | targeted persisted fork/parent/ancestor integration |
+| account/capacity and permission profiles | targeted no-turn App Server integrations |
+| rich local/HTTPS inputs | authored `open` + `send` integration through production handlers |
 
 ## Execution Log
 
@@ -278,6 +290,39 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 - Next: commit/submit/merge DIS-47, update Linear, then perform the goal-wide final review
   and clean-main dogfood pass.
 - Blockers: none.
+
+2026-07-11 - DIS-47 merge and goal-wide review
+- PR #84 passed CI, CodeQL, and Graphite mergeability, then merged as `00f7f32`.
+  Graphite synchronized to a clean `main` and removed the merged DIS-47 branch.
+- Linear DIS-47 and parent DIS-41 are Done with final evidence comments. DIS-34 remains
+  explicit separate provider-neutral inventory scope rather than an unrecorded omission.
+- Clean-main dogfood reran real isolated account/capacity, permission-profile, and authored
+  local/remote image paths: three integration tests passed in 12.07 seconds. Derived
+  `send`, `query`, and `permissions` schemas passed jq assertions.
+- The adoption-goal agent performed no release or publish action. Independent PR #81 merged
+  the 0.8.2 version bump during this execution window; PyPI publishing was outside this goal
+  and was not performed or verified here.
+- Full-stack round one subsequently found cumulative topology, capacity, sync, and permission
+  defects plus hosted-thread/evidence drift. The goal returned to active for repair.
+- Blockers: full-stack findings and hosted review reconciliation.
+
+2026-07-11 - Full-stack round-one repairs
+- Fixed topology refresh to observe active and archived provider pages separately, including
+  cached lifecycle transitions in both directions.
+- Deduplicated full capacity reads by provider-limit/window identity and made id-less pushes
+  conservatively reuse a named or sole existing limit while preserving independent freshness.
+- Made explicit `sync --full` bypass unchanged/incremental shortcuts and rescan from byte zero.
+- Kept `permissions` on the generic derived CLI path while resolving its cwd in the caller,
+  and moved conflicting `new` permission settings onto the authored input validator so CLI,
+  control socket, and MCP retain the validation taxonomy.
+- Reconciled the combined-scenario contract through the formal amendment/matrix above and
+  corrected the release audit to distinguish independent PR #81 from goal-agent actions.
+- Verification: `just check` passed 613 tests with 17 opt-in tests deselected, strict
+  mypy/Ruff, package builds, and package contents. Targeted account/capacity, permission,
+  and topology App Server integrations passed 3 tests in 8.35 seconds.
+- Next: submit this repair/closeout PR, reply to and resolve all six hosted review threads,
+  obtain clean full-stack re-reviews, merge, and verify clean `main`.
+- Blockers: hosted review reconciliation and full-stack re-review.
 ```
 
 ## Review Log
@@ -319,6 +364,10 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 | DIS-47 r3 surface | full prior-finding reconciliation | `tmp/reviews/dis47-surface/round-3.json` | 5/5 | clean | 0 | All prior findings verified fixed; no worthwhile P3 remains |
 | DIS-47 r4 code | durable evidence reconciliation | `tmp/reviews/dis47-code/round-4.json` | 4/5 | changes requested | 1 | Stale high-level retro prose corrected |
 | DIS-47 r5 code | durable evidence reconciliation | `tmp/reviews/dis47-code/round-5.json` | 5/5 | clean | 0 | All prior findings fixed; exact evidence and handoff agree |
+| full-stack r1 code | cumulative architecture/runtime/closeout | `tmp/reviews/full-stack-code/round-1.json` | 4/5 | changes requested | 1 | Implementation ready; completion evidence premature |
+| full-stack r1 surface | cumulative product/surfaces/tracker | `tmp/reviews/full-stack-surface/round-1.json` | 2/5 | changes requested | 8 | Five P1 and three P2; repairs active |
+| full-stack r2 code | cumulative repair reconciliation | `tmp/reviews/full-stack-code/round-2.json` | 5/5 | clean | 0 | All code/runtime findings fixed; 215 focused tests and live proof |
+| full-stack r2 surface | cumulative surface/tracker reconciliation | `tmp/reviews/full-stack-surface/round-2.json` | 4/5 | changes requested | 1 | All defects fixed; only six hosted threads remain to reconcile after submit |
 
 ## Verification Log
 
@@ -353,6 +402,9 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 | `just check` | DIS-47 | passed | 603 tests passed, 17 live tests deselected; strict mypy/Ruff and package gates passed |
 | authored local/remote image integration | DIS-47 | passed | Real isolated `open` + `send` delivered a local PNG and HTTPS reference through production handlers; response identified `RED PYTHON` in 15.15 seconds |
 | CLI/MCP/manifest/schema v21 checks | DIS-47 | passed | CLI schema reflects adapters, MCP content is self-contained, App Server union is guarded, and v20 queues migrate/restart safely |
+| clean-main isolated dogfood | full goal | passed | Account/capacity, permission profiles, and authored local/HTTPS image delivery: 3 passed in 12.07 seconds; derived schema jq assertions passed |
+| `just check` | full-stack repairs | passed | 613 tests passed, 17 live tests deselected; strict mypy/Ruff and package gates passed |
+| targeted post-repair App Server integrations | full-stack repairs | passed | Account/capacity, permission profiles, and persisted fork/topology: 3 passed in 8.35 seconds |
 
 ## Prompt / Goal Alignment
 
@@ -393,6 +445,8 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 | PR #82 / DIS-18 | merged / Done | Bounded incremental history sync; `18b57cf`; checks and review clean |
 | PR #83 / DIS-46 | merged / Done | Permission profiles and preset integration; checks and review clean |
 | DIS-47 | In Progress | Rich image implementation and final local review active |
+| PR #84 / DIS-47 | merged / Done | Rich image inputs; `00f7f32`; hosted checks and local reviews clean |
+| DIS-41 | Done | App Server 0.144 fast-track parent closed after every scoped child merged |
 
 ## Follow-Ups
 
@@ -401,10 +455,17 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 
 ## Final State
 
-- Completion proof: pending.
-- Prompt length: pending.
-- Review report summary: pending.
-- Verification summary: pending.
-- Forbidden actions audit: pending.
-- Remaining P3s / risks: pending.
-- Final transcript proof: pending.
+- Completion proof: pending final full-stack re-review and closeout merge. PRs #73-#84 are
+  merged and DIS-41/scoped children are Done, but cumulative repairs remain on this branch.
+- Prompt length: 3,752 characters; no unresolved placeholders.
+- Review report summary: milestone reviews converged to 5/5. Full-stack round one reopened
+  five P1 and four P2 findings; final summary is pending repair and re-review.
+- Verification summary: latest `just check` passed 613 tests with 17 opt-in tests deselected,
+  strict mypy/Ruff, wheel/sdist, and package contents; targeted post-repair integration passed.
+- Forbidden actions audit: this goal agent performed no release/publish, secret mutation,
+  destructive git, remote config, or out-of-scope tracker action. Independent PR #81 merged
+  the 0.8.2 version bump during the execution window; package publishing was not part of this goal.
+- Remaining P3s / risks: pending final full-stack review. Older App Server capability limits
+  and DIS-34 remain explicit future scope.
+- Final transcript proof: the authored rich-input live path returned `RED PYTHON`; final
+  clean-main account/capacity, permissions, and rich-input dogfood passed 3 tests in 12.07s.

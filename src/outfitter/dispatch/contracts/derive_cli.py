@@ -218,6 +218,10 @@ def _op_command(
         json_requested = bool(kwargs.pop("json", False))
         yes = bool(kwargs.pop("yes", False))
         no_interactive = bool(kwargs.pop("no_interactive", False))
+        for field in _CALLER_RESOLVED_PATH_FIELDS.get(op.id, frozenset()):
+            value = kwargs.get(field)
+            if isinstance(value, str):
+                kwargs[field] = str(Path(value).expanduser().resolve())
         if op.intent == "destroy":
             if no_interactive and not yes:
                 typer.secho(
@@ -302,6 +306,9 @@ _PATH_FIELDS: tuple[str, ...] = (
     "developer_file",
     "worktree_path",
 )
+_CALLER_RESOLVED_PATH_FIELDS: dict[str, frozenset[str]] = {
+    "permissions": frozenset({"cwd"}),
+}
 
 
 def _new_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Callable[..., None]:

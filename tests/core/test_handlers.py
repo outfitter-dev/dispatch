@@ -554,6 +554,15 @@ async def test_new_lane_no_send_registers_without_turn(store: Registry, tmp_path
     assert not any(name == "turn_start" for name, _ in client.calls)
 
 
+def test_new_input_rejects_conflicting_permission_settings_at_boundary() -> None:
+    with pytest.raises(PydanticValidationError, match="permission_profile cannot be combined"):
+        NewInput(
+            name="conflict",
+            permission_profile=":workspace",
+            sandbox="read-only",
+        )
+
+
 async def test_image_launch_uses_unique_catalog_default_when_config_omits_model(
     store: Registry, tmp_path: Path
 ) -> None:
@@ -2828,6 +2837,40 @@ async def test_roster_filters_managed_descendants_and_includes_root(store: Regis
         name == "thread_list" and kwargs["ancestor_thread_id"] == root.id
         for name, kwargs in client.calls
     )
+
+
+async def test_roster_topology_refresh_reconciles_lifecycle_both_directions(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    root = await handlers.open_lane(OpenInput(name="root"), ctx)
+    await store.add_lane(id="child", handle="@child", source="attached", status="idle")
+    child = ThreadInfo(id="child", parent_thread_id=root.id)
+    client.list_results_by_archived[False] = [child]
+    client.list_results_by_archived[True] = []
+
+    await handlers.roster(RosterInput(root=root.ref, include_archived=True), ctx)
+
+    observed = await store.get_provider_thread("codex", "child")
+    assert observed is not None
+    assert observed.lifecycle_state == "active"
+
+    client.list_results_by_archived[False] = []
+    client.list_results_by_archived[True] = [child]
+    await handlers.roster(RosterInput(root=root.ref, include_archived=True), ctx)
+
+    observed = await store.get_provider_thread("codex", "child")
+    assert observed is not None
+    assert observed.lifecycle_state == "archived"
+
+    client.list_results_by_archived[False] = [child]
+    client.list_results_by_archived[True] = []
+    await handlers.roster(RosterInput(root=root.ref, include_archived=True), ctx)
+
+    observed = await store.get_provider_thread("codex", "child")
+    assert observed is not None
+    assert observed.lifecycle_state == "active"
 
 
 async def test_discover_uses_native_parent_filter(store: Registry) -> None:

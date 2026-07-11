@@ -191,6 +191,18 @@ class NewInput(BaseModel):
         json_schema_extra={"x-dispatch-internal": True},
     )
 
+    @model_validator(mode="after")
+    def _permission_profile_is_exclusive(self) -> NewInput:
+        if self.permission_profile is not None and any(
+            value is not None
+            for value in (self.sandbox, self.approval_policy, self.approvals_reviewer)
+        ):
+            raise ValueError(
+                "permission_profile cannot be combined with sandbox, approval_policy, "
+                "or approvals_reviewer"
+            )
+        return self
+
 
 class AttachInput(BaseModel):
     thread: str = Field(description="Full Codex thread id of an existing thread.")

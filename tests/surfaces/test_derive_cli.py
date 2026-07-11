@@ -37,6 +37,27 @@ def test_permissions_options_map_to_authored_contract() -> None:
     }
 
 
+def test_permissions_resolves_default_and_relative_cwd_in_cli_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def invoke(_op_id: str, params: dict[str, object]) -> dict[str, object]:
+        calls.append(params)
+        return {"profiles": []}
+
+    monkeypatch.chdir(tmp_path)
+    app = derive_cli(REGISTRY, invoke)
+
+    default = runner.invoke(app, ["permissions", "--no-refresh"])
+    relative = runner.invoke(app, ["permissions", "--cwd", "nested", "--no-refresh"])
+
+    assert default.exit_code == 0
+    assert relative.exit_code == 0
+    assert calls[0]["cwd"] == str(tmp_path)
+    assert calls[1]["cwd"] == str(tmp_path / "nested")
+
+
 def test_usage_options_map_to_authored_contract() -> None:
     captured: dict[str, object] = {}
 
