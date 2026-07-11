@@ -116,6 +116,21 @@ async def test_tool_call_error_projects_full_taxonomy_into_meta(socket_path: Pat
     assert result.meta["exitCode"] == 4  # same exit code the CLI would use
 
 
+async def test_daemon_read_usage_routes_to_same_authored_operation(socket_path: Path) -> None:
+    result = await handle_tool_call(
+        socket_path,
+        "dispatch_daemon_read",
+        {"op": "usage", "refresh": False},
+    )
+
+    assert result.isError is False
+    assert result.structuredContent == {
+        "refreshed_providers": [],
+        "observations": [],
+        "hint": "run dispatch usage without --no-refresh to refresh local providers",
+    }
+
+
 async def test_tool_call_rejects_unknown_grouped_action(socket_path: Path) -> None:
     result = await handle_tool_call(socket_path, "dispatch_thread_read", {"op": "send"})
     assert result.isError is True

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 
+import pytest
 import pytest_asyncio
 
 from outfitter.dispatch.client.errors import AppServerError
@@ -15,12 +17,15 @@ from outfitter.dispatch.client.models import (
     RateLimitSnapshot,
     RateLimitWindow,
 )
+from outfitter.dispatch.core import handlers
 from outfitter.dispatch.core.capacity import refresh_codex_capacity
+from outfitter.dispatch.core.models import UsageInput
 from outfitter.dispatch.core.reactor import Reactor
 from outfitter.dispatch.core.triggers import TriggerRunner
 from outfitter.dispatch.registry.store import Registry
 from tests.fakes import FakeLaneClient, make_ctx
 from tests.fixtures import load_json
+from tests.fixtures.registry.builders import provider_capacity_observation
 
 
 @pytest_asyncio.fixture
@@ -194,3 +199,67 @@ async def test_rate_limit_notification_preserves_component_freshness(store: Regi
     )
     assert after_primary.observed_at == after.observed_at
     assert after_secondary.observed_at == before_secondary.observed_at
+
+
+async def test_usage_reads_cache_filters_future_providers_and_marks_stale(
+    store: Registry,
+) -> None:
+    old = (datetime.now(UTC) - timedelta(minutes=10)).isoformat()
+    await store.upsert_provider_capacity_observation(
+        provider_capacity_observation(provider="claude", host_scope="mini", observed_at=old)
+    )
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    output = await handlers.usage(
+        UsageInput(
+            refresh=False,
+            provider="claude",
+            all_hosts=True,
+            stale_after_seconds=300,
+            include_daily=False,
+        ),
+        ctx,
+    )
+
+    assert output.refreshed_providers == []
+    assert len(output.observations) == 1
+    observation = output.observations[0]
+    assert observation.provider == "claude"
+    assert observation.host == "mini"
+    assert observation.stale is True
+    assert observation.windows[0].stale is True
+    assert observation.daily_usage == []
+    assert client.calls == []
+
+
+def test_usage_rejects_conflicting_host_filters() -> None:
+    with pytest.raises(ValueError, match="all_hosts"):
+        UsageInput(host="mini", all_hosts=True)
+
+
+async def test_usage_refreshes_local_codex_and_can_include_daily(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.account_result = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    client.rate_limits_result = AccountRateLimitsResult.model_validate(
+        load_json("app_server", "account_rate_limits", "current.json")
+    )
+    client.usage_result = AccountUsageResult.model_validate(
+        load_json("app_server", "account_usage", "current.json")
+    )
+
+    output = await handlers.usage(
+        UsageInput(provider="codex", include_daily=True), make_ctx(store, client)
+    )
+
+    assert output.refreshed_providers == ["codex"]
+    assert len(output.observations) == 1
+    observation = output.observations[0]
+    assert observation.state == "ready"
+    assert observation.stale is False
+    assert observation.daily_usage[-1].tokens == 3400
+    payload = output.model_dump_json()
+    assert "agent@example.com" not in payload
+    assert "opaque-credit-1" not in payload

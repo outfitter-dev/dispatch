@@ -69,6 +69,7 @@ _EXPECTED_CLI_SCHEMA_ROUTES = {
     "archive": "archive",
     "restore": "restore",
     "models": "models",
+    "usage": "usage",
     "goal status": "goal-get",
     "goal set": "goal-set",
     "goal clear": "goal-clear",
@@ -120,6 +121,25 @@ def test_cli_schema_routes_cover_public_ops() -> None:
         result = runner.invoke(app, ["schema", command])
         assert result.exit_code == 0, command
         assert json.loads(result.output)["op"] == op_id
+
+
+def test_usage_schema_is_jq_friendly_and_surface_derived() -> None:
+    result = runner.invoke(derive_cli(REGISTRY, _stub_invoke), ["schema", "usage"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["op"] == "usage"
+    observation = payload["output"]["$defs"]["UsageObservationView"]
+    assert {
+        "provider",
+        "host",
+        "state",
+        "stale",
+        "windows",
+        "source",
+        "observed_at",
+        "confidence",
+    } <= set(observation["properties"])
 
 
 def test_cli_registered_commands_are_declared_in_projection_manifest() -> None:

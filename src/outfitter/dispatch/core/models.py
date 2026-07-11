@@ -21,6 +21,10 @@ from outfitter.dispatch.registry.models import (
     InboxMessageState,
     LaneSource,
     LaneStatus,
+    ProviderCapacityState,
+    ProviderDailyUsage,
+    ProviderResetCredit,
+    ProviderUsageSummary,
     ServerRequestState,
     ServiceTierSource,
     SubscriptionAckPolicy,
@@ -440,6 +444,28 @@ class ModelsInput(BaseModel):
         default=True, description="Refresh from the Codex App Server before returning the catalog."
     )
     include_hidden: bool = Field(default=False, description="Include hidden model catalog rows.")
+
+
+class UsageInput(BaseModel):
+    refresh: bool = Field(
+        default=True, description="Refresh supported local providers before returning usage."
+    )
+    provider: str | None = Field(default=None, description="Provider filter; omit for all.")
+    host: str | None = Field(default="local", description="Host scope filter; defaults to local.")
+    all_hosts: bool = Field(default=False, description="Include every observed host scope.")
+    config_scope: str | None = Field(default=None, description="Provider config scope filter.")
+    stale_after_seconds: int = Field(
+        default=300, ge=1, description="Age after which an observation is stale."
+    )
+    include_daily: bool = Field(
+        default=False, description="Include bounded historical daily usage buckets."
+    )
+
+    @model_validator(mode="after")
+    def _exclusive_host_filters(self) -> UsageInput:
+        if self.all_hosts and self.host not in {None, "local"}:
+            raise ValueError("all_hosts cannot be combined with a non-local host filter")
+        return self
 
 
 class InboxListInput(BaseModel):
@@ -1154,6 +1180,54 @@ class ModelCatalogOutput(BaseModel):
     hint: str | None = None
     configured_default: ModelConfigView
     models: list[ModelCatalogItem]
+
+
+class UsageWindowView(BaseModel):
+    limit_id: str
+    limit_name: str | None = None
+    window: str
+    used_percent: int | None = None
+    remaining_percent: int | None = None
+    duration_minutes: int | None = None
+    resets_at: int | None = None
+    reached_type: str | None = None
+    observed_at: str
+    freshness_seconds: int | None = None
+    stale: bool
+
+
+class UsageObservationView(BaseModel):
+    provider: str
+    host: str
+    config_scope: str
+    state: ProviderCapacityState
+    stale: bool
+    freshness_seconds: int | None = None
+    account_freshness_seconds: int | None = None
+    capacity_freshness_seconds: int | None = None
+    usage_freshness_seconds: int | None = None
+    account_type: str | None = None
+    account_fingerprint: str | None = None
+    account_label: str | None = None
+    plan: str | None = None
+    requires_auth: bool | None = None
+    windows: list[UsageWindowView] = Field(default_factory=list)
+    reset_credits_available: int | None = None
+    reset_credits: list[ProviderResetCredit] = Field(default_factory=list)
+    usage_summary: ProviderUsageSummary | None = None
+    daily_usage: list[ProviderDailyUsage] = Field(default_factory=list)
+    has_credits: bool | None = None
+    unlimited_credits: bool | None = None
+    source: list[str] = Field(default_factory=list)
+    observed_at: str
+    confidence: float
+    error: str | None = None
+
+
+class UsageOutput(BaseModel):
+    refreshed_providers: list[str] = Field(default_factory=list)
+    observations: list[UsageObservationView] = Field(default_factory=list)
+    hint: str | None = None
 
 
 # --- trigger ops --------------------------------------------------------------

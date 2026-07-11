@@ -1,6 +1,6 @@
 ---
 name: dispatch
-description: Use when operating dispatch, creating or attaching Codex lanes, sending/steering/context-injecting/stopping through dispatch, managing triggers, checking daemon status/logs, or configuring the dispatch MCP/plugin surface. Not for changing dispatch source code; use AGENTS.md for implementation work.
+description: Use when operating dispatch, creating or attaching Codex lanes, sending/steering/context-injecting/stopping through dispatch, checking provider capacity, managing triggers, checking daemon status/logs, or configuring the dispatch MCP/plugin surface. Not for changing dispatch source code; use AGENTS.md for implementation work.
 metadata:
   short-description: Operate the dispatch control plane
 ---
@@ -29,6 +29,7 @@ The current canonical operator grammar is:
 - daemon reads: `daemon status`, `daemon log`
 - registry recovery: `registry migrate`
 - model catalog: `models`
+- provider capacity: `usage`
 - thread lifecycle/read/search: `new`, `attach`, `list`, `list --unmanaged`,
   `get`, `sync`, `tail`, `history`, `watch`, `search`, `query`
 - thread actions: `rename`, `archive`, `restore`
@@ -221,6 +222,26 @@ service tiers before starting the thread. The catalog also reports model-defined
 reasoning efforts, input modalities, personality support, and upgrade targets.
 Do not guess current model ids or effort names from memory; use the catalog
 output and its `aliases` field.
+
+Use the redacted provider inventory before routing optional work by capacity:
+
+```bash
+uv run dispatch usage
+uv run dispatch usage --no-refresh --json
+uv run dispatch usage --provider codex --host local
+uv run dispatch usage --all-hosts --no-refresh
+uv run dispatch usage --include-daily --stale-after-seconds 300
+uv run dispatch schema usage
+```
+
+Default `usage` refreshes supported local providers and omits daily buckets.
+Use `--no-refresh` for a database-only read and `--include-daily` only when
+historical detail is needed. The default host is `local`; use `--all-hosts` for
+mesh inventory. Treat `stale: true`, `partial`, `signed_out`,
+`disabled`, `unsupported`, and `unavailable` as explicit routing constraints.
+Capacity, account, usage, and each window have independent freshness. Output is
+masked/fingerprinted and never includes raw email, auth material, balances, or
+reset-credit mutation ids.
 
 Attached lanes are existing desktop Codex threads registered by raw thread id:
 
@@ -611,6 +632,7 @@ Use `schema` for derived input/output schemas:
 uv run dispatch schema send
 uv run dispatch schema "list --unmanaged"
 uv run dispatch schema models
+uv run dispatch schema usage
 uv run dispatch schema "goal set"
 ```
 
@@ -630,7 +652,8 @@ subcommand. Tools are grouped by workflow and safety boundary, and each call
 selects an `op` inside the tool. In this repo, the workspace-local Codex plugin
 lives at `plugins/dispatch`. It exposes these skills and the same MCP registry.
 Use the daemon-read MCP tool's `models` op before setting explicit model or
-service-tier arguments.
+service-tier arguments, and its `usage` op before making capacity-based routing
+decisions.
 The thread-write MCP tool's `fork` op accepts `last_turn_id` to fork through one
 completed turn, inclusive.
 The thread-read MCP tool derives the same topology inputs and outputs used by

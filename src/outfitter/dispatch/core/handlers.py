@@ -13,7 +13,7 @@ import asyncio
 import os
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import UTC, datetime, time
 from pathlib import Path
 from typing import Literal, TypedDict, cast
 
@@ -59,6 +59,7 @@ from outfitter.dispatch.registry.models import (
 )
 
 from . import queue
+from .capacity import refresh_codex_capacity
 from .history import (
     detect_worktree,
     history_items_from_indexed,
@@ -153,6 +154,10 @@ from .models import (
     TranscriptInput,
     TranscriptItem,
     TranscriptOutput,
+    UsageInput,
+    UsageObservationView,
+    UsageOutput,
+    UsageWindowView,
     WatchEvent,
     WatchInput,
     WatchOutput,
@@ -2519,6 +2524,104 @@ async def models(inp: ModelsInput, ctx: Ctx) -> ModelCatalogOutput:
             model_reasoning_effort=config.model_reasoning_effort,
         ),
         models=[_model_catalog_item(entry) for entry in entries],
+    )
+
+
+def _freshness_seconds(now: datetime, observed_at: str | None) -> int | None:
+    if observed_at is None:
+        return None
+    try:
+        observed = datetime.fromisoformat(observed_at)
+    except ValueError:
+        return None
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=UTC)
+    return max(0, int((now - observed).total_seconds()))
+
+
+async def usage(inp: UsageInput, ctx: Ctx) -> UsageOutput:
+    refreshed: list[str] = []
+    refresh_local_codex = (
+        inp.refresh
+        and inp.provider in {None, "codex"}
+        and inp.host in {None, "local"}
+        and inp.config_scope in {None, "default"}
+    )
+    if refresh_local_codex:
+        await refresh_codex_capacity(ctx)
+        refreshed.append("codex")
+    observations = await ctx.registry.list_provider_capacity_observations(
+        provider=inp.provider,
+        host_scope=None if inp.all_hosts else inp.host,
+    )
+    if inp.config_scope is not None:
+        observations = [
+            observation
+            for observation in observations
+            if observation.config_scope == inp.config_scope
+        ]
+    now = datetime.fromisoformat(ctx.registry.now_iso())
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    views: list[UsageObservationView] = []
+    for observation in observations:
+        freshness = _freshness_seconds(now, observation.observed_at)
+        account_freshness = _freshness_seconds(now, observation.account_observed_at)
+        capacity_freshness = _freshness_seconds(now, observation.capacity_observed_at)
+        usage_freshness = _freshness_seconds(now, observation.usage_observed_at)
+        relevant_freshness = (
+            capacity_freshness
+            if observation.windows
+            else account_freshness
+            if observation.account_type is not None or observation.requires_auth is not None
+            else freshness
+        )
+        windows: list[UsageWindowView] = []
+        for window in observation.windows:
+            window_freshness = _freshness_seconds(now, window.observed_at)
+            windows.append(
+                UsageWindowView(
+                    **window.model_dump(exclude={"observed_at"}),
+                    observed_at=window.observed_at,
+                    freshness_seconds=window_freshness,
+                    stale=window_freshness is None or window_freshness > inp.stale_after_seconds,
+                )
+            )
+        views.append(
+            UsageObservationView(
+                provider=observation.provider,
+                host=observation.host_scope,
+                config_scope=observation.config_scope,
+                state=observation.state,
+                stale=relevant_freshness is None or relevant_freshness > inp.stale_after_seconds,
+                freshness_seconds=freshness,
+                account_freshness_seconds=account_freshness,
+                capacity_freshness_seconds=capacity_freshness,
+                usage_freshness_seconds=usage_freshness,
+                account_type=observation.account_type,
+                account_fingerprint=observation.account_fingerprint,
+                account_label=observation.account_label,
+                plan=observation.plan,
+                requires_auth=observation.requires_auth,
+                windows=windows,
+                reset_credits_available=observation.reset_credits_available,
+                reset_credits=observation.reset_credits,
+                usage_summary=observation.usage_summary,
+                daily_usage=observation.daily_usage if inp.include_daily else [],
+                has_credits=observation.has_credits,
+                unlimited_credits=observation.unlimited_credits,
+                source=observation.source,
+                observed_at=observation.observed_at,
+                confidence=observation.confidence,
+                error=observation.error,
+            )
+        )
+    return UsageOutput(
+        refreshed_providers=refreshed,
+        observations=views,
+        hint="run dispatch usage without --no-refresh to refresh local providers"
+        if not views and not inp.refresh
+        else None,
     )
 
 

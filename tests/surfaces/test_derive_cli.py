@@ -17,6 +17,45 @@ from tests.fixtures import load_json
 runner = CliRunner()
 
 
+def test_usage_options_map_to_authored_contract() -> None:
+    captured: dict[str, object] = {}
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        captured["op"] = op_id
+        captured["params"] = params
+        return {"refreshed_providers": [], "observations": [], "hint": None}
+
+    result = runner.invoke(
+        derive_cli(REGISTRY, invoke),
+        [
+            "usage",
+            "--no-refresh",
+            "--provider",
+            "codex",
+            "--all-hosts",
+            "--config-scope",
+            "work",
+            "--stale-after-seconds",
+            "60",
+            "--include-daily",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "op": "usage",
+        "params": {
+            "refresh": False,
+            "provider": "codex",
+            "host": "local",
+            "all_hosts": True,
+            "config_scope": "work",
+            "stale_after_seconds": 60,
+            "include_daily": True,
+        },
+    }
+
+
 def test_send_positional_args_and_mode_flags_map_to_send_contract() -> None:
     captured: dict[str, object] = {}
 
