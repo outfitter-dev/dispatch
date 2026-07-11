@@ -150,7 +150,7 @@ def test_scan_skips_unchanged_source_and_bounds_full_reads(tmp_path: Path) -> No
     assert unchanged.bytes_scanned == 0
 
 
-def test_scan_resumes_unread_offset_when_source_identity_is_unchanged(tmp_path: Path) -> None:
+def test_explicit_full_scan_rescans_partial_source_from_byte_zero(tmp_path: Path) -> None:
     path = tmp_path / "rollout.jsonl"
     _write_jsonl(
         path,
@@ -176,7 +176,57 @@ def test_scan_resumes_unread_offset_when_source_identity_is_unchanged(tmp_path: 
 
     assert second.unchanged is False
     assert second.bytes_scanned > 0
-    assert second.next_offset == path.stat().st_size
+    assert second.first_offset == 0
+    assert second.next_offset == first.next_offset
+
+
+def test_explicit_full_scan_rescans_unchanged_quick_scan_at_eof(tmp_path: Path) -> None:
+    path = tmp_path / "rollout.jsonl"
+    _write_jsonl(
+        path,
+        [
+            {"type": "session_meta", "payload": {"id": "T1"}},
+            {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-1"}},
+        ],
+    )
+
+    quick = scan_codex_jsonl(str(path))
+    assert quick.state == "partial"
+    assert quick.source is not None
+    assert quick.next_offset == path.stat().st_size
+
+    full = scan_codex_jsonl(
+        str(path),
+        full=True,
+        previous=quick.source,
+        previous_offset=quick.next_offset,
+    )
+
+    assert full.state == "complete"
+    assert full.unchanged is False
+    assert full.first_offset == 0
+    assert full.next_offset == path.stat().st_size
+    assert full.line_count == 2
+    assert full.session_id == "T1"
+    assert full.latest_turn_id == "turn-1"
+
+
+def test_complete_full_scan_still_allows_ordinary_unchanged_skip(tmp_path: Path) -> None:
+    path = tmp_path / "rollout.jsonl"
+    _write_jsonl(path, [{"type": "session_meta", "payload": {"id": "T1"}}])
+
+    full = scan_codex_jsonl(str(path), full=True)
+    assert full.state == "complete"
+    assert full.source is not None
+
+    unchanged = scan_codex_jsonl(
+        str(path),
+        previous=full.source,
+        previous_offset=full.next_offset,
+    )
+
+    assert unchanged.unchanged is True
+    assert unchanged.bytes_scanned == 0
 
 
 def test_scan_retries_same_identity_when_prior_scan_never_started(tmp_path: Path) -> None:

@@ -102,8 +102,29 @@ def _all_windows(
             )
         if base_id not in snapshots:
             result.extend(_windows(base, fallback_id=base_id, observed_at=observed_at))
-        return result
+        return list({(window.limit_id, window.window): window for window in result}.values())
     return _windows(limits.rate_limits, fallback_id="default", observed_at=observed_at)
+
+
+def _push_limit_id(
+    snapshot: RateLimitSnapshot, existing: ProviderCapacityObservation | None
+) -> str:
+    if snapshot.limit_id is not None:
+        return snapshot.limit_id
+    if existing is None:
+        return "default"
+
+    if snapshot.limit_name is not None:
+        named_ids = {
+            window.limit_id
+            for window in existing.windows
+            if window.limit_name == snapshot.limit_name
+        }
+        if len(named_ids) == 1:
+            return named_ids.pop()
+
+    existing_ids = {window.limit_id for window in existing.windows}
+    return existing_ids.pop() if len(existing_ids) == 1 else "default"
 
 
 def _usage_summary(usage: AccountUsageResult) -> ProviderUsageSummary:
@@ -250,7 +271,11 @@ async def observe_codex_rate_limits(
 
     existing = await ctx.registry.get_provider_capacity_observation("codex")
     observed_at = ctx.registry.now_iso()
-    replacement = _windows(snapshot, fallback_id="default", observed_at=observed_at)
+    replacement = _windows(
+        snapshot,
+        fallback_id=_push_limit_id(snapshot, existing),
+        observed_at=observed_at,
+    )
     replaced = {(window.limit_id, window.window) for window in replacement}
     retained = (
         [window for window in existing.windows if (window.limit_id, window.window) not in replaced]

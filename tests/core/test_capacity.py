@@ -16,6 +16,7 @@ from outfitter.dispatch.client.models import (
     AccountUsageResult,
     RateLimitSnapshot,
     RateLimitWindow,
+    SpendControlLimitSnapshot,
 )
 from outfitter.dispatch.core import handlers
 from outfitter.dispatch.core.capacity import refresh_codex_capacity
@@ -76,6 +77,37 @@ async def test_refresh_codex_capacity_redacts_and_replaces_current_observation(
     payload = saved.model_dump_json()
     assert "agent@example.com" not in payload
     assert "opaque-credit-1" not in payload
+
+
+async def test_refresh_codex_capacity_deduplicates_base_windows_absent_from_map(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    client.rate_limits_result = AccountRateLimitsResult(
+        rate_limits=RateLimitSnapshot(
+            limit_id="base",
+            primary=RateLimitWindow(used_percent=25),
+            individual_limit=SpendControlLimitSnapshot(
+                limit="100",
+                used="30",
+                remaining_percent=70,
+                resets_at=1784196000,
+            ),
+        ),
+        rate_limits_by_limit_id={
+            "other": RateLimitSnapshot(
+                limit_id="other",
+                primary=RateLimitWindow(used_percent=10),
+            )
+        },
+    )
+    ctx = make_ctx(store, client)
+
+    observation = await refresh_codex_capacity(ctx)
+
+    keys = [(window.limit_id, window.window) for window in observation.windows]
+    assert keys == [("other", "primary"), ("base", "individual"), ("base", "primary")]
+    assert len(keys) == len(set(keys))
 
 
 async def test_refresh_codex_capacity_signed_out_skips_capacity_reads(store: Registry) -> None:
@@ -199,6 +231,73 @@ async def test_rate_limit_notification_preserves_component_freshness(store: Regi
     )
     assert after_primary.observed_at == after.observed_at
     assert after_secondary.observed_at == before_secondary.observed_at
+
+
+async def test_idless_rate_limit_notification_reuses_unambiguous_named_limit(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    client.account_result = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    client.rate_limits_result = AccountRateLimitsResult.model_validate(
+        load_json("app_server", "account_rate_limits", "current.json")
+    )
+    client.usage_result = AccountUsageResult.model_validate(
+        load_json("app_server", "account_usage", "current.json")
+    )
+    ctx = make_ctx(store, client)
+    before = await refresh_codex_capacity(ctx)
+    before_secondary = next(
+        window
+        for window in before.windows
+        if window.limit_id == "codex" and window.window == "secondary"
+    )
+
+    await Reactor(ctx, TriggerRunner(ctx, now=lambda: store._now())).handle_account_event(
+        AccountRateLimitsUpdated(
+            RateLimitSnapshot(
+                limit_name="Codex",
+                primary=RateLimitWindow(used_percent=70),
+            )
+        )
+    )
+
+    after = await store.get_provider_capacity_observation("codex")
+    assert after is not None
+    primary = [window for window in after.windows if window.window == "primary"]
+    assert {(window.limit_id, window.used_percent) for window in primary} == {
+        ("codex", 70),
+        ("review", 10),
+    }
+    assert all(window.limit_id != "default" for window in after.windows)
+    after_secondary = next(
+        window
+        for window in after.windows
+        if window.limit_id == "codex" and window.window == "secondary"
+    )
+    assert after_secondary.observed_at == before_secondary.observed_at
+
+
+async def test_idless_rate_limit_notification_reuses_sole_existing_limit(
+    store: Registry,
+) -> None:
+    before = provider_capacity_observation()
+    await store.upsert_provider_capacity_observation(before)
+    ctx = make_ctx(store, FakeLaneClient())
+
+    await Reactor(ctx, TriggerRunner(ctx, now=lambda: store._now())).handle_account_event(
+        AccountRateLimitsUpdated(RateLimitSnapshot(primary=RateLimitWindow(used_percent=70)))
+    )
+
+    after = await store.get_provider_capacity_observation("codex")
+    assert after is not None
+    assert [(window.limit_id, window.window, window.used_percent) for window in after.windows] == [
+        ("codex", "primary", 70)
+    ]
+    assert after.account_observed_at == before.account_observed_at
+    assert after.usage_observed_at == before.usage_observed_at
+    assert after.capacity_observed_at == after.observed_at
 
 
 async def test_usage_reads_cache_filters_future_providers_and_marks_stale(

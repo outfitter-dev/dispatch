@@ -88,7 +88,7 @@ def scan_codex_jsonl(
     fully_consumed = source.size == 0 or (
         previous_offset is not None and previous_offset >= source.size
     )
-    if previous == source and fully_consumed:
+    if not full and previous == source and fully_consumed:
         return JsonlSyncFacts(
             state="partial",
             source=source,
@@ -107,7 +107,14 @@ def scan_codex_jsonl(
             and previous_offset is not None
             and previous_offset < source.size
         )
-        if same_growing_source and previous_offset is not None:
+        if full:
+            records, line_count, first_offset, tail_offset, bytes_scanned = _read_all_records(
+                source_path, limits.full_bytes
+            )
+            state = "complete" if bytes_scanned >= source.size else "partial"
+            next_offset = bytes_scanned
+            scan_error = None
+        elif same_growing_source and previous_offset is not None:
             records, tail_offset, next_offset, bytes_scanned, blocked_record = _read_records_from(
                 source_path, previous_offset, limits.tail_bytes
             )
@@ -120,13 +127,6 @@ def scan_codex_jsonl(
                 if blocked_record
                 else None
             )
-        elif full:
-            records, line_count, first_offset, tail_offset, bytes_scanned = _read_all_records(
-                source_path, limits.full_bytes
-            )
-            state = "complete" if bytes_scanned >= source.size else "partial"
-            next_offset = bytes_scanned
-            scan_error = None
         else:
             records, line_count, first_offset, tail_offset, next_offset = _read_quick_records(
                 source_path, limits

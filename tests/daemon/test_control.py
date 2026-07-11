@@ -77,6 +77,22 @@ async def test_invalid_input_projects_validation_error(socket_path: Path) -> Non
     assert data["exitCode"] == 2
 
 
+async def test_conflicting_new_permissions_project_validation_error(socket_path: Path) -> None:
+    resp = await _call(
+        socket_path,
+        "new",
+        {
+            "name": "conflict",
+            "permission_profile": ":workspace",
+            "sandbox": "read-only",
+        },
+    )
+    data = _error(resp)["data"]
+    assert isinstance(data, dict)
+    assert data["exitCode"] == 2
+    assert data["dispatchCode"] == "validation"
+
+
 async def test_unknown_op_is_method_not_found(socket_path: Path) -> None:
     resp = await _call(socket_path, "frobnicate", {})
     assert _error(resp)["code"] == -32601

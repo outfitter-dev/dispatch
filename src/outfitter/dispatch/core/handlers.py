@@ -2812,9 +2812,15 @@ async def roster(inp: RosterInput, ctx: Ctx) -> Roster:
             parent_thread_id=parent_thread_id,
             ancestor_thread_id=ancestor_thread_id,
         )
-        related = active
+        await observe_threads(
+            ctx.registry,
+            active,
+            lifecycle_state="active",
+            relationship_source="thread/list:topology",
+        )
+        archived: list[ThreadInfo] = []
         if inp.include_archived:
-            related += await ctx.client.thread_list(
+            archived = await ctx.client.thread_list(
                 limit=inp.topology_limit,
                 archived=True,
                 sort_direction="desc",
@@ -2823,7 +2829,13 @@ async def roster(inp: RosterInput, ctx: Ctx) -> Roster:
                 parent_thread_id=parent_thread_id,
                 ancestor_thread_id=ancestor_thread_id,
             )
-        await observe_threads(ctx.registry, related, relationship_source="thread/list:topology")
+            await observe_threads(
+                ctx.registry,
+                archived,
+                lifecycle_state="archived",
+                relationship_source="thread/list:topology",
+            )
+        related = [*active, *archived]
         selected_ids = {thread.id for thread in related}
         if inp.root is not None:
             selected_ids.add(resolved.thread_id)

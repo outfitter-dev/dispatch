@@ -116,6 +116,26 @@ async def test_tool_call_error_projects_full_taxonomy_into_meta(socket_path: Pat
     assert result.meta["exitCode"] == 4  # same exit code the CLI would use
 
 
+async def test_new_permission_conflict_projects_validation_taxonomy(
+    socket_path: Path,
+) -> None:
+    result = await handle_tool_call(
+        socket_path,
+        "dispatch_thread_write",
+        {
+            "op": "new",
+            "name": "conflict",
+            "permission_profile": ":workspace",
+            "sandbox": "read-only",
+        },
+    )
+
+    assert result.isError is True
+    assert result.meta is not None
+    assert result.meta["dispatchCode"] == "validation"
+    assert result.meta["exitCode"] == 2
+
+
 async def test_daemon_read_usage_routes_to_same_authored_operation(socket_path: Path) -> None:
     result = await handle_tool_call(
         socket_path,
