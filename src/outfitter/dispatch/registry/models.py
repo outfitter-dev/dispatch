@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, StrictInt, StrictStr, TypeAdapter
 
 from outfitter.dispatch.client.models import (
     ApprovalPolicy,
@@ -17,7 +17,17 @@ from outfitter.dispatch.client.models import (
 )
 
 LaneSource = Literal["own", "attached"]
-LaneStatus = Literal["idle", "busy", "waiting_approval", "archived", "error", "unknown"]
+LaneStatus = Literal[
+    "idle",
+    "busy",
+    "waiting_approval",
+    "waiting_input",
+    "waiting_elicitation",
+    "waiting_tool",
+    "archived",
+    "error",
+    "unknown",
+]
 TurnRuntimeStatus = Literal["started", "completed", "failed"]
 ProviderTurnStatus = Literal["started", "completed", "failed", "unknown"]
 SyncState = Literal["unknown", "metadata", "partial", "complete", "error"]
@@ -35,6 +45,10 @@ SubscriptionDelivery = Literal["turn", "inbox"]
 SubscriptionDeliverPolicy = Literal["idle", "now"]
 SubscriptionAckPolicy = Literal["auto", "manual"]
 SubscriptionState = Literal["active", "done", "paused"]
+ServerRequestState = Literal["pending", "responding", "responded", "denied", "timed_out", "failed"]
+ServerRequestOutcome = Literal["responded", "denied", "timed_out", "failed"]
+
+SERVER_REQUEST_TEXT_LIMIT = 1024
 
 
 class ServiceTierEntry(BaseModel):
@@ -106,6 +120,29 @@ class ProviderEvent(BaseModel):
     summary: dict[str, object] = Field(default_factory=dict)
     payload: dict[str, object] | None = None
     raw_retained: bool = False
+
+
+class ServerRequest(BaseModel):
+    """A compact, durable correlation record for a Codex server request.
+
+    Request payloads are intentionally excluded: the registry retains only the
+    metadata needed to recover pending work and arbitrate a single outcome.
+    """
+
+    id: int | None = None  # local operator selector, assigned by the registry
+    provider: Literal["codex"] = "codex"
+    provider_session_id: str  # unique for one App Server connection lifetime
+    provider_thread_id: str | None = None
+    lane: str | None = None
+    request_id: StrictInt | StrictStr
+    method: str
+    category: str
+    state: ServerRequestState = "pending"
+    received_at: str
+    deadline_at: str | None = None
+    resolved_at: str | None = None
+    response_summary: str | None = Field(default=None, max_length=SERVER_REQUEST_TEXT_LIMIT)
+    error: str | None = Field(default=None, max_length=SERVER_REQUEST_TEXT_LIMIT)
 
 
 class ThreadTurn(BaseModel):

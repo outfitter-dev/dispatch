@@ -61,19 +61,24 @@ _GROUPS: tuple[_ToolGroup, ...] = (
     ),
     _ToolGroup(
         name="dispatch_inbox_read",
-        summary="Read inbox messages and subscriptions.",
+        summary="Read inbox messages, subscriptions, and interactive requests.",
         intent="read",
         actions=(
             ("list", "inbox-list"),
             ("read", "inbox-read"),
             ("subscriptions", "subscription-list"),
+            ("requests", "server-request-list"),
         ),
     ),
     _ToolGroup(
         name="dispatch_inbox_write",
-        summary="Create subscriptions and acknowledge inbox messages.",
+        summary="Create subscriptions, acknowledge inbox messages, and answer requests.",
         intent="write",
-        actions=(("subscribe", "subscribe"), ("ack", "inbox-ack")),
+        actions=(
+            ("subscribe", "subscribe"),
+            ("ack", "inbox-ack"),
+            ("respond", "server-request-respond"),
+        ),
     ),
     _ToolGroup(
         name="dispatch_inbox_destroy",

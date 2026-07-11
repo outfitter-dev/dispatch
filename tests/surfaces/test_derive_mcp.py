@@ -80,6 +80,16 @@ def test_action_schema_and_annotations_from_op() -> None:
         "goal_clear",
     }
 
+    inbox_read = tools["dispatch_inbox_read"]
+    assert {s["properties"]["op"]["const"] for s in inbox_read.inputSchema["oneOf"]} >= {"requests"}
+    inbox_write = tools["dispatch_inbox_write"]
+    respond_schema = next(
+        schema
+        for schema in inbox_write.inputSchema["oneOf"]
+        if schema["properties"]["op"]["const"] == "respond"
+    )
+    assert respond_schema["properties"]["response"]["type"] == "object"
+
     daemon_read = tools["dispatch_daemon_read"]
     assert daemon_read.annotations is not None
     assert daemon_read.annotations.readOnlyHint is True

@@ -1,9 +1,8 @@
-"""Event reactor (ADR-0003 + ADR-0007): consume normalized LaneEvents to keep
-lane state current (so steer/interrupt and idle_only guards work) and to fire
-event triggers. Unhandled ``waiting_on_approval`` defaults to ``decline``.
-"""
+"""React to normalized lane events and generic interactive server requests."""
 
 from __future__ import annotations
+
+import asyncio
 
 from outfitter.dispatch.client.events import (
     ApprovalRequested,
@@ -25,6 +24,7 @@ from outfitter.dispatch.registry.models import EventWhen
 from .capture import bound_text
 from .event_index import index_codex_lane_event
 from .queue import drain_next_queued_message
+from .server_requests import ServerRequestManager
 from .subscriptions import process_event_subscriptions
 from .triggers import TriggerRunner, resolve_lane
 
@@ -35,6 +35,18 @@ class Reactor:
         self._runner = runner
 
     async def run(self) -> None:
+        async with asyncio.TaskGroup() as tasks:
+            tasks.create_task(self._run_lane_events())
+            tasks.create_task(
+                ServerRequestManager(
+                    self._ctx,
+                    on_approval_attention=lambda lane_id: self._fire_event(
+                        lane_id, "waiting_on_approval"
+                    ),
+                ).run()
+            )
+
+    async def _run_lane_events(self) -> None:
         async for event in self._ctx.client.events(None):
             try:
                 await self.handle(event)
@@ -77,20 +89,10 @@ class Reactor:
         elif isinstance(event, ThreadUnarchived):
             await registry.mark_lane_idle(lane.id)
             await registry.touch_lane_event(lane.id)
-        elif isinstance(event, ItemCompleted | GoalUpdated | GoalCleared | ThreadCompacted):
+        elif isinstance(
+            event, ItemCompleted | GoalUpdated | GoalCleared | ThreadCompacted | ApprovalRequested
+        ):
             await registry.touch_lane_event(lane.id)
-        elif isinstance(event, ApprovalRequested):
-            await registry.update_lane_status(lane.id, "waiting_approval")
-            await registry.touch_lane_event(lane.id)
-            # Auto-decline only when NO handler is registered — a registered trigger
-            # suppressed by its own guard still counts as "handled" (don't override intent).
-            matched = await self._fire_event(lane.id, "waiting_on_approval")
-            matched += await process_event_subscriptions(self._ctx, lane, event)
-            if matched == 0:
-                await self._ctx.client.respond_approval(event.request_id, "decline")
-                await registry.log_action(
-                    "approval", lane=lane.id, detail="auto-decline (no trigger)", outcome="ok"
-                )
 
     async def _fire_event(self, lane_id: str, event_name: str) -> int:
         """Fire matching enabled event triggers; return how many MATCHED (were

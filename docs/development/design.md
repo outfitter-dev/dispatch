@@ -144,6 +144,8 @@ for collisions. Titles and `@handles` are mutable convenience labels.
 
 Approvals are server→client JSON-RPC requests: while pending the lane emits `thread/status/changed` with `activeFlags:["waitingOnApproval"]`; the client replies `{id, result:{decision}}` (`accept`/`acceptForSession`/`decline`/`cancel`/…); server emits `serverRequest/resolved`. File-change approvals do NOT carry the diff — correlate by `itemId` to the `fileChange` item (`changes[].diff`) and `turn/diff/updated`.
 
+All stable server requests enter one generic request stream before category-specific compatibility events. Dispatch persists only correlation metadata and lifecycle state, keyed by a dispatch-local id plus an App Server connection generation so JSON-RPC id reuse after restart is safe. Response senders atomically claim `pending -> responding`, send once, then finalize to `responded`, `denied`, `timed_out`, or `failed`; reconnect marks requests from the dead connection failed. The CLI and grouped MCP surface project one list op and one generic response op rather than one tool per App Server method.
+
 Schema is regenerated per binary (`codex app-server generate-json-schema [--experimental]`); pin the binary and store the generated schema with the build.
 
 ## Triggers
@@ -161,9 +163,9 @@ The daemon drives threads it spawns (`new`, backed by the lower-level `open` op)
 
 ADR-0005 keeps turn-writing and history-mutating ops locked on attached lanes by default until there is a real cross-process interlock. The local daemon policy `[policy] allow_attached_writes = true` is an explicit operator override for trusted setups; it enables Dispatch to call the same App Server write primitives against attached lanes, but it does not create a cross-process interlock with the desktop app. `list`/`get` expose `writable`, `capabilities`, and `write_locked_reason` so operators and scripts can inspect the effective policy. ADR-0018 carves out explicit metadata/lifecycle actions (`rename`, `archive`, `restore`) and search because they do not start turns, steer turns, or mutate turn history. **Unmanaged** means a persisted Codex thread visible to App Server but not registered in dispatch. An explicit `sync <raw-codex-thread-id>` is allowed to register that thread as an attached lane, then refresh the index; this is still metadata/history management, not write ownership.
 
-## Approvals (v1 minimal)
+## Interactive Requests (v1 policy)
 
-The client supports the full responder loop. v1 surfaces `waiting_on_approval` as an **event trigger** (a trigger can ping a coordinator lane / the human) with a safe default decision of **decline** if no trigger handles it. A real policy engine is later.
+The client classifies command/file/permission approvals, user input, MCP elicitation, dynamic tool calls, auth refresh, attestation, legacy approvals, and unknown methods. Owned requests default to durable attention with an explicit timeout; attached/unmanaged requests default to deny. A small local policy can choose `attention`, `deny`, or `permissive` by ownership class. Permissive mode can accept supported local approvals but cannot invent input, credentials, attestation, or unknown tool results. Inbox and `needs-attention` subscriptions expose actionable requests; exact decisions and timeouts are audited without retaining raw request payloads. The richer category/rule/credential policy engine remains deferred to DIS-43.
 
 ## Tech stack
 

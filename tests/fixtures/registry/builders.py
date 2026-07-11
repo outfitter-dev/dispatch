@@ -15,6 +15,7 @@ from outfitter.dispatch.registry.models import (
     MessageReceipt,
     ModelCatalogEntry,
     ProviderEvent,
+    ServerRequest,
     ServiceTierEntry,
     ThreadItem,
     ThreadItemRef,
@@ -125,6 +126,25 @@ def provider_event(
         summary={"status": "started"},
         payload={"method": event_type, "params": {"turnId": provider_turn_id}},
         raw_retained=True,
+    )
+
+
+def server_request(
+    *,
+    provider_session_id: str = "app-server-1",
+    provider_thread_id: str | None = "thread-1",
+    lane: str | None = "L1",
+    request_id: int | str = 1,
+    received_at: str | None = None,
+) -> ServerRequest:
+    return ServerRequest(
+        provider_session_id=provider_session_id,
+        provider_thread_id=provider_thread_id,
+        lane=lane,
+        request_id=request_id,
+        method="item/commandExecution/requestApproval",
+        category="command_execution",
+        received_at=received_at or fixed_now_iso(),
     )
 
 

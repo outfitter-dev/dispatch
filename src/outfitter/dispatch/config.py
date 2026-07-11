@@ -14,6 +14,7 @@ from typing import Literal, cast
 
 CaptureMode = Literal["minimal", "standard", "debug"]
 RawPayloadRetention = Literal["off", "errors", "debug", "all"]
+InteractiveRequestMode = Literal["deny", "attention", "permissive"]
 
 
 def _base() -> Path:
@@ -68,6 +69,9 @@ class RuntimePolicy:
     allow_attached_writes: bool = False
     allow_workspace_setup: bool = False
     workspace_setup_timeout_seconds: int = 120
+    owned_interactive_requests: InteractiveRequestMode = "attention"
+    attached_interactive_requests: InteractiveRequestMode = "deny"
+    interactive_request_timeout_seconds: int = 60
 
 
 @dataclass(frozen=True)
@@ -125,6 +129,19 @@ def runtime_policy() -> RuntimePolicy:
         workspace_setup_timeout_seconds=_positive_int(
             raw_policy.get("workspace_setup_timeout_seconds"), default=120
         ),
+        owned_interactive_requests=_interactive_request_mode(
+            raw_policy.get("owned_interactive_requests"),
+            name="owned_interactive_requests",
+            default=policy.owned_interactive_requests,
+        ),
+        attached_interactive_requests=_interactive_request_mode(
+            raw_policy.get("attached_interactive_requests"),
+            name="attached_interactive_requests",
+            default=policy.attached_interactive_requests,
+        ),
+        interactive_request_timeout_seconds=_positive_int(
+            raw_policy.get("interactive_request_timeout_seconds"), default=60
+        ),
     )
     return _apply_env_policy(policy)
 
@@ -167,12 +184,26 @@ def _truthy(value: str) -> bool:
 
 def _apply_env_policy(policy: RuntimePolicy) -> RuntimePolicy:
     attached = os.environ.get("DISPATCH_ALLOW_ATTACHED_WRITES")
-    if attached is None:
-        return policy
     return RuntimePolicy(
-        allow_attached_writes=_truthy(attached),
+        allow_attached_writes=(
+            policy.allow_attached_writes if attached is None else _truthy(attached)
+        ),
         allow_workspace_setup=policy.allow_workspace_setup,
         workspace_setup_timeout_seconds=policy.workspace_setup_timeout_seconds,
+        owned_interactive_requests=_interactive_request_mode(
+            os.environ.get("DISPATCH_OWNED_INTERACTIVE_REQUESTS"),
+            name="owned_interactive_requests",
+            default=policy.owned_interactive_requests,
+        ),
+        attached_interactive_requests=_interactive_request_mode(
+            os.environ.get("DISPATCH_ATTACHED_INTERACTIVE_REQUESTS"),
+            name="attached_interactive_requests",
+            default=policy.attached_interactive_requests,
+        ),
+        interactive_request_timeout_seconds=_positive_int(
+            os.environ.get("DISPATCH_INTERACTIVE_REQUEST_TIMEOUT_SECONDS"),
+            default=policy.interactive_request_timeout_seconds,
+        ),
     )
 
 
@@ -210,6 +241,19 @@ def _raw_payload_retention(value: object, *, default: RawPayloadRetention) -> Ra
     if isinstance(value, str) and value in {"off", "errors", "debug", "all"}:
         return cast(RawPayloadRetention, value)
     raise ValueError("history.raw_payload_retention must be one of: off, errors, debug, all")
+
+
+def _interactive_request_mode(
+    value: object,
+    *,
+    name: str,
+    default: InteractiveRequestMode,
+) -> InteractiveRequestMode:
+    if value is None:
+        return default
+    if isinstance(value, str) and value in {"deny", "attention", "permissive"}:
+        return cast(InteractiveRequestMode, value)
+    raise ValueError(f"policy.{name} must be one of: deny, attention, permissive")
 
 
 def _capture_positive_int(value: object, *, name: str, default: int) -> int:

@@ -21,6 +21,7 @@ from outfitter.dispatch.registry.models import (
     InboxMessageState,
     LaneSource,
     LaneStatus,
+    ServerRequestState,
     ServiceTierSource,
     SubscriptionAckPolicy,
     SubscriptionDeliverPolicy,
@@ -441,6 +442,21 @@ class InboxAckInput(BaseModel):
     )
 
 
+class ServerRequestListInput(BaseModel):
+    lane: str | None = Field(default=None, description="Filter by thread selector.")
+    state: ServerRequestState | None = Field(
+        default="pending", description="Request lifecycle state; omit for all states."
+    )
+    limit: int = Field(default=50, ge=1, description="Max interactive requests to return.")
+
+
+class ServerRequestRespondInput(BaseModel):
+    id: int = Field(description="Dispatch-local interactive request id.")
+    response: dict[str, object] = Field(
+        description="Protocol result object shown by `request list`; never include credentials."
+    )
+
+
 class SubscribeInput(BaseModel):
     target: str = Field(description=TARGET_THREAD_SELECTOR_DESCRIPTION)
     spec: str | None = Field(
@@ -614,6 +630,29 @@ class InboxList(BaseModel):
 class InboxAckResult(BaseModel):
     acked: int
     message: InboxMessageView | None = None
+
+
+class ServerRequestView(BaseModel):
+    id: int
+    lane_ref: str | None = None
+    lane: str | None = None
+    method: str
+    category: str
+    state: ServerRequestState
+    received_at: str
+    deadline_at: str | None = None
+    resolved_at: str | None = None
+    response_summary: str | None = None
+    error: str | None = None
+    expected_response: dict[str, object] | None = None
+
+
+class ServerRequestList(BaseModel):
+    requests: list[ServerRequestView] = Field(default_factory=list)
+
+
+class ServerRequestRespondResult(BaseModel):
+    request: ServerRequestView
 
 
 class SubscriptionView(BaseModel):

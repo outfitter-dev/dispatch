@@ -60,6 +60,8 @@ _EXPECTED_CLI_SCHEMA_ROUTES = {
     "inbox list": "inbox-list",
     "inbox read": "inbox-read",
     "inbox ack": "inbox-ack",
+    "request list": "server-request-list",
+    "request respond": "server-request-respond",
     "subscriptions": "subscription-list",
     "unsubscribe": "unsubscribe",
     "rename": "lane-rename",

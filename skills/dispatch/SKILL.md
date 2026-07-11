@@ -433,7 +433,8 @@ Useful `when` buckets:
 
 - `done`: completed or failed turns.
 - `completed` / `failed`: one terminal outcome.
-- `approval` / `needs-attention`: approval requests.
+- `approval`: command, file-change, and permission approvals.
+- `needs-attention`: approvals plus user-input, elicitation, and dynamic-tool requests.
 - `idle`: idle status events.
 - `activity`: any tracked lane event.
 
@@ -454,6 +455,16 @@ uv run dispatch inbox ack --all
 uv run dispatch subscriptions
 uv run dispatch unsubscribe <subscription-id> --yes --json
 ```
+
+App Server interactive requests are durable and use one generic response path. Check the request's `expected_response` before answering; never put credentials in a response:
+
+```bash
+uv run dispatch request list --state pending --json
+uv run dispatch request respond <request-id> '{"action":"decline"}' --json
+uv run dispatch schema "request respond"
+```
+
+Owned requests default to `attention`; attached/unmanaged requests default to `deny`. Local policy can set `owned_interactive_requests` or `attached_interactive_requests` to `attention`, `deny`, or `permissive`, plus `interactive_request_timeout_seconds`. Permissive mode approves supported local approvals only; auth, attestation, and unknown host requests are never synthesized.
 
 Destroy-intent commands prompt by default. In scripts, use explicit confirmation:
 

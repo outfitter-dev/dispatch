@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any, Protocol
+from uuid import uuid4
 
 from outfitter.dispatch.client.errors import ClientError
 from outfitter.dispatch.contracts.context import Ctx, LaneClient
@@ -47,9 +48,13 @@ class Supervisor:
         client = initial
         while True:  # not `while not self._stopped` — stop() flips it during the await below
             self._ctx.client = client
+            self._ctx.provider_session_id = uuid4().hex
             self._client = client
-            await self._restore_lanes(client)
             reactor_task = asyncio.create_task(self._run_reactor())
+            # Broadcaster subscriptions register eagerly once the reactor task runs.
+            # Start them before resume/queue restoration can emit a server request.
+            await asyncio.sleep(0)
+            await self._restore_lanes(client)
             await client.wait_closed()  # blocks until app-server dies or we stop
             reactor_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

@@ -183,6 +183,46 @@ def test_inbox_commands_map_to_contracts(monkeypatch: pytest.MonkeyPatch) -> Non
     ]
 
 
+def test_interactive_request_commands_map_to_generic_contracts() -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        calls.append((op_id, params))
+        if op_id == "server-request-list":
+            return {"requests": []}
+        return {"request": {}}
+
+    app = derive_cli(REGISTRY, invoke)
+
+    assert runner.invoke(app, ["request", "list", "--state", "pending"]).exit_code == 0
+    assert (
+        runner.invoke(
+            app,
+            ["request", "respond", "7", '{"action":"decline"}'],
+        ).exit_code
+        == 0
+    )
+    assert calls == [
+        (
+            "server-request-list",
+            {"lane": None, "state": "pending", "limit": 50},
+        ),
+        (
+            "server-request-respond",
+            {"id": 7, "response": {"action": "decline"}},
+        ),
+    ]
+
+
+def test_interactive_request_respond_rejects_non_object_json() -> None:
+    app = derive_cli(REGISTRY, lambda _op, _params: {})
+
+    result = runner.invoke(app, ["request", "respond", "7", '"decline"'])
+
+    assert result.exit_code == 2
+    assert "response must be a JSON object" in result.output
+
+
 def test_send_rejects_multiple_modes() -> None:
     app = derive_cli(REGISTRY, lambda _op, _params: {})
 

@@ -14,13 +14,14 @@ from .events import (
     ItemCompleted,
     LaneEvent,
     LaneIdle,
+    ServerRequestReceived,
     StatusChanged,
     TokenUsageUpdated,
     TurnCompleted,
     TurnFailed,
     TurnStarted,
 )
-from .models import InitializeResult, SandboxPolicy, ThreadInfo
+from .models import InitializeResult, JsonRpcError, SandboxPolicy, ThreadInfo
 from .transport import StdioTransport, Transport
 
 __all__ = [
@@ -31,10 +32,12 @@ __all__ = [
     "DiffUpdated",
     "InitializeResult",
     "ItemCompleted",
+    "JsonRpcError",
     "LaneEvent",
     "LaneIdle",
     "ProtocolError",
     "SandboxPolicy",
+    "ServerRequestReceived",
     "StatusChanged",
     "StdioTransport",
     "ThreadInfo",

@@ -70,6 +70,11 @@ transcript-inclusive `get` use App Server `thread/read(includeTurns:true)` as th
 canonical source and backfill Dispatch's normalized local history index for that one
 thread.
 
+Interactive App Server requests use `dispatch request list` and one generic
+`dispatch request respond <id> '<json>'` path. Owned threads default to durable
+attention; attached/unmanaged requests default to deny. `dispatch schema "request
+respond"` exposes the same response contract projected into grouped MCP tools.
+
 History capture is configurable in `~/.dispatch/config.toml`. The default
 `standard` mode captures operational facts and bounded searchable history
 metadata while keeping raw provider payloads gated. Live App Server events are

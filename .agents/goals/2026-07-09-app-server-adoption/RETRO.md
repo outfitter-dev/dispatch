@@ -2,7 +2,7 @@
 
 Date started: 2026-07-09
 Date finalized: pending
-Status: Execution starting
+Status: Active - DIS-42 ready for submit
 Spec: `.agents/goals/2026-07-09-app-server-adoption/SPEC.md`
 Goal: `.agents/goals/2026-07-09-app-server-adoption/GOAL.md`
 Prompt: `.agents/goals/2026-07-09-app-server-adoption/PROMPT.md`
@@ -13,11 +13,12 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 - Objective: land the clear App Server 0.144 adoption work.
 - Completion horizon: merged, tracker-reconciled, dogfooded, clean `main`.
 - Authority used: Linear planning plus a dedicated Graphite packet commit.
-- Outcome: preparation complete; target execution starting.
+- Outcome: preparation complete; DIS-42 implemented and in review.
 - Tracker/PR/source-control state: #73/#74 merged; packet PR #75 is draft and
   reparented directly to `main`.
 - Verification: prompt gate passed at 3,752 characters with no placeholders.
-- Review state: execution reviews not started.
+- Review state: DIS-42 round 1 findings fixed; code and surface round 2 are both
+  5/5 clean with zero open P0-P2.
 - Remaining risks: server-request result semantics, experimental pagination, live
   scenario entitlement/capacity, and stack merge order.
 
@@ -56,6 +57,25 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
   `DIS-42` moved to In Progress.
 - Next: implement interactive request completeness on a new slice above #75.
 - Blockers: none.
+
+2026-07-10 - DIS-42 interactive request implementation and first review
+- Changed: classified every stable server request; added string JSON-RPC ids, a generic
+  request stream/responder, connection-scoped durable request rows, atomic response claims,
+  restart recovery, explicit policy/timeout behavior, inbox/subscription attention, provider
+  events, generic CLI/MCP list/respond ops, config/docs/skill updates, and an isolated live
+  scenario.
+- Verified: `just check` (452 passed, 12 deselected, wheel/sdist contents); real App Server
+  approval, plan-mode `requestUserInput`, and stdio MCP elicitation all completed through the
+  Dispatch request manager (3 passed in 91.72s); `interactive_requests.toml` scenario passed;
+  regenerated 0.144 schemas matched the checked-in manifest except the installed binary's
+  `0.144.0-alpha.4` version label.
+- Review: code and surface round 1 both scored 3/5. Fixed atomic duplicate detection,
+  reconnect/send-failure attention cleanup, all-category approval trigger/subscription routing,
+  local request ids in subscription payloads, nested response validation, elicitation capability
+  advertisement, and missing live/scenario proof.
+- Result: focused and full local gates green; both targeted re-reviews are 5/5 clean.
+- Next: submit the DIS-42 stack slice, reconcile CI/review, then merge the milestone.
+- Blockers: none.
 ```
 
 ## Review Log
@@ -63,12 +83,20 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 | Round | Scope | Report | Score | State | Open P0-P2 | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | prep | prompt/goal alignment | manual | 5/5 | clean | 0 | Core contract is present in prompt |
+| DIS-42 r1 code | protocol/concurrency/restart/security | `tmp/reviews/dis-42/code-round-1.json` | 3/5 | changes requested | 3 | Two P1, one P2; fixes applied |
+| DIS-42 r1 surface | CLI/MCP/config/docs/evidence | `tmp/reviews/dis-42/surface-round-1.json` | 3/5 | changes requested | 3 | One P1, two P2; fixes applied |
+| DIS-42 r2 code | protocol/concurrency/restart/security | `tmp/reviews/dis-42/code-round-2.json` | 5/5 | clean | 0 | All prior findings verified fixed; 63 focused tests |
+| DIS-42 r2 surface | CLI/MCP/config/docs/evidence | `tmp/reviews/dis-42/surface-round-2.json` | 5/5 | clean | 0 | All prior findings fixed; 120 focused tests |
 
 ## Verification Log
 
 | Check | Scope | Result | Notes |
 | --- | --- | --- | --- |
 | goal prompt checker | packet | passed | 3,752 characters; no unresolved placeholders |
+| `just check` | DIS-42 | passed | 452 unit tests passed, 12 live tests deselected; build/package gate passed |
+| targeted real App Server tests | DIS-42 | passed | approval, plan-mode user input, and MCP elicitation: 3 passed in 91.72s |
+| `just scenario -- tests/scenarios/interactive_requests.toml` | DIS-42 | passed | Real permissive approval completed and created the expected file |
+| App Server manifest comparison | DIS-42 | passed with explained label drift | Schema inventory identical; local binary reports `0.144.0-alpha.4` vs fixture `0.144.0` |
 
 ## Prompt / Goal Alignment
 

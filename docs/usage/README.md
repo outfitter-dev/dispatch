@@ -553,7 +553,8 @@ Useful `when` buckets:
 
 - `done`: completed or failed turns.
 - `completed` / `failed`: one terminal turn outcome.
-- `approval` / `needs-attention`: App Server approval requests.
+- `approval`: command, file-change, and permission approval requests.
+- `needs-attention`: approvals plus user-input, elicitation, and dynamic-tool requests.
 - `idle`: idle status events.
 - `activity`: any tracked lane event.
 
@@ -585,6 +586,34 @@ uv run dispatch inbox ack --all
 uv run dispatch subscriptions
 uv run dispatch unsubscribe <subscription-id> --yes --json
 ```
+
+## Interactive Requests
+
+App Server requests block a turn until the client responds. Dispatch classifies every current stable request, records a compact request lifecycle without raw payloads or credentials, and gives each request a local integer id. Requests that need a person appear in the target thread's inbox and in `needs-attention` subscriptions.
+
+```bash
+uv run dispatch request list
+uv run dispatch request list --lane <dispatch-ref> --state pending --json
+uv run dispatch request respond 17 '{"decision":"decline"}' --json
+uv run dispatch schema "request respond" | jq '.input, .output'
+```
+
+`request list` includes an `expected_response` example for each answerable category. `request respond` accepts one JSON result object and can win the response claim only once; a timeout, automatic policy decision, or another operator response makes later attempts fail without sending a second wire response.
+
+The small near-term policy lives in `~/.dispatch/config.toml`:
+
+```toml
+[policy]
+owned_interactive_requests = "attention"    # attention | deny | permissive
+attached_interactive_requests = "deny"      # attention | deny | permissive
+interactive_request_timeout_seconds = 60
+```
+
+One-shot overrides use `DISPATCH_OWNED_INTERACTIVE_REQUESTS`,
+`DISPATCH_ATTACHED_INTERACTIVE_REQUESTS`, and
+`DISPATCH_INTERACTIVE_REQUEST_TIMEOUT_SECONDS`.
+
+Owned threads default to durable operator attention. Attached and unmanaged threads default to deny because Dispatch does not own their writer. `permissive` accepts command/file approvals and grants the exact permission profile requested for an owned thread; it does not invent user answers, execute unknown dynamic tools, mint auth tokens, or generate attestation. Unsupported and threadless host requests receive an explicit JSON-RPC error and are audited without storing credential material. Attention timeouts decline/cancel where the protocol provides a safe result and otherwise return an explicit timeout error.
 
 Use `delivery:inbox` when you want a durable message bus without waking the
 subscriber. Use `delivery:turn` when the subscriber should start a new turn after the

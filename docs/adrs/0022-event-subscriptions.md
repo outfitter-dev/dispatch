@@ -94,9 +94,8 @@ Initial `when` buckets:
 - `completed` — successful `TurnCompleted`.
 - `failed` — `TurnFailed`.
 - `needs-attention` — target is blocked or asking for outside input. Includes
-  approval requests and `waitingOnApproval`; later includes user-input and MCP
-  elicitation requests once normalized.
-- `approval` — approval requests only.
+  approvals, user-input requests, MCP elicitation, and dynamic-tool requests.
+- `approval` — command, file-change, and permission approval requests only.
 - `idle` — `LaneIdle`.
 - `activity` — any normalized event, primarily for debugging and broad observation.
 

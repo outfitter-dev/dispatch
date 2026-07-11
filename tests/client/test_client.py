@@ -9,6 +9,7 @@ import pytest
 from outfitter.dispatch.client.client import AppServerClient
 from outfitter.dispatch.client.errors import AppServerError, ProtocolError, TransportError
 from outfitter.dispatch.client.events import TurnCompleted
+from outfitter.dispatch.client.models import JsonRpcError
 from tests.fixtures import load_json
 
 from .conftest import FakeTransport, Responder
@@ -32,6 +33,12 @@ async def test_initialize_sends_request_then_initialized_notification(
     assert result.codex_home == "/h"
     methods = [m.get("method") for m in fake.sent]
     assert methods == ["initialize", "initialized"]
+    params = fake.sent[0].get("params")
+    assert isinstance(params, dict)
+    assert params["capabilities"] == {
+        "experimentalApi": True,
+        "mcpServerOpenaiFormElicitation": True,
+    }
     assert "id" not in fake.sent[1]  # initialized is a notification
 
 
@@ -374,3 +381,47 @@ async def test_respond_approval_sends_decision_on_same_stream(
     c, fake = client
     await c.respond_approval(7, "accept")
     assert fake.sent[-1] == {"id": 7, "result": {"decision": "accept"}}
+
+
+async def test_server_requests_expose_threadless_requests_and_generic_responses(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+    requests = c.server_requests()
+    fake.feed(
+        {
+            "id": "attestation-1",
+            "method": "attestation/generate",
+            "params": {"challenge": "opaque"},
+        }
+    )
+    request = await asyncio.wait_for(requests.__anext__(), timeout=1)
+    assert request.request_id == "attestation-1"
+    assert request.category == "attestation"
+    assert request.lane_id is None
+
+    await c.respond_server_request("attestation-1", result={"proof": "signed"})
+    assert fake.sent[-1] == {"id": "attestation-1", "result": {"proof": "signed"}}
+
+    await c.respond_server_request(
+        "auth-1",
+        error=JsonRpcError(code=-32001, message="authentication unavailable"),
+    )
+    assert fake.sent[-1] == {
+        "id": "auth-1",
+        "error": {"code": -32001, "message": "authentication unavailable"},
+    }
+
+
+async def test_respond_server_request_requires_exactly_one_payload(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, _fake = client
+    with pytest.raises(ProtocolError, match="exactly one"):
+        await c.respond_server_request("request-1")
+    with pytest.raises(ProtocolError, match="exactly one"):
+        await c.respond_server_request(
+            "request-1",
+            result={},
+            error=JsonRpcError(code=-32600, message="invalid request"),
+        )

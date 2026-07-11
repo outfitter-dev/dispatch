@@ -32,6 +32,10 @@ class ScenarioLane:
     name: str
     prompt: str
     expect_contains: str
+    sandbox: str | None
+    approval_policy: str | None
+    expect_file: str | None
+    expect_file_contains: str | None
 
 
 @dataclass(frozen=True)
@@ -44,6 +48,7 @@ class Scenario:
     allow_model_fallback: bool
     effort: str
     parallel: bool
+    owned_interactive_requests: str | None
     lanes: list[ScenarioLane]
 
 
@@ -53,6 +58,8 @@ class LaneRun:
     id: str
     handle: str | None
     expect_contains: str
+    expect_file: str | None
+    expect_file_contains: str | None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -112,6 +119,7 @@ def _load_scenario(path: Path) -> Scenario:
         allow_model_fallback=bool(data.get("allow_model_fallback", True)),
         effort=_string(data, "effort", fallback="low"),
         parallel=bool(data.get("parallel", True)),
+        owned_interactive_requests=_optional_string(data, "owned_interactive_requests"),
         lanes=lanes,
     )
 
@@ -124,6 +132,10 @@ def _load_lane(index: int, raw: object) -> ScenarioLane:
         name=_string(raw, "name"),
         prompt=_string(raw, "prompt"),
         expect_contains=_string(raw, "expect_contains"),
+        sandbox=_optional_string(raw, "sandbox"),
+        approval_policy=_optional_string(raw, "approval_policy"),
+        expect_file=_optional_string(raw, "expect_file"),
+        expect_file_contains=_optional_string(raw, "expect_file_contains"),
     )
 
 
@@ -151,6 +163,7 @@ def _print_plan(scenario: Scenario, args: argparse.Namespace) -> None:
     print(f"preferred_model={scenario.preferred_model or '<codex default>'}")
     print(f"effort={scenario.effort}")
     print(f"parallel={scenario.parallel}")
+    print(f"owned_interactive_requests={scenario.owned_interactive_requests or '<default>'}")
     for lane in scenario.lanes:
         print(f"lane {lane.alias}: name={lane.name!r} expect={lane.expect_contains!r}")
 
@@ -174,6 +187,8 @@ class ScenarioRunner:
         print(f"work_dir={self.work_dir}")
         try:
             self._prepare_codex_home()
+            self._prepare_dispatch_home()
+            self._prepare_work_dir()
             self._dispatch_json(["up", "--json"])
             model = self._resolve_model()
             lanes = self._start_lanes(model)
@@ -181,6 +196,7 @@ class ScenarioRunner:
             for lane in lanes:
                 self._wait_for_completion(lane)
                 self._assert_tail_contains(lane)
+                self._assert_expected_file(lane)
             self._dispatch_json(["down", "--json"])
             print("scenario passed")
             return 0
@@ -200,6 +216,19 @@ class ScenarioRunner:
         if not auth.exists():
             raise SystemExit("no ~/.codex/auth.json; cannot run live scenario")
         shutil.copy2(auth, self.codex_home / "auth.json")
+
+    def _prepare_dispatch_home(self) -> None:
+        mode = self.scenario.owned_interactive_requests
+        if mode is None:
+            return
+        if mode not in {"attention", "deny", "permissive"}:
+            raise SystemExit(f"invalid owned_interactive_requests: {mode}")
+        (self.dispatch_home / "config.toml").write_text(
+            f'[policy]\nowned_interactive_requests = "{mode}"\n'
+        )
+
+    def _prepare_work_dir(self) -> None:
+        subprocess.run(["git", "init", "-q"], cwd=self.work_dir, check=True)
 
     def _resolve_model(self) -> str | None:
         models = self._dispatch_json(["models", "--json"])
@@ -249,6 +278,10 @@ class ScenarioRunner:
         ]
         if model is not None:
             args.extend(["--model", model])
+        if lane.sandbox is not None:
+            args.extend(["--sandbox", lane.sandbox])
+        if lane.approval_policy is not None:
+            args.extend(["--approval-policy", lane.approval_policy])
         out = self._dispatch_json(args, timeout=self.scenario.timeout_seconds)
         lane_id = out.get("id")
         if not isinstance(lane_id, str):
@@ -262,6 +295,8 @@ class ScenarioRunner:
             id=lane_id,
             handle=handle if isinstance(handle, str) else None,
             expect_contains=lane.expect_contains,
+            expect_file=lane.expect_file,
+            expect_file_contains=lane.expect_file_contains,
         )
 
     def _assert_list_contains(self, lanes: list[LaneRun]) -> None:
@@ -298,6 +333,19 @@ class ScenarioRunner:
         needle = lane.expect_contains.lower()
         if needle not in haystack:
             raise SystemExit(f"{lane.alias} transcript missing {needle!r}: {out}")
+
+    def _assert_expected_file(self, lane: LaneRun) -> None:
+        if lane.expect_file is None:
+            return
+        path = self.work_dir / lane.expect_file
+        if not path.is_file():
+            raise SystemExit(f"{lane.alias} expected file was not created: {path}")
+        if lane.expect_file_contains is not None:
+            contents = path.read_text()
+            if lane.expect_file_contains not in contents:
+                raise SystemExit(
+                    f"{lane.alias} expected {lane.expect_file_contains!r} in {path}: {contents!r}"
+                )
 
     def _dispatch_json(self, args: list[str], *, timeout: float = 90.0) -> dict[str, Any]:
         result = self._dispatch(args, timeout=timeout)
