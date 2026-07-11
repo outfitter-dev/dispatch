@@ -36,7 +36,8 @@ uv run dispatch new \
   --name docs \
   --cwd /path/to/dispatch \
   --goal "Finish the docs review." \
-  --text "Please summarize the current stack state."
+  --text "Please summarize the current stack state." \
+  --image ./stack.png
 uv run dispatch list
 uv run dispatch get <dispatch-ref>
 uv run dispatch tail <dispatch-ref> --limit 20
@@ -49,6 +50,8 @@ preview it without side effects: `dispatch new --name lane-a --cwd /repo --packe
 ./packet --dry-run --json`, then `--stage all` to write durable session files under
 `.agents/sessions/<ref>/`. See [`docs/usage/README.md`](docs/usage/README.md) for
 packet layout, file/stdin inputs, and staging.
+
+`new` and `send` accept repeatable `--image PATH` and `--image-url HTTPS_URL` options, with an optional `--image-detail auto|low|high|original`. Local images may be PNG, JPEG, GIF, or WebP and must be at most 20 MiB; remote URLs must resolve publicly and are fetched into ephemeral inline inputs without storing bytes. `send --input-file -` reads message text from stdin. Images work with normal sends, steering, durable queues, and interjection; silent `--context` injection remains text-only.
 
 Use owned managed threads for turn-writing work. Existing desktop Codex threads can be attached as
 managed threads, but ADR-0005 blocks turn-writing and history-mutating commands such

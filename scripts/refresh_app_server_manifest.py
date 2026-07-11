@@ -64,6 +64,16 @@ def _variant_discriminants(path: Path, definition: str, field: str) -> list[str]
     return sorted(set(values))
 
 
+def _enum_values(path: Path, definition: str) -> list[str]:
+    schema = _json(path)
+    definitions = schema.get("definitions")
+    shape = definitions.get(definition, {}) if isinstance(definitions, dict) else {}
+    values = shape.get("enum") if isinstance(shape, dict) else None
+    if not isinstance(values, list):
+        raise TypeError(f"expected enum values for {definition} in {path}")
+    return sorted(value for value in values if isinstance(value, str))
+
+
 def _run(command: list[str], *args: str) -> str:
     completed = subprocess.run(
         [*command, *args],
@@ -152,8 +162,20 @@ def build_manifest(command: list[str]) -> dict[str, object]:
                     experimental / "v2" / "ThreadStartParams.json"
                 ),
                 "turn_start_fields": _properties(stable / "v2" / "TurnStartParams.json"),
+                "turn_start_user_input_types": _variant_discriminants(
+                    stable / "v2" / "TurnStartParams.json", "UserInput", "type"
+                ),
+                "turn_start_image_details": _enum_values(
+                    stable / "v2" / "TurnStartParams.json", "ImageDetail"
+                ),
                 "turn_start_experimental_fields": _properties(
                     experimental / "v2" / "TurnStartParams.json"
+                ),
+                "turn_steer_user_input_types": _variant_discriminants(
+                    stable / "v2" / "TurnSteerParams.json", "UserInput", "type"
+                ),
+                "turn_steer_image_details": _enum_values(
+                    stable / "v2" / "TurnSteerParams.json", "ImageDetail"
                 ),
                 "thread_fork_fields": _properties(stable / "v2" / "ThreadForkParams.json"),
                 "thread_list_result_fields": _properties(stable / "v2" / "ThreadListResponse.json"),

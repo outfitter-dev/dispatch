@@ -55,6 +55,7 @@ from outfitter.dispatch.client.models import (
     ThreadSourceKind,
     ThreadTurnsPage,
     TurnItemsView,
+    UserInput,
 )
 from outfitter.dispatch.config import CapturePolicy, RuntimePolicy
 
@@ -214,6 +215,7 @@ class LaneClient(Protocol):
         thread_id: str,
         text: str,
         cwd: str,
+        input_items: list[UserInput] | None = None,
         permission_profile: str | None = None,
         approval_policy: ApprovalPolicy | None = None,
         approvals_reviewer: ApprovalsReviewer | None = None,
@@ -227,7 +229,11 @@ class LaneClient(Protocol):
     ) -> dict[str, object]: ...
 
     async def turn_steer(
-        self, thread_id: str, expected_turn_id: str, text: str
+        self,
+        thread_id: str,
+        expected_turn_id: str,
+        text: str,
+        input_items: list[UserInput] | None = None,
     ) -> dict[str, object]: ...
 
     async def turn_interrupt(self, thread_id: str, turn_id: str) -> None: ...

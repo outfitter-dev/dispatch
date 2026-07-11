@@ -212,7 +212,8 @@ uv run dispatch new \
   --name docs-review \
   --cwd /path/to/dispatch \
   --goal "Review until no P2 findings remain." \
-  --text "Review the README for missing usage steps."
+  --text "Review the README for missing usage steps." \
+  --image ./current-layout.png
 ```
 
 `new` reads global `~/.dispatch/config.toml` settings first and then the nearest
@@ -395,6 +396,18 @@ overrides repo config. The inline flag and its file form are mutually exclusive:
 most one input may come from stdin (`-`). `goal.md` becomes a native goal — it is not
 `/goal` slash-command text.
 
+The initial turn may include images alongside text. Repeat `--image PATH` for local files and `--image-url HTTPS_URL` for remote images; `--image-detail auto|low|high|original` applies to all images in the invocation:
+
+```bash
+uv run dispatch new --name visual-review --cwd /repo \
+  --text "Compare these states." \
+  --image ./before.png --image ./after.webp \
+  --image-url https://example.test/reference.jpg \
+  --image-detail high
+```
+
+Local images must be PNG, JPEG, GIF, or WebP files no larger than 20 MiB. Remote images must use HTTPS and resolve only to public network addresses. Dispatch fetches remote references without redirects, validates the resulting image under the same 20 MiB bound, and sends an ephemeral inline image because App Server 0.144 does not fetch ordinary remote URLs itself. Neither local nor remote image bytes are stored in the Dispatch database. Dispatch validates image-capable model selection before starting the turn; omit `--model` to let Codex choose its default from the live catalog.
+
 Use `--dry-run` to resolve a launch and print exactly what *would* happen, with no
 daemon or thread mutation. The plan reports the resolved cwd, effective settings,
 per-input sources (origin + byte count + SHA-256), and whether a turn would start:
@@ -535,6 +548,19 @@ uv run dispatch send 019ead04-d2f4-77e2-acf7-f34d25456fa8 "Picking this up."
 uv run dispatch send @docs-review "Context: check lane capabilities before writing." --context
 ```
 
+Rich image input is available for normal sends, `--steer`, `--queue`, and `--interject`. Text may be positional, read from a file, or read from stdin with `--input-file -`:
+
+```bash
+printf 'Inspect this screenshot for regressions.' \
+  | uv run dispatch send @docs-review --input-file - --image ./screen.png
+
+uv run dispatch send @docs-review "Compare both references." \
+  --image-url https://example.test/expected.png \
+  --image ./actual.png --image-detail high --steer
+```
+
+`--image` and `--image-url` are repeatable. Local files have the same PNG/JPEG/GIF/WebP and 20 MiB limits as `new`; URLs must use HTTPS and resolve only to public addresses. Dispatch ignores environment proxies, does not follow redirects, pins the validated address for the TLS connection, and gives all remote images in one delivery a shared 15-second fetch deadline. Image input is intentionally rejected with `--context` because the App Server's silent `thread/inject_items` image shape is not yet a verified Dispatch contract. Use a normal send when the model needs to inspect an image.
+
 Use `send --steer` only while the lane has an active turn:
 
 ```bash
@@ -559,6 +585,8 @@ stored in dispatch's durable registry and starts one queued turn per idle transi
 ```bash
 uv run dispatch send @docs-review "Run this after the active turn." --queue
 ```
+
+Queued images are durable references, not copied blobs: Dispatch stores the normalized local path or HTTPS URL plus bounded validation metadata, never image bytes. It revalidates local files, public URL resolution and content, and model image support at delivery time, so a missing or invalid image fails clearly instead of starting a malformed turn.
 
 Use `send --intro` for managed Codex-to-Codex coordination. It appends the
 standard visible Dispatch attribution footer with a Codex thread link and reply
@@ -1116,6 +1144,7 @@ read/write/destroy, and daemon read tools. The daemon read tool includes the
 permission-profile, service-tier, and provider-capacity choices without
 guessing. Each grouped call chooses an `op` inside the tool, and that op's
 arguments/schema still derive from the same contract registry.
+The thread-write `new` and `send` ops accept a structured `content` array with `text`, `image`, and `local_image` items. MCP clients should send image URLs and local paths as typed content rather than reproducing CLI flags; the same HTTPS, format, size, mode, and queue-delivery validation applies.
 The thread-write tool's `fork` op accepts `last_turn_id`, which asks App Server
 to fork history through that completed turn, inclusive.
 The thread-read tool's `roster`, `discover`, and `show` ops expose the same

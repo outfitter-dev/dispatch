@@ -120,6 +120,69 @@ def test_send_intro_flag_maps_to_send_contract(monkeypatch: pytest.MonkeyPatch) 
     }
 
 
+def test_send_projects_stdin_and_repeatable_image_flags(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        captured.update(params)
+        return {"lane": "L1", "op": op_id, "accepted": True}
+
+    image = tmp_path / "image.png"
+    result = runner.invoke(
+        derive_cli(REGISTRY, invoke),
+        [
+            "send",
+            "@docs",
+            "--input-file",
+            "-",
+            "--image",
+            str(image),
+            "--image-url",
+            "https://example.com/a.png",
+            "--image-detail",
+            "low",
+        ],
+        input="from stdin",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["text"] == "from stdin"
+    assert captured["content"] == [
+        {"type": "local_image", "path": str(image.resolve()), "detail": "low"},
+        {"type": "image", "url": "https://example.com/a.png", "detail": "low"},
+    ]
+
+
+def test_new_projects_repeatable_image_flags_without_public_content_option(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        captured.update(params)
+        return {
+            "id": "L1",
+            "handle": "@x",
+            "source": "own",
+            "status": "idle",
+            "message_accepted": True,
+            "goal_set": False,
+            "latest_turn": {"id": None, "status": None, "error": None, "error_at": None},
+        }
+
+    image = tmp_path / "image.png"
+    result = runner.invoke(
+        derive_cli(REGISTRY, invoke),
+        ["new", "--name", "x", "--image", str(image), "--image-detail", "original"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["content"] == [
+        {"type": "local_image", "path": str(image.resolve()), "detail": "original"}
+    ]
+    assert "--content" not in runner.invoke(derive_cli(REGISTRY, invoke), ["new", "--help"]).output
+
+
 def test_subscribe_command_maps_compact_spec_and_caller_thread(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -712,6 +775,11 @@ def test_schema_command_prints_derived_schema_without_daemon() -> None:
     assert '"mode"' in result.output
     assert "caller_thread_id" not in result.output
     assert "reserved for durable queued delivery" not in result.output
+    payload = json.loads(result.output)
+    assert "content" not in payload["input"]["properties"]
+    assert {"image", "image_url", "image_detail", "input_file"} <= set(
+        payload["input"]["properties"]
+    )
 
 
 def test_schema_command_stays_plain_json_when_color_is_forced() -> None:

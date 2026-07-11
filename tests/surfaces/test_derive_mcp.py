@@ -43,6 +43,12 @@ def test_action_schema_and_annotations_from_op() -> None:
     new_schema = next(s for s in one_of if s["properties"]["op"]["const"] == "new")
     send_schema = next(s for s in one_of if s["properties"]["op"]["const"] == "send")
     assert set(new_schema["properties"]) >= {"op", "name", "preset", "goal", "text", "send"}
+    assert "content" in new_schema["properties"]
+    assert "content" in send_schema["properties"]
+    content_items = send_schema["properties"]["content"]["items"]
+    assert len(content_items["oneOf"]) == 3
+    assert "$ref" not in str(content_items)
+    assert "$defs" not in str(content_items.get("discriminator", {}))
     assert "caller_thread_id" not in send_schema["properties"]
     assert {s["properties"]["op"]["const"] for s in one_of} >= {
         "fork",

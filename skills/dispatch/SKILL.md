@@ -105,8 +105,11 @@ prefixes, and can send an initial turn:
 ```bash
 uv run dispatch new --name my-lane --cwd /path/to/project --text "Do the bounded thing."
 uv run dispatch new --name my-lane --goal "Loop until green." --text "Start with tests."
+uv run dispatch new --name visual-review --text "Review this state." --image ./screen.png
 uv run dispatch new --name my-lane --preset reviewer --no-send
 ```
+
+For rich initial input, repeat `--image PATH` and `--image-url HTTPS_URL`; add `--image-detail auto|low|high|original` when the default detail is not appropriate. Local images must be PNG, JPEG, GIF, or WebP and at most 20 MiB. Remote images must use HTTPS and resolve publicly; Dispatch fetches them under a shared 15-second deadline into ephemeral App Server inputs and never stores the bytes.
 
 Omit permission-profile, sandbox, approval, model, and service-tier settings when Codex defaults are
 acceptable. `dispatch new` omits unset policy/model fields from `thread/start`
@@ -456,12 +459,14 @@ uv run dispatch send @my-lane "Focus on docs first." --steer
 uv run dispatch send @my-lane "Stop and do this instead." --interject
 uv run dispatch send @my-lane "Context: use lane publicly, thread internally." --context
 uv run dispatch send @my-lane "After this finishes, summarize risks." --mode queue
+uv run dispatch send @my-lane "Inspect this screenshot." --image ./screen.png
+printf 'Compare the attached states.' | uv run dispatch send @my-lane --input-file - --image ./before.png --image ./after.png
 uv run dispatch send @my-lane "Can you check this?" --intro
 ```
 
 The mode flags and `--mode send|steer|queue|interject|context` are mutually
 exclusive. `--queue` stores the message durably and starts one queued turn when
-the lane is idle.
+the lane is idle. `--image` and `--image-url` are repeatable, and `--image-detail auto|low|high|original` applies to the invocation. Images work with send, steer, queue, and interject. They do not work with context injection; use a normal send when the target must inspect an image. Queued images store references and bounded metadata rather than bytes, then revalidate local files and remote content at delivery.
 
 Use `--intro` when you are sending from one managed Codex thread to another and
 want the recipient to know how to reply through dispatch. It derives the sender
@@ -684,6 +689,7 @@ The MCP surface is grouped for agent ergonomics, not one tool per CLI
 subcommand. Tools are grouped by workflow and safety boundary, and each call
 selects an `op` inside the tool. In this repo, the workspace-local Codex plugin
 lives at `plugins/dispatch`. It exposes these skills and the same MCP registry.
+For rich input, pass the thread-write `new` or `send` op a structured `content` array containing `text`, `image`, and `local_image` items. Do not translate CLI flags into an ad hoc JSON string; MCP derives and validates the typed array from the same authored contract.
 Use the daemon-read MCP tool's `models` op before setting explicit model or
 service-tier arguments, its `permissions` op before selecting a named profile,
 and its `usage` op before making capacity-based routing decisions.

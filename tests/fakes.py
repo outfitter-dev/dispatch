@@ -56,6 +56,7 @@ from outfitter.dispatch.client.models import (
     TurnError,
     TurnItemsView,
     TurnStatus,
+    UserInput,
 )
 from outfitter.dispatch.config import CapturePolicy, RuntimePolicy
 from outfitter.dispatch.contracts.context import Ctx
@@ -515,6 +516,7 @@ class FakeLaneClient:
         thread_id: str,
         text: str,
         cwd: str,
+        input_items: list[UserInput] | None = None,
         permission_profile: str | None = None,
         approval_policy: ApprovalPolicy | None = None,
         approvals_reviewer: ApprovalsReviewer | None = None,
@@ -531,6 +533,9 @@ class FakeLaneClient:
             thread_id=thread_id,
             text=text,
             cwd=cwd,
+            input_items=[item.model_dump(by_alias=True, exclude_none=True) for item in input_items]
+            if input_items
+            else [],
             permission_profile=permission_profile,
             approval_policy=approval_policy,
             approvals_reviewer=approvals_reviewer,
@@ -545,10 +550,20 @@ class FakeLaneClient:
         return {}
 
     async def turn_steer(
-        self, thread_id: str, expected_turn_id: str, text: str
+        self,
+        thread_id: str,
+        expected_turn_id: str,
+        text: str,
+        input_items: list[UserInput] | None = None,
     ) -> dict[str, object]:
         self._record(
-            "turn_steer", thread_id=thread_id, expected_turn_id=expected_turn_id, text=text
+            "turn_steer",
+            thread_id=thread_id,
+            expected_turn_id=expected_turn_id,
+            text=text,
+            input_items=[item.model_dump(by_alias=True, exclude_none=True) for item in input_items]
+            if input_items
+            else [],
         )
         return {}
 

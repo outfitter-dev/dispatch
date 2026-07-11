@@ -15,6 +15,7 @@ import typer
 from typer.testing import CliRunner
 
 from outfitter.dispatch.contracts.derive_cli import (
+    CLI_ADAPTED_INPUT_FIELDS,
     CLI_PROJECTION_CONTROL_PATHS,
     cli_public_routes,
     cli_schema_routes,
@@ -168,8 +169,15 @@ def test_single_route_cli_adapters_cover_every_authored_input_field() -> None:
             for name, field in REGISTRY.get(op_id).input.model_fields.items()
             if not is_internal_field(field)
         }
-        projected = set(inspect.signature(callbacks[route]).parameters) - {"json"}
+        parameters = set(inspect.signature(callbacks[route]).parameters) - {"json"}
+        adapters = CLI_ADAPTED_INPUT_FIELDS.get(route, {})
+        projected = parameters | set(adapters)
         assert authored <= projected, f"{route} missing CLI fields: {sorted(authored - projected)}"
+        for authored_field, cli_fields in adapters.items():
+            assert cli_fields <= parameters, (
+                f"{route} adapter for {authored_field} missing CLI fields: "
+                f"{sorted(cli_fields - parameters)}"
+            )
 
 
 def test_full_cli_commands_are_declared_projection_or_control_paths() -> None:

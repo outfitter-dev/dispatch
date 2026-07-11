@@ -13,9 +13,10 @@ import os
 import shlex
 import sys
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
 import typer
 
@@ -27,6 +28,7 @@ Invoker = Callable[[str, dict[str, object]], dict[str, object]]
 Renderer = Callable[[Op, dict[str, object]], None]
 
 _SendMode = Literal["send", "steer", "queue", "interject", "context"]
+_ImageDetail = Literal["auto", "low", "high", "original"]
 _SearchSortKey = Literal["created_at", "updated_at"]
 _QueryDateField = Literal["created_at", "updated_at"]
 _HistoryView = Literal["auto", "overview", "summary", "items", "tools", "files"]
@@ -82,6 +84,10 @@ _SIMPLE_ROUTES: tuple[CliRoute, ...] = (
 )
 
 CLI_PROJECTION_CONTROL_PATHS: tuple[tuple[str, ...], ...] = (("schema",),)
+CLI_ADAPTED_INPUT_FIELDS: dict[str, dict[str, frozenset[str]]] = {
+    "new": {"content": frozenset({"image", "image_url", "image_detail"})},
+    "send": {"content": frozenset({"image", "image_url", "image_detail"})},
+}
 _COMPOSED_SCHEMA_ROUTES: dict[str, str] = {
     "list --unmanaged": "discover",
     "new --dry-run": "new-plan",
@@ -301,8 +307,9 @@ _PATH_FIELDS: tuple[str, ...] = (
 def _new_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Callable[..., None]:
     new_op = registry.get("new")
     plan_op = registry.get("new-plan")
-    parameters = _parameters(new_op)
+    parameters = [param for param in _parameters(new_op) if param.name != "content"]
     parameters = [_new_subscribe_parameter(param) for param in parameters]
+    parameters[len(parameters) - 1 : len(parameters) - 1] = _image_parameters()
     parameters.insert(
         len(parameters) - 1,  # before the trailing --json option
         inspect.Parameter(
@@ -338,6 +345,7 @@ def _new_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Cal
         _resolve_new_subscribe(ctx, kwargs)
         _resolve_new_stdin(kwargs)
         _absolutize_new_paths(kwargs)
+        _resolve_image_options(kwargs)
         if kwargs.get("subscribe") is not None:
             kwargs["caller_thread_id"] = os.environ.get("CODEX_THREAD_ID")
         op = plan_op if dry_run else new_op
@@ -426,7 +434,19 @@ def _absolutize_new_paths(kwargs: dict[str, object]) -> None:
 def _send_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., None]:
     def command(
         lane: Annotated[str, typer.Argument(help="Thread selector.")],
-        text: Annotated[str, typer.Argument(help="Message text.")],
+        text: Annotated[str | None, typer.Argument(help="Message text.")] = None,
+        input_file: Annotated[
+            str | None, typer.Option("--input-file", help="Message text file (use - for stdin).")
+        ] = None,
+        image: Annotated[
+            list[str] | None, typer.Option("--image", help="Local image path (repeatable).")
+        ] = None,
+        image_url: Annotated[
+            list[str] | None, typer.Option("--image-url", help="HTTPS image URL (repeatable).")
+        ] = None,
+        image_detail: Annotated[
+            _ImageDetail | None, typer.Option("--image-detail", help="Image detail hint.")
+        ] = None,
         mode: Annotated[_SendMode, typer.Option("--mode", help="Delivery mode.")] = "send",
         steer: Annotated[bool, typer.Option("--steer", help="Steer an active turn.")] = False,
         queue: Annotated[bool, typer.Option("--queue", help="Queue after current work.")] = False,
@@ -453,7 +473,16 @@ def _send_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., No
         if len(chosen) > 1 or (chosen and mode != "send"):
             typer.secho("dispatch: choose exactly one send mode", fg="red", err=True)
             raise typer.Exit(code=2)
-        params = {"lane": lane, "text": text, "mode": chosen[0] if chosen else mode, "intro": intro}
+        params: dict[str, object] = {
+            "lane": lane,
+            "text": _read_send_text(text, input_file),
+            "mode": chosen[0] if chosen else mode,
+            "intro": intro,
+            "image": image or [],
+            "image_url": image_url or [],
+            "image_detail": image_detail,
+        }
+        _resolve_image_options(params)
         if intro:
             params["caller_thread_id"] = os.environ.get("CODEX_THREAD_ID")
         result = invoke(
@@ -465,6 +494,60 @@ def _send_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., No
 
     command.__doc__ = op.summary
     return command
+
+
+def _image_parameters() -> list[inspect.Parameter]:
+    return [
+        inspect.Parameter(
+            "image",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=typer.Option([], "--image", help="Local image path (repeatable)."),
+            annotation=list[str],
+        ),
+        inspect.Parameter(
+            "image_url",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=typer.Option([], "--image-url", help="HTTPS image URL (repeatable)."),
+            annotation=list[str],
+        ),
+        inspect.Parameter(
+            "image_detail",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=typer.Option(None, "--image-detail", help="Image detail hint."),
+            annotation=_ImageDetail | None,
+        ),
+    ]
+
+
+def _resolve_image_options(kwargs: dict[str, object]) -> None:
+    images = [
+        str(Path(path).expanduser().resolve()) for path in cast(list[str], kwargs.pop("image", []))
+    ]
+    urls = [str(url) for url in cast(list[str], kwargs.pop("image_url", []))]
+    detail = kwargs.pop("image_detail", None)
+    if detail is not None and not images and not urls:
+        typer.secho("dispatch: --image-detail requires --image or --image-url", fg="red", err=True)
+        raise typer.Exit(code=2)
+    content: list[dict[str, object]] = []
+    content.extend({"type": "local_image", "path": path, "detail": detail} for path in images)
+    content.extend({"type": "image", "url": url, "detail": detail} for url in urls)
+    if content:
+        kwargs["content"] = content
+
+
+def _read_send_text(text: str | None, input_file: str | None) -> str | None:
+    if text is not None and input_file is not None:
+        typer.secho("dispatch: TEXT and --input-file are mutually exclusive", fg="red", err=True)
+        raise typer.Exit(code=2)
+    if input_file is None:
+        return text
+    if input_file == "-":
+        return sys.stdin.read()
+    try:
+        return Path(input_file).expanduser().read_text()
+    except OSError as exc:
+        typer.secho(f"dispatch: cannot read --input-file: {exc}", fg="red", err=True)
+        raise typer.Exit(code=2) from exc
 
 
 def _flag_modes(
@@ -1081,7 +1164,7 @@ def _schema_command(registry: OpRegistry) -> Callable[..., None]:
             data={
                 "command": command,
                 "op": op.id,
-                "input": public_schema(op.input.model_json_schema()),
+                "input": _cli_input_schema(op),
                 "output": op.output.model_json_schema(),
             }
         )
@@ -1089,6 +1172,53 @@ def _schema_command(registry: OpRegistry) -> Callable[..., None]:
 
     command.__doc__ = "Print the derived JSON schemas for a command."
     return command
+
+
+def _cli_input_schema(op: Op) -> dict[str, object]:
+    schema = public_schema(deepcopy(op.input.model_json_schema()))
+    adapter_id = "new" if op.id == "new-plan" else op.id
+    if adapter_id not in CLI_ADAPTED_INPUT_FIELDS:
+        return schema
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return schema
+    for authored_field in CLI_ADAPTED_INPUT_FIELDS[adapter_id]:
+        properties.pop(authored_field, None)
+    definitions = schema.get("$defs")
+    if isinstance(definitions, dict):
+        for name in ("MessageContent", "TextContent", "ImageUrlContent", "LocalImageContent"):
+            definitions.pop(name, None)
+        if not definitions:
+            schema.pop("$defs", None)
+    properties.update(
+        {
+            "image": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Local image paths supplied with repeatable --image flags.",
+            },
+            "image_url": {
+                "type": "array",
+                "items": {"type": "string", "format": "uri"},
+                "description": "HTTPS image URLs supplied with repeatable --image-url flags.",
+            },
+            "image_detail": {
+                "anyOf": [
+                    {"type": "string", "enum": ["auto", "low", "high", "original"]},
+                    {"type": "null"},
+                ],
+                "default": None,
+                "description": "Image detail hint applied to this invocation.",
+            },
+        }
+    )
+    if op.id == "send":
+        properties["input_file"] = {
+            "anyOf": [{"type": "string"}, {"type": "null"}],
+            "default": None,
+            "description": "Message text file; '-' reads stdin.",
+        }
+    return schema
 
 
 def _schema_op_id(command: str) -> str:

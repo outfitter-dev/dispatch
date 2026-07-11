@@ -2,7 +2,7 @@
 
 Date started: 2026-07-09
 Date finalized: pending
-Status: Active - DIS-46 submission
+Status: Active - DIS-47 final review
 Spec: `.agents/goals/2026-07-09-app-server-adoption/SPEC.md`
 Goal: `.agents/goals/2026-07-09-app-server-adoption/GOAL.md`
 Prompt: `.agents/goals/2026-07-09-app-server-adoption/PROMPT.md`
@@ -13,16 +13,15 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 - Objective: land the clear App Server 0.144 adoption work.
 - Completion horizon: merged, tracker-reconciled, dogfooded, clean `main`.
 - Authority used: Linear planning plus a dedicated Graphite packet commit.
-- Outcome: preparation, DIS-42, DIS-44, DIS-45, DIS-35, DIS-39, and DIS-18 are
-  merged; DIS-46 is locally complete and awaiting submission.
-- Tracker/PR/source-control state: PRs #73-#82 merged; DIS-46 is on its dedicated
-  Graphite branch above current `main`. Release/publish work remains outside
-  this goal.
+- Outcome: preparation, DIS-42, DIS-44, DIS-45, DIS-35, DIS-39, DIS-18, and
+  DIS-46 are merged; DIS-47 is implemented, fully gated, and locally reviewed.
+- Tracker/PR/source-control state: PRs #73-#83 merged; DIS-47 is on its dedicated
+  Graphite branch above current `main`. Release/publish work remains outside this goal.
 - Verification: prompt gate passed at 3,752 characters with no placeholders.
-- Review state: earlier milestones are clean; both DIS-46 round 2 reviews are
-  5/5 with all round 1 findings fixed and no open P0-P2 findings.
-- Remaining risks: partial provider history views,
-  live scenario entitlement/capacity, and remaining milestone stack order.
+- Review state: earlier milestones are clean. DIS-47 round one found eight code/data
+  and seven surface issues; subsequent rounds verified every implementation repair.
+  Code round five and surface round three are both 5/5 clean with no open P0-P2.
+- Remaining risks: hosted PR checks, merge reconciliation, and the goal-wide clean-main pass.
 
 ## Readiness
 
@@ -32,7 +31,8 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 - Verification blockers: none known.
 - Tracker blockers: none; issues and Linear adoption plan exist.
 - Authority blockers: release/publish intentionally excluded.
-- Next action: submit DIS-46, reconcile hosted checks and review, then merge the milestone.
+- Next action: submit and merge DIS-47, reconcile Linear, then run the final
+  full-stack/dogfood pass on clean `main`.
 
 ## Goal Amendments
 
@@ -251,6 +251,33 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 - Next: commit/submit DIS-46, reconcile hosted checks and Linear, merge through
   Graphite, then continue DIS-47.
 - Blockers: none.
+
+2026-07-11 - DIS-47 rich image inputs
+- Added one discriminated text/image/local-image contract shared by `new` and `send`.
+  CLI ergonomics derive repeatable `--image`/`--image-url` plus stdin text while MCP
+  retains the compact structured `content` array. App Server manifest guards now record
+  the shared turn/start and turn/steer image union and detail values.
+- Local PNG/JPEG/GIF/WebP files are signature-checked, bounded, hashed off the event loop,
+  and never copied into the registry. HTTPS references are persisted as durable references,
+  resolved only to public addresses, connected through a DNS-pinned TLS transport without
+  redirects or environment proxies, fetched under a shared deadline, and converted to
+  ephemeral data URLs because live 0.144 rejects ordinary remote URLs.
+- Schema v21 adds structured queue references and metadata. Delivery revalidates files,
+  remote content, and model modalities; immediate failures surface to the caller, restart
+  recovery preserves v20 text queues, and capture strips inline image bytes and secrets.
+- Dry-run now runs the same side-effect-free file/model preflight before workspace mutation
+  and reports safe image references. CLI schema describes the actual shell adapter while
+  grouped MCP schemas inline authored unions without dangling definitions.
+- Verification: `just check` passed with 603 tests and 17 live tests deselected, strict
+  mypy/Ruff, package build, and package contents. An isolated authored Dispatch path used
+  `open` plus `send` with a local red PNG and a remote Python logo; the agent returned
+  `RED PYTHON` in 15.15 seconds.
+- Review round one: code/data 2/5 with six P1 and two P2; surface 2/5 with three P1 and
+  four P2. Subsequent rounds verified all implementation repairs; surface round three is
+  5/5 clean and code round five is 5/5 clean after final evidence reconciliation.
+- Next: commit/submit/merge DIS-47, update Linear, then perform the goal-wide final review
+  and clean-main dogfood pass.
+- Blockers: none.
 ```
 
 ## Review Log
@@ -284,6 +311,14 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 | DIS-46 r1 surface | precedence/surfaces/docs | `tmp/reviews/dis-46/surface-round-1.json` | 3/5 | changes requested | 3 | Two P1 and one P2; fixed |
 | DIS-46 r2 code | protocol/config/storage/restart | `tmp/reviews/dis-46/code-round-2.json` | 5/5 | clean | 0 | Prior findings verified fixed; 265 focused tests |
 | DIS-46 r2 surface | precedence/surfaces/docs | `tmp/reviews/dis-46/surface-round-2.json` | 5/5 | clean | 0 | All prior findings fixed; no new P0-P2 |
+| DIS-47 r1 code | rich input/runtime/queue/security | `tmp/reviews/dis47-code/round-1.json` | 2/5 | changes requested | 8 | Six P1 and two P2; fixes applied pending re-review |
+| DIS-47 r1 surface | CLI/MCP/docs/evidence | `tmp/reviews/dis47-surface/round-1.json` | 2/5 | changes requested | 7 | Three P1 and four P2; fixes applied pending re-review |
+| DIS-47 r2 code | rich input/runtime/queue/security | `tmp/reviews/dis47-code/round-2.json` | 4/5 | changes requested | 1 | Original findings fixed; transient missing-import snapshot repaired |
+| DIS-47 r2 surface | CLI/MCP/docs/evidence | `tmp/reviews/dis47-surface/round-2.json` | 4/5 | changes requested | 1 | Private HTTPX integration replaced with public transport boundary |
+| DIS-47 r3 code | full prior-finding reconciliation | `tmp/reviews/dis47-code/round-3.json` | 4/5 | changes requested | 1 | Code clean; stale retro evidence corrected |
+| DIS-47 r3 surface | full prior-finding reconciliation | `tmp/reviews/dis47-surface/round-3.json` | 5/5 | clean | 0 | All prior findings verified fixed; no worthwhile P3 remains |
+| DIS-47 r4 code | durable evidence reconciliation | `tmp/reviews/dis47-code/round-4.json` | 4/5 | changes requested | 1 | Stale high-level retro prose corrected |
+| DIS-47 r5 code | durable evidence reconciliation | `tmp/reviews/dis47-code/round-5.json` | 5/5 | clean | 0 | All prior findings fixed; exact evidence and handoff agree |
 
 ## Verification Log
 
@@ -315,6 +350,9 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 | targeted App Server permission profile test | DIS-46 | passed | Paginated stable catalog and experimental `permissions` thread start succeeded without a model turn |
 | isolated public daemon/CLI smoke | DIS-46 | passed | `permissions --json` returned current cwd-aware allowed profiles; daemon stopped cleanly |
 | derived schema/help/MCP and manifest | DIS-46 | passed | One authored op covers CLI/MCP; manifest guards stable list and experimental launch fields |
+| `just check` | DIS-47 | passed | 603 tests passed, 17 live tests deselected; strict mypy/Ruff and package gates passed |
+| authored local/remote image integration | DIS-47 | passed | Real isolated `open` + `send` delivered a local PNG and HTTPS reference through production handlers; response identified `RED PYTHON` in 15.15 seconds |
+| CLI/MCP/manifest/schema v21 checks | DIS-47 | passed | CLI schema reflects adapters, MCP content is self-contained, App Server union is guarded, and v20 queues migrate/restart safely |
 
 ## Prompt / Goal Alignment
 
@@ -353,7 +391,8 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 | PR #79 / DIS-35 | merged / Done | Capacity substrate; `12da706`; checks and review clean |
 | PR #80 / DIS-39 | merged / Done | Derived usage surface; `dd0f85e`; checks and review clean |
 | PR #82 / DIS-18 | merged / Done | Bounded incremental history sync; `18b57cf`; checks and review clean |
-| DIS-46 | In Progress | Local implementation and paired 5/5 review complete; submission pending |
+| PR #83 / DIS-46 | merged / Done | Permission profiles and preset integration; checks and review clean |
+| DIS-47 | In Progress | Rich image implementation and final local review active |
 
 ## Follow-Ups
 

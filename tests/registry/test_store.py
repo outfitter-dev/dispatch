@@ -80,6 +80,46 @@ async def test_registry_enforces_foreign_keys(store: Registry) -> None:
         await store.enqueue_message(lane="missing", text="lost")
 
 
+async def test_v20_queue_migration_preserves_pending_and_restart_rows(tmp_path: Path) -> None:
+    db = tmp_path / "registry-v20.db"
+    seeded = await Registry.open(db, now=_clock)
+    await seeded.add_lane(id="L1", handle="@one", source="own", status="idle")
+    await seeded.close()
+
+    conn = await aiosqlite.connect(db)
+    await conn.execute("ALTER TABLE queued_messages DROP COLUMN content")
+    await conn.executemany(
+        "INSERT INTO queued_messages (lane, text, status, created_at, updated_at) "
+        "VALUES ('L1', ?, ?, ?, ?)",
+        [
+            ("pending", "pending", _clock().isoformat(), _clock().isoformat()),
+            ("in-flight", "sending", _clock().isoformat(), _clock().isoformat()),
+        ],
+    )
+    await conn.execute("PRAGMA user_version = 20")
+    await conn.commit()
+    await conn.close()
+
+    migrated = await Registry.open(db, now=_clock)
+    assert (await migrated.get_queued_message(1)).content == []
+    assert (await migrated.get_queued_message(2)).status == "sending"
+    assert await migrated.reset_sending_messages() == 1
+    await migrated.close()
+
+    reopened = await Registry.open(db, now=_clock)
+    try:
+        assert (await reopened.get_queued_message(1)).status == "pending"
+        assert (await reopened.get_queued_message(2)).status == "pending"
+        rich = await reopened.enqueue_message(
+            lane="L1",
+            text="",
+            content=[{"type": "image", "url": "https://example.com/a.png"}],
+        )
+        assert rich.content == [{"type": "image", "url": "https://example.com/a.png"}]
+    finally:
+        await reopened.close()
+
+
 async def test_refs_allocated_for_owned_attached_and_forked_lanes(store: Registry) -> None:
     owned = await store.add_lane(id="owned", handle="@owned", source="own")
     attached = await store.add_lane(id="attached", handle="@attached", source="attached")
@@ -1780,7 +1820,7 @@ async def test_v17_migration_adds_replace_in_place_provider_capacity_table(
         async with migrated._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
         assert row is not None
-        assert int(row[0]) == SCHEMA_VERSION == 20
+        assert int(row[0]) == SCHEMA_VERSION == 21
     finally:
         await migrated.close()
 

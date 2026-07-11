@@ -17,12 +17,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, time
 from pathlib import Path
 from typing import Literal, TypedDict, cast
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import ValidationError as PydanticValidationError
 
 from outfitter.dispatch.client.errors import AppServerError as ClientAppServerError
 from outfitter.dispatch.client.errors import ClientError
 from outfitter.dispatch.client.models import (
+    ImageDetail,
     ThreadGoal,
     ThreadInfo,
     ThreadResult,
@@ -72,7 +74,11 @@ from .history import (
 from .history_index import index_codex_thread_read
 from .launch import ResolvedLaunch, resolve_launch
 from .message_attribution import codex_thread_link, render_dispatch_message
-from .model_registry import refresh_model_catalog, resolve_model_settings
+from .model_registry import (
+    refresh_model_catalog,
+    resolve_model_settings,
+    validate_lane_input_modalities,
+)
 from .models import (
     ActionAck,
     ActionView,
@@ -109,6 +115,7 @@ from .models import (
     LaneSyncView,
     LaneTextInput,
     LatestTurnView,
+    LaunchImageView,
     LaunchInputSource,
     LaunchPlan,
     LaunchSettingsView,
@@ -169,6 +176,12 @@ from .models import (
     WatchOutput,
 )
 from .permission_profiles import refresh_permission_profiles, resolve_permission_profile
+from .rich_input import (
+    RichInput,
+    materialize_remote_images,
+    message_audit_detail,
+    normalize_rich_input_async,
+)
 from .selectors import resolve_managed_selector, resolve_thread_selector
 from .server_request_policy import expected_response
 from .server_requests import respond_to_server_request
@@ -308,7 +321,7 @@ def _managed_identity(lane: Lane, ctx: Ctx) -> _ManagedIdentityPayload:
 
 async def _apply_send_intro(inp: SendInput, ctx: Ctx) -> str:
     if not inp.intro:
-        return inp.text
+        return inp.text or ""
 
     sender_id = inp.caller_thread_id or os.environ.get("CODEX_THREAD_ID")
     if not sender_id:
@@ -319,7 +332,7 @@ async def _apply_send_intro(inp: SendInput, ctx: Ctx) -> str:
         raise ValidationError("--intro requires the current Codex thread to be managed by dispatch")
 
     return render_dispatch_message(
-        body=inp.text,
+        body=inp.text or "",
         kind="dm",
         source=codex_thread_link(sender.handle, sender.id),
         ref=sender.ref,
@@ -574,6 +587,25 @@ async def plan_new_lane(inp: NewInput, ctx: Ctx) -> LaunchPlan:
     """Resolve a launch and report what it would do — no daemon/thread mutation."""
     launch = resolve_launch(inp)
     _validate_launch(launch)
+    rich = RichInput(text=launch.text or "", input_items=[], stored_content=[])
+    if launch.text is not None or launch.content:
+        rich = await normalize_rich_input_async(
+            text=launch.text,
+            content=launch.content,
+            cwd=str(launch.resolved.cwd),
+            validate_local_files=launch.would_send,
+        )
+        if rich.has_images and launch.would_send:
+            settings = launch.resolved.settings
+            await resolve_model_settings(
+                ctx,
+                model=settings.model,
+                model_provider=settings.model_provider,
+                reasoning_effort=settings.effort,
+                service_tier=settings.service_tier,
+                required_modalities=frozenset({"image"}),
+                persist_catalog=False,
+            )
     workspace = plan_workspace(
         cwd=launch.resolved.cwd,
         name=launch.resolved.display_name,
@@ -618,11 +650,27 @@ async def plan_new_lane(inp: NewInput, ctx: Ctx) -> LaunchPlan:
         ],
         goal_set=launch.goal is not None,
         would_send=launch.would_send,
+        image_count=sum(item.type in {"image", "local_image"} for item in launch.content),
+        images=_launch_image_views(rich),
         output_schema_present=launch.output_schema is not None,
         stage=StageView(parts=list(launch.stage_plan.parts)),
         unknown_packet_files=launch.unknown_files,
         aux_packet_dirs=launch.aux_dirs,
     )
+
+
+def _launch_image_views(rich: RichInput) -> list[LaunchImageView]:
+    images: list[LaunchImageView] = []
+    for item in rich.stored_content:
+        detail = item.get("detail")
+        typed_detail = cast("ImageDetail | None", detail)
+        if item.get("type") == "local_image" and isinstance(item.get("path"), str):
+            images.append(LaunchImageView(kind="local", ref=str(item["path"]), detail=typed_detail))
+        elif item.get("type") == "image" and isinstance(item.get("url"), str):
+            parts = urlsplit(str(item["url"]))
+            safe = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+            images.append(LaunchImageView(kind="url", ref=safe, detail=typed_detail))
+    return images
 
 
 async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
@@ -631,6 +679,16 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
     resolved = launch.resolved
     settings = resolved.settings
     goal = launch.goal
+    rich = (
+        await normalize_rich_input_async(
+            text=launch.text,
+            content=launch.content,
+            cwd=str(resolved.cwd),
+            validate_local_files=launch.would_send,
+        )
+        if launch.text is not None or launch.content
+        else RichInput(text="", input_items=[], stored_content=[])
+    )
     workspace = await prepare_workspace(
         cwd=resolved.cwd,
         name=resolved.display_name,
@@ -650,6 +708,9 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         model_provider=settings.model_provider,
         reasoning_effort=settings.effort,
         service_tier=settings.service_tier,
+        required_modalities=frozenset({"image"})
+        if rich.has_images and launch.would_send
+        else frozenset(),
     )
     explicit_service_tier = resolved_model.resolved_service_tier if settings.service_tier else None
     permission_profile = await resolve_permission_profile(
@@ -749,13 +810,15 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         )
 
     message_accepted = False
-    if settings.text is not None and inp.send:
+    if launch.would_send:
         try:
+            wire = await materialize_remote_images(rich)
             await ctx.registry.update_lane_status(lane.id, "busy")
             await ctx.client.turn_start(
                 lane.id,
-                settings.text,
+                wire.text,
                 cwd=str(effective_cwd),
+                input_items=wire.input_items,
                 permission_profile=permission_profile,
                 approval_policy=settings.approval_policy,
                 approvals_reviewer=settings.approvals_reviewer,
@@ -778,12 +841,14 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
             await ctx.registry.log_action(
                 "send",
                 lane=lane.id,
-                detail=settings.text[:120],
+                detail=message_audit_detail(rich, ctx.capture),
                 outcome=project_error(exc).code,
             )
             raise
         await _record_direct_send_receipt(ctx, lane, status="sent")
-        await ctx.registry.log_action("send", lane=lane.id, detail=settings.text[:120])
+        await ctx.registry.log_action(
+            "send", lane=lane.id, detail=message_audit_detail(rich, ctx.capture)
+        )
         message_accepted = True
     subscription = None
     if inp.subscribe is not None:
@@ -1306,63 +1371,137 @@ async def send(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
 
 async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
     text = await _apply_send_intro(inp, ctx)
+    lane = await _resolve_message_target(ctx, inp.lane)
+    _require_writable(lane, ctx)
+    rich: RichInput | None = None
+    try:
+        rich = await normalize_rich_input_async(
+            text=text,
+            content=inp.content,
+            cwd=lane.cwd or ".",
+            validate_local_files=inp.mode != "queue",
+        )
+        if rich.has_images and inp.mode != "queue":
+            await validate_lane_input_modalities(ctx, lane.id, frozenset({"image"}))
+        wire = await materialize_remote_images(rich) if inp.mode != "queue" else rich
+    except DispatchError as exc:
+        detail = (
+            message_audit_detail(rich, ctx.capture)
+            if rich is not None
+            else "rich input validation failed"
+        )
+        await _record_direct_send_receipt(
+            ctx, lane, status="failed", error=_bounded_error(exc, ctx)
+        )
+        await ctx.registry.log_action(
+            "send", lane=lane.id, detail=detail, outcome=project_error(exc).code
+        )
+        raise
     match inp.mode:
         case "send":
-            return await send(LaneTextInput(lane=inp.lane, text=text), ctx)
+            return await _send_rich(lane, rich, wire, ctx, op="send")
         case "steer":
-            return await steer(LaneTextInput(lane=inp.lane, text=text), ctx)
+            turn_id = _require_active_turn(lane, "steer")
+            await _prepare_attached_write(lane, ctx)
+            await ctx.client.turn_steer(lane.id, turn_id, wire.text, input_items=wire.input_items)
+            await ctx.registry.log_action(
+                "steer", lane=lane.id, detail=message_audit_detail(wire, ctx.capture)
+            )
+            return ActionAck(**_managed_identity(lane, ctx), op="steer")
         case "context":
-            return await brief(LaneTextInput(lane=inp.lane, text=text), ctx)
+            await _prepare_attached_write(lane, ctx)
+            parts = []
+            if rich.text:
+                parts.append({"type": "input_text", "text": rich.text})
+            parts.extend(
+                {"type": "input_text", "text": item.text}
+                for item in rich.input_items
+                if item.type == "text"
+            )
+            await ctx.client.inject_items(
+                lane.id,
+                [{"type": "message", "role": "user", "content": parts}],
+            )
+            await ctx.registry.log_action(
+                "brief", lane=lane.id, detail=message_audit_detail(rich, ctx.capture)
+            )
+            return ActionAck(**_managed_identity(lane, ctx), op="brief")
         case "interject":
-            lane = await _resolve_message_target(ctx, inp.lane)
-            _require_writable(lane, ctx)
             turn_id = _require_active_turn(lane, "interject")
-            try:
-                await _prepare_attached_write(lane, ctx)
-                await ctx.client.turn_interrupt(lane.id, turn_id)
-                await ctx.registry.log_action("interrupt", lane=lane.id, detail="interject")
-                turn_settings = await load_turn_start_settings(ctx.registry, lane.id)
-                await ctx.registry.update_lane_status(lane.id, "busy")
-                await ctx.client.turn_start(
-                    lane.id,
-                    text,
-                    cwd=lane.cwd or ".",
-                    permission_profile=turn_settings.permission_profile,
-                    approval_policy=turn_settings.approval_policy,
-                    approvals_reviewer=turn_settings.approvals_reviewer,
-                    sandbox_policy=turn_settings.sandbox_policy,
-                    effort=turn_settings.effort,
-                    summary=turn_settings.summary,
-                    model=turn_settings.model,
-                    service_tier=turn_settings.service_tier,
-                    output_schema=turn_settings.output_schema,
-                    personality=turn_settings.personality,
-                )
-            except (DispatchError, ClientError) as exc:
-                error = _bounded_error(exc, ctx)
-                await ctx.registry.record_turn_request_failed(lane.id, error)
-                await _record_direct_send_receipt(ctx, lane, status="failed", error=error)
-                await ctx.registry.log_action(
-                    "send", lane=lane.id, detail=text[:120], outcome=project_error(exc).code
-                )
-                raise
-            await _record_direct_send_receipt(ctx, lane, status="sent")
-            await ctx.registry.log_action("send", lane=lane.id, detail=text[:120])
-            return ActionAck(**_managed_identity(lane, ctx), op="interject")
+            await _prepare_attached_write(lane, ctx)
+            await ctx.client.turn_interrupt(lane.id, turn_id)
+            await ctx.registry.log_action("interrupt", lane=lane.id, detail="interject")
+            return await _send_rich(lane, rich, wire, ctx, op="interject", prepare=False)
         case "queue":
-            lane = await _resolve_message_target(ctx, inp.lane)
-            _require_writable(lane, ctx)
-            message = await ctx.registry.enqueue_message(lane=lane.id, text=text)
+            message = await ctx.registry.enqueue_message(
+                lane=lane.id, text=rich.text, content=rich.stored_content
+            )
             await _record_queue_receipt(ctx, lane, message.id, status="created")
-            await ctx.registry.log_action("queue", lane=lane.id, detail=text[:120])
+            await ctx.registry.log_action(
+                "queue", lane=lane.id, detail=message_audit_detail(rich, ctx.capture)
+            )
             if lane.status == "idle":
                 await queue.drain_next_queued_message(ctx, lane.id)
+                delivered = await ctx.registry.get_queued_message(message.id)
+                if delivered.status == "error":
+                    raise ValidationError(
+                        f"queued message {message.id} failed during immediate delivery: "
+                        f"{delivered.error or 'unknown error'}"
+                    )
             pending = await ctx.registry.pending_message_count(lane.id)
             return ActionAck(
                 **_managed_identity(lane, ctx),
                 op="queue",
                 detail=f"queued message {message.id}; pending={pending}",
             )
+
+
+async def _send_rich(
+    lane: Lane,
+    rich: RichInput,
+    wire: RichInput,
+    ctx: Ctx,
+    *,
+    op: Literal["send", "interject"],
+    prepare: bool = True,
+) -> ActionAck:
+    try:
+        if prepare:
+            await _prepare_attached_write(lane, ctx)
+        turn_settings = await load_turn_start_settings(ctx.registry, lane.id)
+        await ctx.registry.update_lane_status(lane.id, "busy")
+        await ctx.client.turn_start(
+            lane.id,
+            wire.text,
+            cwd=lane.cwd or ".",
+            input_items=wire.input_items,
+            permission_profile=turn_settings.permission_profile,
+            approval_policy=turn_settings.approval_policy,
+            approvals_reviewer=turn_settings.approvals_reviewer,
+            sandbox_policy=turn_settings.sandbox_policy,
+            effort=turn_settings.effort,
+            summary=turn_settings.summary,
+            model=turn_settings.model,
+            service_tier=turn_settings.service_tier,
+            output_schema=turn_settings.output_schema,
+            personality=turn_settings.personality,
+        )
+    except (DispatchError, ClientError) as exc:
+        error = _bounded_error(exc, ctx)
+        await ctx.registry.record_turn_request_failed(lane.id, error)
+        await _record_direct_send_receipt(ctx, lane, status="failed", error=error)
+        await ctx.registry.log_action(
+            "send",
+            lane=lane.id,
+            detail=message_audit_detail(wire, ctx.capture),
+            outcome=project_error(exc).code,
+        )
+        raise
+    await _record_direct_send_receipt(ctx, lane, status="sent")
+    await ctx.registry.log_action(
+        "send", lane=lane.id, detail=message_audit_detail(wire, ctx.capture)
+    )
+    return ActionAck(**_managed_identity(lane, ctx), op=op)
 
 
 async def steer(inp: LaneTextInput, ctx: Ctx) -> ActionAck:

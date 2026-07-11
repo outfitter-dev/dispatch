@@ -13,6 +13,13 @@ from outfitter.dispatch.contracts.errors import DispatchError, project_error
 from outfitter.dispatch.registry.models import Lane, MessageReceipt, QueuedMessage
 
 from .capture import bound_text
+from .model_registry import validate_lane_input_modalities
+from .rich_input import (
+    materialize_remote_images,
+    message_audit_detail,
+    normalize_rich_input_async,
+    queued_content,
+)
 from .turn_settings import load_turn_start_settings
 
 
@@ -31,14 +38,24 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
     if not await ctx.registry.claim_queued_message(message.id):
         return False
     try:
+        rich = await normalize_rich_input_async(
+            text=message.text,
+            content=queued_content(message.content),
+            cwd=lane.cwd or ".",
+            validate_local_files=True,
+        )
+        if rich.has_images:
+            await validate_lane_input_modalities(ctx, lane.id, frozenset({"image"}))
+        wire = await materialize_remote_images(rich)
         if lane.source == "attached" and ctx.policy.allow_attached_writes:
             await ctx.client.thread_resume(lane.id, exclude_turns=True)
         turn_settings = await load_turn_start_settings(ctx.registry, lane.id)
         await ctx.registry.update_lane_status(lane.id, "busy")
         await ctx.client.turn_start(
             lane.id,
-            message.text,
+            wire.text,
             cwd=lane.cwd or ".",
+            input_items=wire.input_items,
             permission_profile=turn_settings.permission_profile,
             approval_policy=turn_settings.approval_policy,
             approvals_reviewer=turn_settings.approvals_reviewer,
@@ -53,21 +70,28 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
     except (DispatchError, ClientError) as exc:
         projected = project_error(exc)
         error = _bounded_error(exc, ctx)
-        await ctx.registry.fail_queued_message(message.id, projected.code)
+        await ctx.registry.fail_queued_message(message.id, error)
         await _record_queue_receipt(ctx, lane, message, status="failed", error=error)
         await ctx.registry.record_turn_request_failed(lane.id, error)
         await ctx.registry.log_action(
             "queue",
             lane=lane.id,
-            detail=message.text[:120],
+            detail=_queue_detail(message),
             outcome=projected.code,
         )
         return True
     await _record_queue_receipt(ctx, lane, message, status="sent")
     await ctx.registry.complete_queued_message(message.id)
     await ctx.registry.mark_inbox_delivered_for_queue(message.id, ack=True)
-    await ctx.registry.log_action("send", lane=lane.id, detail=message.text[:120], outcome="queued")
+    await ctx.registry.log_action(
+        "send", lane=lane.id, detail=message_audit_detail(wire, ctx.capture), outcome="queued"
+    )
     return True
+
+
+def _queue_detail(message: QueuedMessage) -> str:
+    image_count = sum(item.get("type") in {"image", "local_image"} for item in message.content)
+    return f"queued_message={message.id}; images={image_count}"
 
 
 def _bounded_error(exc: BaseException, ctx: Ctx) -> str:

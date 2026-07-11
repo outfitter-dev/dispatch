@@ -10,7 +10,9 @@ unavailable (see conftest).
 from __future__ import annotations
 
 import asyncio
+import struct
 import subprocess
+import zlib
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -22,12 +24,19 @@ from outfitter.dispatch.client.events import LaneEvent, TurnCompleted
 from outfitter.dispatch.client.models import SandboxPolicy
 from outfitter.dispatch.config import RuntimePolicy
 from outfitter.dispatch.contracts.context import Ctx
+from outfitter.dispatch.core import handlers
 from outfitter.dispatch.core.backfill import backfill_codex_history
 from outfitter.dispatch.core.capacity import refresh_codex_capacity
+from outfitter.dispatch.core.models import (
+    ImageUrlContent,
+    LocalImageContent,
+    OpenInput,
+    SendInput,
+)
 from outfitter.dispatch.core.server_requests import ServerRequestManager, respond_to_server_request
 from outfitter.dispatch.registry.store import Registry
 
-from ._drive import run_turn, run_turn_autoapprove
+from ._drive import collect_turn, run_turn, run_turn_autoapprove
 
 pytestmark = pytest.mark.integration
 
@@ -62,6 +71,65 @@ async def test_read_only_turn_returns_pong(client: AppServerClient, work_dir: Pa
     thread = await client.thread_start(cwd=str(work_dir), sandbox="read-only", ephemeral=True)
     text = await run_turn(client, thread.id, "Reply with exactly one word: pong", str(work_dir))
     assert "pong" in text.lower()
+
+
+async def test_local_and_remote_images_are_visible_to_a_real_turn(
+    client: AppServerClient, work_dir: Path
+) -> None:
+    image = work_dir / "red.png"
+    _write_solid_png(image, red=255, green=0, blue=0)
+    registry = await Registry.open()
+    ctx = Ctx(
+        client=client,
+        registry=registry,
+        log=structlog.get_logger(),
+        abort=asyncio.Event(),
+        policy=RuntimePolicy(),
+        provider_session_id="integration-app-server",
+    )
+    try:
+        lane = await handlers.open_lane(OpenInput(name="image-proof", cwd=str(work_dir)), ctx)
+        raw = client.raw_events(lane.id)
+        await handlers.send_message(
+            SendInput(
+                lane=lane.ref,
+                text=(
+                    "The first image is a solid color and the second is a language logo. "
+                    "Reply with exactly two words naming the color and language."
+                ),
+                content=[
+                    LocalImageContent(path=str(image), detail="low"),
+                    ImageUrlContent(
+                        url="https://raw.githubusercontent.com/github/explore/main/topics/python/python.png",
+                        detail="low",
+                    ),
+                ],
+            ),
+            ctx,
+        )
+        text = await collect_turn(raw)
+        assert "red" in text.lower()
+        assert "python" in text.lower()
+        queued_rows = await registry.pending_message_count(lane.id)
+        assert queued_rows == 0
+    finally:
+        await registry.close()
+
+
+def _write_solid_png(path: Path, *, red: int, green: int, blue: int) -> None:
+    width = height = 32
+    rows = b"".join(b"\x00" + bytes((red, green, blue)) * width for _ in range(height))
+
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        body = kind + payload
+        return struct.pack(">I", len(payload)) + body + struct.pack(">I", zlib.crc32(body))
+
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
+    )
 
 
 async def test_permission_profiles_list_and_apply_without_a_turn(

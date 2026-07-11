@@ -81,3 +81,18 @@ def test_normalized_fields_redact_secrets_and_respect_bounds() -> None:
     assert b"supersecret" not in encoded
     assert b"hunter2" not in encoded
     assert len(encoded) <= 96
+
+
+def test_payload_capture_never_retains_inline_image_bytes_or_secret_keys() -> None:
+    bounded = bound_payload(
+        {
+            "url": "data:image/png;base64,c2VjcmV0LWltYWdlLWJ5dGVz",
+            "token": "secret-token",
+        },
+        CapturePolicy(max_payload_bytes=1024),
+    )
+
+    encoded = json.dumps(bounded.payload)
+    assert "c2VjcmV0" not in encoded
+    assert "secret-token" not in encoded
+    assert "[image data omitted]" in encoded
