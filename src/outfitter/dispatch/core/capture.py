@@ -21,6 +21,7 @@ _CLI_SECRET = re.compile(
     r"(?i)(--(?:api[_-]?key|auth(?:orization)?|cookie|password|secret|token)\s+)(\S+)"
 )
 _BEARER = re.compile(r"(?i)\bbearer\s+\S+")
+_IMAGE_DATA_URL = re.compile(r"data:image/[a-z0-9.+-]+;base64,[a-z0-9+/=]+", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -61,7 +62,8 @@ def redact_text(text: str | None) -> str | None:
         return None
     redacted = _BEARER.sub("Bearer [redacted]", text)
     redacted = _CLI_SECRET.sub(r"\1[redacted]", redacted)
-    return _SENSITIVE_ASSIGNMENT.sub(r"\1\2[redacted]", redacted)
+    redacted = _SENSITIVE_ASSIGNMENT.sub(r"\1\2[redacted]", redacted)
+    return _IMAGE_DATA_URL.sub("[image data omitted]", redacted)
 
 
 def bound_redacted_json(value: object, policy: CapturePolicy) -> object:
@@ -77,7 +79,7 @@ def bound_redacted_json(value: object, policy: CapturePolicy) -> object:
 def bound_payload(payload: dict[str, object] | None, policy: CapturePolicy) -> BoundedPayload:
     if payload is None:
         return BoundedPayload(payload=None, original_bytes=0, truncated=False)
-    safe_payload = cast(dict[str, object], _json_safe(payload))
+    safe_payload = cast(dict[str, object], _redacted_json_safe(payload))
     encoded = _dump(safe_payload).encode("utf-8")
     if len(encoded) <= policy.max_payload_bytes:
         return BoundedPayload(

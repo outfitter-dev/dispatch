@@ -54,13 +54,18 @@ class ResolvedModelSettings:
 
 
 async def refresh_model_catalog(ctx: Ctx, *, source: str = "app-server") -> ModelCatalogSnapshot:
+    snapshot = await _read_model_catalog(ctx, source=source)
+    await ctx.registry.upsert_model_catalog(snapshot.models)
+    return snapshot
+
+
+async def _read_model_catalog(ctx: Ctx, *, source: str) -> ModelCatalogSnapshot:
     config = await ctx.client.config_read()
     models = await ctx.client.model_list()
     now = ctx.registry.now_iso()
     entries = [
         _catalog_entry(model, config=config, refreshed_at=now, source=source) for model in models
     ]
-    await ctx.registry.upsert_model_catalog(entries)
     return ModelCatalogSnapshot(models=entries, config=config, refreshed_at=now)
 
 
@@ -71,12 +76,15 @@ async def resolve_model_settings(
     model_provider: str | None,
     reasoning_effort: str | None,
     service_tier: str | None,
+    required_modalities: frozenset[str] = frozenset(),
+    persist_catalog: bool = True,
 ) -> ResolvedModelSettings:
     if (
         service_tier is None
         and reasoning_effort is None
         and model is None
         and model_provider is None
+        and not required_modalities
     ):
         config = await ctx.client.config_read()
         configured_tier = config.service_tier
@@ -90,18 +98,42 @@ async def resolve_model_settings(
             service_tier_source="configured_default" if configured_tier else "unknown",
         )
 
-    snapshot = await refresh_model_catalog(ctx)
+    snapshot = (
+        await refresh_model_catalog(ctx)
+        if persist_catalog
+        else await _read_model_catalog(ctx, source="app-server")
+    )
     provider = model_provider or snapshot.config.model_provider or "openai"
     resolved_model = model or snapshot.config.model
     if resolved_model is None:
+        defaults = [entry.id for entry in snapshot.models if entry.is_default]
+        if len(defaults) == 1:
+            resolved_model = defaults[0]
+    if resolved_model is None:
         raise ValidationError(
-            "explicit model settings need a model; set --model or configure a Codex default"
+            "could not determine the Codex default model; set --model or refresh `dispatch models`"
         )
 
     entry = _find_model(snapshot.models, resolved_model, provider=provider)
     if entry is None:
         available = ", ".join(item.id for item in snapshot.models) or "none"
         raise ValidationError(f"unknown model {resolved_model!r}; available models: {available}")
+
+    missing_modalities = required_modalities - set(entry.input_modalities)
+    if missing_modalities:
+        required = ", ".join(sorted(missing_modalities))
+        available = (
+            ", ".join(
+                item.id
+                for item in snapshot.models
+                if required_modalities <= set(item.input_modalities)
+            )
+            or "none"
+        )
+        raise ValidationError(
+            f"model {resolved_model!r} does not advertise input modalities: {required}; "
+            f"models advertising them: {available}"
+        )
 
     if (
         reasoning_effort is not None
@@ -129,6 +161,22 @@ async def resolve_model_settings(
         resolved_service_tier=resolved_tier,
         service_tier_name=tier_name,
         service_tier_source=tier_source,
+    )
+
+
+async def validate_lane_input_modalities(
+    ctx: Ctx, lane_id: str, required_modalities: frozenset[str]
+) -> None:
+    if not required_modalities:
+        return
+    lane_settings = await ctx.registry.get_lane_model_settings(lane_id)
+    await resolve_model_settings(
+        ctx,
+        model=lane_settings.model if lane_settings is not None else None,
+        model_provider=lane_settings.model_provider if lane_settings is not None else None,
+        reasoning_effort=None,
+        service_tier=None,
+        required_modalities=required_modalities,
     )
 
 

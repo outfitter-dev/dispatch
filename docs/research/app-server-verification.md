@@ -66,6 +66,7 @@ Lifecycle/threads/turns: `thread/start resume fork read list loaded/list archive
 - `turn/start` accepts `serviceTier` plus richer context/environment metadata.
   Dispatch resolves explicit `service_tier` values before projecting them
   through configured `new` turns.
+- `turn/start` and `turn/steer` share the generated `UserInput` union: text is `{type:"text",text}`, images are `{type:"image",url,detail?}`, and local images are `{type:"localImage",path,detail?}`. Image detail is `auto|low|high|original`. Live verification against 0.144 showed that the `image.url` field rejects ordinary remote HTTPS URLs with `-32600` and requires an inline data URL. Dispatch therefore keeps HTTPS URLs as its authored/durable reference, fetches and validates them only at delivery, and sends an ephemeral data URL without storing image bytes. The generated schema does not establish an equivalent typed image contract for raw `thread/inject_items`, so Dispatch keeps silent context injection text-only until that path is separately verified.
 - `model/list` is the authoritative catalog for model ids, reasoning-effort
   support, input modalities, personality support, upgrade targets, and service
   tiers. Reasoning effort is now a model-defined non-empty string, not a closed

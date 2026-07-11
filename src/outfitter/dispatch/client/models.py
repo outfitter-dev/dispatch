@@ -14,7 +14,7 @@ Encodes the verified gotchas (``docs/research/app-server-verification.md``):
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypeGuard, cast
+from typing import Annotated, Any, Literal, TypeGuard, cast
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from pydantic.alias_generators import to_camel
@@ -283,6 +283,27 @@ class PermissionProfileListParams(WireModel):
 class TextInput(WireModel):
     type: Literal["text"] = "text"
     text: str
+
+
+ImageDetail = Literal["auto", "low", "high", "original"]
+
+
+class ImageInput(WireModel):
+    type: Literal["image"] = "image"
+    url: str
+    detail: ImageDetail | None = None
+
+
+class LocalImageInput(WireModel):
+    type: Literal["localImage"] = "localImage"
+    path: str
+    detail: ImageDetail | None = None
+
+
+type UserInput = Annotated[
+    TextInput | ImageInput | LocalImageInput,
+    Field(discriminator="type"),
+]
 
 
 class SandboxPolicy(WireModel):
@@ -611,7 +632,7 @@ class ThreadGoalGetResult(WireModel):
 
 class TurnStartParams(WireModel):
     thread_id: str
-    input: list[TextInput]
+    input: list[UserInput]
     cwd: str
     permissions: str | None = None
     approval_policy: ApprovalPolicy | None = None
@@ -634,7 +655,7 @@ class TurnStartParams(WireModel):
 class TurnSteerParams(WireModel):
     thread_id: str
     expected_turn_id: str
-    input: list[TextInput]
+    input: list[UserInput]
 
 
 class TurnInterruptParams(WireModel):

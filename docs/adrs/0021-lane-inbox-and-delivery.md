@@ -14,8 +14,7 @@ owners: ['[galligan](https://github.com/galligan)']
 
 dispatch already has the bones of a local message bus:
 
-- `queued_messages` stores durable per-lane text that starts a turn when the lane
-  becomes idle.
+- `queued_messages` stores durable per-lane text and rich-input references that start a turn when the lane becomes idle. Local image bytes are never copied into the registry; local files are revalidated at delivery.
 - The reactor drains one queued message on `TurnCompleted` and `LaneIdle`.
 - Triggers bind `when -> action -> lane` and audit each firing.
 - `actions_log` records command and delivery activity.

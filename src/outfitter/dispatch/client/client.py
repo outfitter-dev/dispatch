@@ -79,6 +79,7 @@ from .models import (
     TurnItemsView,
     TurnStartParams,
     TurnSteerParams,
+    UserInput,
 )
 from .router import Router
 from .transport import Transport
@@ -89,6 +90,17 @@ _DEFAULT_CLIENT_INFO = ClientInfo(name="dispatch", version="0")
 def _dump(model: BaseModel) -> dict[str, object]:
     # All params are WireModel/BaseModel; serialize with aliases, drop None.
     return model.model_dump(by_alias=True, exclude_none=True)
+
+
+def _user_inputs(text: str, input_items: list[UserInput] | None) -> list[UserInput]:
+    inputs: list[UserInput] = []
+    if text:
+        inputs.append(TextInput(text=text))
+    if input_items:
+        inputs.extend(input_items)
+    if not inputs:
+        raise ProtocolError("turn input requires text or at least one structured item")
+    return inputs
 
 
 def _parse_page(
@@ -528,6 +540,7 @@ class AppServerClient:
         thread_id: str,
         text: str,
         cwd: str,
+        input_items: list[UserInput] | None = None,
         permission_profile: str | None = None,
         approval_policy: ApprovalPolicy | None = None,
         approvals_reviewer: ApprovalsReviewer | None = None,
@@ -541,7 +554,7 @@ class AppServerClient:
     ) -> dict[str, object]:
         params = TurnStartParams(
             thread_id=thread_id,
-            input=[TextInput(text=text)],
+            input=_user_inputs(text, input_items),
             cwd=cwd,
             permissions=permission_profile,
             approval_policy=approval_policy,
@@ -557,10 +570,16 @@ class AppServerClient:
         return await self._request("turn/start", _dump(params))
 
     async def turn_steer(
-        self, thread_id: str, expected_turn_id: str, text: str
+        self,
+        thread_id: str,
+        expected_turn_id: str,
+        text: str,
+        input_items: list[UserInput] | None = None,
     ) -> dict[str, object]:
         params = TurnSteerParams(
-            thread_id=thread_id, expected_turn_id=expected_turn_id, input=[TextInput(text=text)]
+            thread_id=thread_id,
+            expected_turn_id=expected_turn_id,
+            input=_user_inputs(text, input_items),
         )
         return await self._request("turn/steer", _dump(params))
 

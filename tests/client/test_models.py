@@ -10,8 +10,10 @@ from outfitter.dispatch.client.models import (
     AccountUsageResult,
     AppModel,
     ConfigInfo,
+    ImageInput,
     InitializeResult,
     JsonRpcError,
+    LocalImageInput,
     ModelListParams,
     ModelListResult,
     ModelServiceTier,
@@ -165,6 +167,24 @@ def test_turn_start_sandbox_policy_is_object_and_camelcased() -> None:
     assert dumped["sandboxPolicy"] == {"type": "readOnly"}  # OBJECT, not a string
     assert dumped["input"] == [{"type": "text", "text": "hi"}]
     assert "effort" not in dumped  # None excluded
+
+
+def test_turn_input_variants_serialize_exactly_and_omit_unspecified_detail() -> None:
+    params = TurnStartParams(
+        thread_id="t1",
+        input=[
+            TextInput(text="inspect these"),
+            ImageInput(url="https://example.test/remote.png", detail="high"),
+            LocalImageInput(path="/work/local.png"),
+        ],
+        cwd="/work",
+    )
+
+    assert params.model_dump(by_alias=True, exclude_none=True)["input"] == [
+        {"type": "text", "text": "inspect these"},
+        {"type": "image", "url": "https://example.test/remote.png", "detail": "high"},
+        {"type": "localImage", "path": "/work/local.png"},
+    ]
 
 
 def test_turn_start_omits_policy_fields_when_inheriting_codex_config() -> None:

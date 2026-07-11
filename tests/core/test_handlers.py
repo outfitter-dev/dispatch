@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from pydantic import ValidationError as PydanticValidationError
 
 from outfitter.dispatch.client.errors import AppServerError as ClientAppServerError
 from outfitter.dispatch.client.errors import TransportError
@@ -18,6 +19,7 @@ from outfitter.dispatch.client.models import (
     AppModel,
     ApprovalPolicy,
     ApprovalsReviewer,
+    ConfigInfo,
     Effort,
     PermissionProfileSummary,
     Personality,
@@ -32,6 +34,7 @@ from outfitter.dispatch.client.models import (
     ThreadStatus,
     ThreadTurn,
     ThreadTurnsPage,
+    UserInput,
 )
 from outfitter.dispatch.config import CapturePolicy, RuntimePolicy
 from outfitter.dispatch.contracts.errors import (
@@ -41,7 +44,7 @@ from outfitter.dispatch.contracts.errors import (
     StagingError,
     ValidationError,
 )
-from outfitter.dispatch.core import handlers
+from outfitter.dispatch.core import handlers, queue
 from outfitter.dispatch.core.models import (
     AttachInput,
     CompactInput,
@@ -51,6 +54,7 @@ from outfitter.dispatch.core.models import (
     GoalGetInput,
     GoalSetInput,
     HistoryInput,
+    ImageUrlContent,
     InboxAckInput,
     InboxListInput,
     InboxReadInput,
@@ -58,7 +62,9 @@ from outfitter.dispatch.core.models import (
     LaneRenameInput,
     LaneSyncInput,
     LaneTextInput,
+    LocalImageContent,
     LogInput,
+    MessageContent,
     ModelsInput,
     NewInput,
     OpenInput,
@@ -72,6 +78,7 @@ from outfitter.dispatch.core.models import (
     StatusInput,
     SubscribeInput,
     SubscriptionListInput,
+    TextContent,
     ThreadTargetInput,
     TranscriptInput,
     WatchInput,
@@ -547,6 +554,56 @@ async def test_new_lane_no_send_registers_without_turn(store: Registry, tmp_path
     assert not any(name == "turn_start" for name, _ in client.calls)
 
 
+async def test_image_launch_uses_unique_catalog_default_when_config_omits_model(
+    store: Registry, tmp_path: Path
+) -> None:
+    image = tmp_path / "sample.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"payload")
+    client = FakeLaneClient()
+    client.config_result = ConfigInfo(model=None, model_provider="openai")
+    client.models_result = [
+        AppModel(id="default-image", is_default=True, input_modalities=["text", "image"])
+    ]
+    ctx = make_ctx(store, client)
+
+    out = await handlers.new_lane(
+        NewInput(
+            name="default-image",
+            cwd=str(tmp_path),
+            content=[LocalImageContent(path=str(image))],
+        ),
+        ctx,
+    )
+
+    assert out.model.model == "default-image"
+
+
+async def test_image_launch_reports_image_capable_model_choices(
+    store: Registry, tmp_path: Path
+) -> None:
+    image = tmp_path / "sample.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"payload")
+    client = FakeLaneClient()
+    client.models_result = [
+        AppModel(id="text-only", input_modalities=["text"]),
+        AppModel(id="vision", input_modalities=["text", "image"]),
+    ]
+    ctx = make_ctx(store, client)
+
+    with pytest.raises(ValidationError, match="models advertising them: vision"):
+        await handlers.new_lane(
+            NewInput(
+                name="bad-model",
+                cwd=str(tmp_path),
+                model="text-only",
+                content=[LocalImageContent(path=str(image))],
+            ),
+            ctx,
+        )
+
+    assert not any(name == "thread_start" for name, _ in client.calls)
+
+
 async def test_send_reuses_runtime_settings_from_no_send_lane(
     store: Registry, tmp_path: Path
 ) -> None:
@@ -693,6 +750,7 @@ class _CompletingBeforeReturnClient(FakeLaneClient):
         thread_id: str,
         text: str,
         cwd: str,
+        input_items: list[UserInput] | None = None,
         permission_profile: str | None = None,
         approval_policy: ApprovalPolicy | None = None,
         approvals_reviewer: ApprovalsReviewer | None = None,
@@ -708,6 +766,7 @@ class _CompletingBeforeReturnClient(FakeLaneClient):
             thread_id,
             text,
             cwd,
+            input_items=input_items,
             permission_profile=permission_profile,
             approval_policy=approval_policy,
             approvals_reviewer=approvals_reviewer,
@@ -806,6 +865,71 @@ async def test_send_modes_context_and_interject(store: Registry) -> None:
     assert (await store.get_lane("lane-1")).status == "busy"
 
 
+async def test_context_preserves_structured_text_content(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="beta"), ctx)
+
+    await handlers.send_message(
+        SendInput(
+            lane="@beta",
+            text="first",
+            content=[TextContent(text="second")],
+            mode="context",
+        ),
+        ctx,
+    )
+
+    call = next(kw for name, kw in client.calls if name == "inject_items")
+    assert call["items"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "first"},
+                {"type": "input_text", "text": "second"},
+            ],
+        }
+    ]
+
+
+def test_context_rejects_image_content_before_handler() -> None:
+    with pytest.raises(PydanticValidationError, match="not supported in context mode"):
+        SendInput(
+            lane="@beta",
+            mode="context",
+            content=[ImageUrlContent(url="https://example.com/a.png")],
+        )
+
+
+async def test_steer_and_interject_project_local_image_input(
+    store: Registry, tmp_path: Path
+) -> None:
+    image = tmp_path / "sample.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"payload")
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="images", cwd=str(tmp_path)), ctx)
+    await store.set_active_turn("lane-1", "turn-1")
+    content: list[MessageContent] = [LocalImageContent(path=str(image), detail="high")]
+
+    await handlers.send_message(
+        SendInput(lane="@images", text="steer", content=content, mode="steer"), ctx
+    )
+    await handlers.send_message(
+        SendInput(lane="@images", text="replace", content=content, mode="interject"), ctx
+    )
+
+    steer_call = next(kw for name, kw in client.calls if name == "turn_steer")
+    assert steer_call["input_items"] == [
+        {"type": "localImage", "path": str(image), "detail": "high"}
+    ]
+    interject_call = [kw for name, kw in client.calls if name == "turn_start"][-1]
+    assert interject_call["input_items"] == [
+        {"type": "localImage", "path": str(image), "detail": "high"}
+    ]
+
+
 async def test_send_intro_appends_managed_sender_from_codex_thread_id(
     store: Registry, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -893,6 +1017,33 @@ async def test_send_queue_persists_when_lane_is_busy(store: Registry) -> None:
     assert receipts[0].status == "created"
 
 
+async def test_queued_local_image_stores_metadata_not_bytes(
+    store: Registry, tmp_path: Path
+) -> None:
+    image = tmp_path / "sample.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"secret-image-payload")
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="images", cwd=str(tmp_path)), ctx)
+    await store.update_lane_status("lane-1", "busy")
+
+    await handlers.send_message(
+        SendInput(
+            lane="@images",
+            mode="queue",
+            content=[LocalImageContent(path=str(image))],
+        ),
+        ctx,
+    )
+
+    queued = await store.get_queued_message(1)
+    encoded = json.dumps(queued.content)
+    assert "secret-image-payload" not in encoded
+    assert queued.content[0]["media_type"] == "image/png"
+    assert queued.content[0]["size"] == len(image.read_bytes())
+    assert len(str(queued.content[0]["sha256"])) == 64
+
+
 async def test_send_queue_starts_immediately_when_lane_is_idle(store: Registry) -> None:
     client = FakeLaneClient()
     ctx = make_ctx(store, client)
@@ -911,6 +1062,105 @@ async def test_send_queue_starts_immediately_when_lane_is_idle(store: Registry) 
     assert receipts[0].queued_message_id == sent.id
     assert receipts[0].status == "sent"
     assert any(name == "turn_start" and kw["text"] == "now" for name, kw in client.calls)
+
+
+async def test_send_mixed_images_reaches_turn_start(store: Registry, tmp_path: Path) -> None:
+    image = tmp_path / "sample.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"payload")
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="images", cwd=str(tmp_path)), ctx)
+
+    ack = await handlers.send_message(
+        SendInput(
+            lane="@images",
+            text="inspect",
+            content=[
+                LocalImageContent(path="sample.png", detail="high"),
+            ],
+        ),
+        ctx,
+    )
+
+    assert ack.op == "send"
+    call = next(kw for name, kw in client.calls if name == "turn_start")
+    assert call["text"] == "inspect"
+    assert call["input_items"] == [
+        {"type": "localImage", "path": str(image), "detail": "high"},
+    ]
+    assert any(name == "model_list" for name, _ in client.calls)
+
+
+async def test_queued_missing_image_fails_without_starting_turn(
+    store: Registry, tmp_path: Path
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="images", cwd=str(tmp_path)), ctx)
+    await store.update_lane_status("lane-1", "busy")
+    await handlers.send_message(
+        SendInput(
+            lane="@images",
+            mode="queue",
+            content=[LocalImageContent(path="missing.png")],
+        ),
+        ctx,
+    )
+    await store.update_lane_status("lane-1", "idle")
+    before = len([1 for name, _ in client.calls if name == "turn_start"])
+
+    assert await queue.drain_next_queued_message(ctx, "lane-1") is True
+    queued = await store.get_queued_message(1)
+    assert queued.status == "error"
+    assert len([1 for name, _ in client.calls if name == "turn_start"]) == before
+
+
+async def test_idle_queue_surfaces_immediate_missing_image_failure(
+    store: Registry, tmp_path: Path
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="images", cwd=str(tmp_path)), ctx)
+
+    with pytest.raises(ValidationError, match="failed during immediate delivery"):
+        await handlers.send_message(
+            SendInput(
+                lane="@images",
+                mode="queue",
+                content=[LocalImageContent(path="missing.png")],
+            ),
+            ctx,
+        )
+
+    queued = await store.get_queued_message(1)
+    assert queued.status == "error"
+    assert "local image not found" in (queued.error or "")
+
+
+async def test_queue_audit_redacts_signed_url_and_preserves_text_summary(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="images"), ctx)
+    await store.update_lane_status("lane-1", "busy")
+
+    await handlers.send_message(
+        SendInput(
+            lane="@images",
+            text="token=supersecret inspect",
+            mode="queue",
+            content=[ImageUrlContent(url="https://example.com/a.png?token=signed-secret")],
+        ),
+        ctx,
+    )
+
+    actions = await store.recent_actions()
+    detail = next(action.detail for action in actions if action.op == "queue") or ""
+    assert "supersecret" not in detail
+    assert "signed-secret" not in detail
+    assert "[redacted]" in detail
+    assert "https://example.com/a.png" in detail
 
 
 async def test_lane_rename_updates_registry_and_owned_thread_name(store: Registry) -> None:
@@ -3020,6 +3270,44 @@ async def test_plan_new_lane_makes_no_mutation(store: Registry, tmp_path: Path) 
     assert (await store.find_lane("lane-1")) is None
     slots = {src.slot for src in plan.sources}
     assert {"goal", "prompt", "output_schema"} <= slots
+
+
+async def test_plan_new_lane_rejects_missing_image_before_workspace_mutation(
+    store: Registry, tmp_path: Path
+) -> None:
+    ctx = make_ctx(store, FakeLaneClient())
+
+    with pytest.raises(ValidationError, match="local image not found"):
+        await handlers.plan_new_lane(
+            NewInput(
+                name="preview",
+                cwd=str(tmp_path),
+                content=[LocalImageContent(path="missing.png")],
+            ),
+            ctx,
+        )
+
+    assert not (tmp_path / ".dispatch").exists()
+
+
+async def test_plan_new_lane_reports_valid_image_count(store: Registry, tmp_path: Path) -> None:
+    image = tmp_path / "sample.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"payload")
+    ctx = make_ctx(store, FakeLaneClient())
+
+    plan = await handlers.plan_new_lane(
+        NewInput(
+            name="preview",
+            cwd=str(tmp_path),
+            content=[LocalImageContent(path=str(image))],
+        ),
+        ctx,
+    )
+
+    assert plan.would_send is True
+    assert plan.image_count == 1
+    assert [(item.kind, item.ref) for item in plan.images] == [("local", str(image))]
+    assert await store.list_model_catalog() == []
 
 
 async def test_new_lane_launches_from_packet(store: Registry, tmp_path: Path) -> None:

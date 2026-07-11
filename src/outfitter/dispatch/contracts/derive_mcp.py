@@ -15,7 +15,7 @@ from mcp.types import Tool, ToolAnnotations
 
 from .op import Intent, Op
 from .registry import OpRegistry
-from .schema import public_schema
+from .schema import inline_local_refs, public_schema
 
 Safety = Literal["read", "write", "destroy"]
 
@@ -203,7 +203,7 @@ def _input_schema(ops: tuple[tuple[str, Op], ...]) -> dict[str, Any]:
 
 
 def _action_input_schema(action: str, op: Op) -> dict[str, Any]:
-    schema = public_schema(deepcopy(op.input.model_json_schema()))
+    schema = inline_local_refs(public_schema(deepcopy(op.input.model_json_schema())))
     properties = schema.get("properties")
     if not isinstance(properties, dict):
         properties = {}

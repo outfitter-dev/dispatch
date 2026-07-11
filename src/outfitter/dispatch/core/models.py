@@ -3,7 +3,7 @@ and MCP ``inputSchema`` descriptions."""
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
 
@@ -11,6 +11,7 @@ from outfitter.dispatch.client.models import (
     ApprovalPolicy,
     ApprovalsReviewer,
     Effort,
+    ImageDetail,
     Personality,
     ReasoningSummary,
     ThreadGoalStatus,
@@ -60,6 +61,29 @@ TARGET_THREAD_SELECTOR_DESCRIPTION = (
 )
 
 
+class TextContent(BaseModel):
+    type: Literal["text"] = "text"
+    text: str = Field(min_length=1, description="Text content.")
+
+
+class ImageUrlContent(BaseModel):
+    type: Literal["image"] = "image"
+    url: str = Field(min_length=1, description="HTTPS image URL.")
+    detail: ImageDetail | None = Field(default=None, description="Image detail level.")
+
+
+class LocalImageContent(BaseModel):
+    type: Literal["local_image"] = "local_image"
+    path: str = Field(min_length=1, description="Local image path.")
+    detail: ImageDetail | None = Field(default=None, description="Image detail level.")
+
+
+type MessageContent = Annotated[
+    TextContent | ImageUrlContent | LocalImageContent,
+    Field(discriminator="type"),
+]
+
+
 class OpenInput(BaseModel):
     name: str = Field(description="Thread title; also seeds the mutable @handle.")
     cwd: str = Field(default=".", description="Working directory for the managed thread.")
@@ -75,7 +99,13 @@ class NewInput(BaseModel):
         description="Native App Server goal objective to create before the initial message.",
     )
     text: str | None = Field(default=None, description="Initial message text.")
-    send: bool = Field(default=True, description="Send the initial message when text is present.")
+    content: list[MessageContent] = Field(
+        default_factory=list,
+        description="Structured text and image content for the initial message.",
+    )
+    send: bool = Field(
+        default=True, description="Send the initial turn when text or rich content is present."
+    )
     cwd: str | None = Field(default=None, description="Working directory for config discovery.")
     prefix: str | None = Field(default=None, description="Name prefix template.")
     permission_profile: str | None = Field(
@@ -172,7 +202,12 @@ class LaneTextInput(BaseModel):
     text: str = Field(description="Message text.")
 
 
-class SendInput(LaneTextInput):
+class SendInput(BaseModel):
+    lane: str = Field(description=THREAD_SELECTOR_DESCRIPTION)
+    text: str | None = Field(default=None, description="Message text.")
+    content: list[MessageContent] = Field(
+        default_factory=list, description="Structured text and image content."
+    )
     mode: SendMode = Field(
         default="send",
         description=(
@@ -191,6 +226,17 @@ class SendInput(LaneTextInput):
         exclude=True,
         json_schema_extra={"x-dispatch-internal": True},
     )
+
+    @model_validator(mode="after")
+    def _requires_content(self) -> SendInput:
+        if not self.text and not self.content:
+            raise ValueError("send requires text or structured content")
+        if self.mode == "context" and any(item.type != "text" for item in self.content):
+            raise ValueError(
+                "image content is not supported in context mode; use send, steer, queue, "
+                "or interject"
+            )
+        return self
 
 
 class LaneInput(BaseModel):
@@ -949,6 +995,12 @@ class WorkspaceView(BaseModel):
     worktree: WorktreeView = Field(default_factory=lambda: WorktreeView(state="disabled"))
 
 
+class LaunchImageView(BaseModel):
+    kind: Literal["local", "url"]
+    ref: str
+    detail: ImageDetail | None = None
+
+
 class LaunchPlan(BaseModel):
     """A mutation-free preview of what ``dispatch new`` would launch (``--dry-run``)."""
 
@@ -963,6 +1015,10 @@ class LaunchPlan(BaseModel):
     )
     goal_set: bool = Field(description="Whether a native goal would be created.")
     would_send: bool = Field(description="Whether an initial turn would start.")
+    image_count: int = Field(default=0, description="Number of image inputs in the initial turn.")
+    images: list[LaunchImageView] = Field(
+        default_factory=list, description="Validated image references in the initial turn."
+    )
     output_schema_present: bool = Field(
         description="Whether a structured output schema would be applied."
     )

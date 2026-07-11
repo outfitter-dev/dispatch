@@ -280,6 +280,8 @@ NEW_PLAN = define_op(
                 "sources": [],
                 "goal_set": False,
                 "would_send": False,
+                "image_count": 0,
+                "images": [],
                 "output_schema_present": False,
                 "stage": {"parts": [], "session_dir": None, "files": []},
                 "unknown_packet_files": [],

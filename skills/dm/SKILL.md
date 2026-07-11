@@ -73,6 +73,14 @@ Then deliver it:
 uv run dispatch send <target-ref> '<message>' --intro
 ```
 
+When a bounded question needs visual evidence, attach it to the same send instead of creating a separate workflow:
+
+```bash
+uv run dispatch send <target-ref> 'Does this match the expected state?' --image ./screen.png --intro
+```
+
+Repeat `--image` or `--image-url` as needed; local images must be PNG, JPEG, GIF, or WebP and at most 20 MiB, while remote images must use HTTPS and resolve publicly. Use `--image-detail auto|low|high|original` only when detail matters. Images work for normal DM sends, steering, queueing, and interjection, but not silent context injection. A queued DM stores references and validation metadata, never image bytes, and revalidates files and remote content before delivery.
+
 Keep DMs conversational and bounded. Prefer one ask. Include only the context
 needed for the target lane to answer without reading the sender's full
 transcript. Add Codex thread links inside the freeform message when the recipient

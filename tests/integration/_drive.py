@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 
 from outfitter.dispatch.client.client import AppServerClient
 from outfitter.dispatch.client.events import ApprovalRequested
-from outfitter.dispatch.client.models import Decision, SandboxPolicy
+from outfitter.dispatch.client.models import Decision, SandboxPolicy, UserInput
 
 
 def _delta_text(message: dict[str, object]) -> str:
@@ -38,12 +39,18 @@ async def run_turn(
     text: str,
     cwd: str,
     *,
+    input_items: list[UserInput] | None = None,
     timeout: float = 150,
 ) -> str:
     """Start a low-effort read-only turn; return the agent text once
     ``turn/completed`` arrives (authoritative item text, else accumulated deltas)."""
     raw = client.raw_events(lane)  # eager subscription before the turn starts
-    await client.turn_start(lane, text, cwd, effort="low")
+    await client.turn_start(lane, text, cwd, input_items=input_items, effort="low")
+    return await collect_turn(raw, timeout=timeout)
+
+
+async def collect_turn(raw: AsyncIterator[dict[str, object]], *, timeout: float = 150) -> str:
+    """Collect authoritative assistant text from an already-subscribed turn stream."""
     deltas = ""
     final: str | None = None
     async with asyncio.timeout(timeout):

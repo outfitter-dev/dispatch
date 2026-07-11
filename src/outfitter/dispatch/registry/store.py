@@ -58,7 +58,7 @@ from .models import (
 from .refs import BASE58BTC_ALPHABET, CODEX_REF_SOURCE, codex_ref_payload, make_ref
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 
 class _ReentrantAsyncLock:
@@ -223,6 +223,7 @@ CREATE TABLE IF NOT EXISTS queued_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     lane TEXT NOT NULL,
     text TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '[]',
     status TEXT NOT NULL DEFAULT 'pending',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -753,6 +754,16 @@ class Registry:
             await self._ensure_lane_sync_continuation_columns()
         if user_version < 20:
             await self._ensure_permission_profiles_table()
+        if user_version < 21:
+            await self._ensure_queued_message_content_column()
+
+    async def _ensure_queued_message_content_column(self) -> None:
+        async with self._conn.execute("PRAGMA table_info(queued_messages)") as cur:
+            columns = {str(row["name"]) for row in await cur.fetchall()}
+        if "content" not in columns:
+            await self._conn.execute(
+                "ALTER TABLE queued_messages ADD COLUMN content TEXT NOT NULL DEFAULT '[]'"
+            )
 
     async def _ensure_permission_profiles_table(self) -> None:
         await self._conn.execute(
@@ -1403,13 +1414,20 @@ class Registry:
     # --- queued messages ------------------------------------------------------
 
     @_serialized_access
-    async def enqueue_message(self, *, lane: str, text: str) -> QueuedMessage:
+    async def enqueue_message(
+        self,
+        *,
+        lane: str,
+        text: str,
+        content: list[dict[str, object]] | None = None,
+    ) -> QueuedMessage:
         now = self._now().isoformat()
         async with self._transaction():
             cur = await self._conn.execute(
-                "INSERT INTO queued_messages (lane, text, status, created_at, updated_at) "
-                "VALUES (?, ?, 'pending', ?, ?)",
-                (lane, text, now, now),
+                "INSERT INTO queued_messages "
+                "(lane, text, content, status, created_at, updated_at) "
+                "VALUES (?, ?, ?, 'pending', ?, ?)",
+                (lane, text, json.dumps(content or []), now, now),
             )
             message_id = cur.lastrowid
         if message_id is None:
@@ -1424,7 +1442,7 @@ class Registry:
             row = await cur.fetchone()
         if row is None:
             raise NotFoundError(f"no queued message {message_id!r}")
-        return QueuedMessage.model_validate(_row_dict(row))
+        return _row_to_queued_message(row)
 
     @_serialized_access
     async def next_pending_message(self, lane: str) -> QueuedMessage | None:
@@ -1434,7 +1452,7 @@ class Registry:
             (lane,),
         ) as cur:
             row = await cur.fetchone()
-        return QueuedMessage.model_validate(_row_dict(row)) if row is not None else None
+        return _row_to_queued_message(row) if row is not None else None
 
     @_serialized_access
     async def pending_message_count(self, lane: str) -> int:
@@ -3798,6 +3816,13 @@ def _row_to_lane_runtime_settings(row: aiosqlite.Row) -> LaneRuntimeSettings:
     raw_schema = data["output_schema"]
     data["output_schema"] = json.loads(str(raw_schema)) if raw_schema else None
     return LaneRuntimeSettings.model_validate(data)
+
+
+def _row_to_queued_message(row: aiosqlite.Row) -> QueuedMessage:
+    data = _row_dict(row)
+    raw_content = data["content"]
+    data["content"] = json.loads(str(raw_content)) if raw_content else []
+    return QueuedMessage.model_validate(data)
 
 
 def _row_to_provider_event(row: aiosqlite.Row) -> ProviderEvent:

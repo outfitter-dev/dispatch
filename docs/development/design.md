@@ -76,7 +76,7 @@ Projections (pure functions over the registry, mirroring Trails' `derive* → cr
   `registry migrate`
 - Thread creation: `new --name <name> [--preset ...] [--goal ...] [--text ...] [--no-send]`
   · launch packets/files: `[--packet DIR] [--goal-file F|-] [--input-file F|-]
-  [--output-schema-file F]` · preview: `[--dry-run]` · staging:
+  [--output-schema-file F]` · rich input: repeatable `[--image PATH] [--image-url HTTPS_URL] [--image-detail DETAIL]` · preview: `[--dry-run]` · staging:
   `[--stage all|<parts>] [--inline <parts>]` (writes `.agents/sessions/<ref>/`;
   `new --dry-run` → mutation-free `new-plan` op) · workspace preflight:
   `[--workspace none|auto|<preset>] [--workspace-setup auto|skip|run]`
@@ -91,9 +91,9 @@ Projections (pure functions over the registry, mirroring Trails' `derive* → cr
   `rename <selector> <new>` · `archive <selector>` · `restore <selector>` ·
   `search <query>` with `--thread`/repo/directory/date/managed filters
 - Model catalog: `models [--no-refresh]`
-- Sending: `send <selector> "…"` with `--mode send|steer|queue|interject|context`
+- Sending: `send <selector> ["…"] [--input-file F|-]` with repeatable `--image PATH` / `--image-url HTTPS_URL`, optional `--image-detail`, and `--mode send|steer|queue|interject|context`
   and equivalent mutually exclusive `--steer`, `--queue`, `--interject`,
-  `--context`; `stop <selector>` is cancel-only.
+  `--context`; image input is supported for send/steer/queue/interject and rejected for context; `stop <selector>` is cancel-only.
 - Goals: `goal status <selector>` · `goal set <selector> <objective>` ·
   `goal clear <selector>`
 - Triggers: `trigger add` · `trigger list` · `trigger rm <id>` ·
@@ -116,15 +116,15 @@ for collisions. Titles and `@handles` are mutable convenience labels.
 | Op | App Server call | Notes (verified) |
 | --- | --- | --- |
 | `open` | `thread/start` (then register) | `sandbox` is a STRING enum (`read-only`/`workspace-write`/`danger-full-access`); persists by default (`ephemeral:false`) → spawned lanes show in desktop app, matching the `→ @project:name` convention. |
-| `new` | `thread/start` + `thread/name/set` + optional `thread/goal/set` + optional `turn/start` | Applies global/repo config and presets, name prefixes, verified session/turn options, optional native goal, and optional initial payload. A named `permission_profile` is cwd-validated and excludes explicit sandbox/approval overrides; omitted values remain Codex defaults. Explicit `service_tier` values are resolved through the App Server model catalog before thread creation and the initial turn. Output reports request acceptance, not assistant completion. |
+| `new` | `thread/start` + `thread/name/set` + optional `thread/goal/set` + optional `turn/start` | Applies global/repo config and presets, name prefixes, verified session/turn options, optional native goal, and optional text/image initial payload. Local images project to App Server `localImage` inputs; public HTTPS references are fetched under a bounded no-redirect policy and converted to ephemeral `image` data URLs because App Server 0.144 rejects ordinary remote URLs. A named `permission_profile` is cwd-validated and excludes explicit sandbox/approval overrides; omitted values remain Codex defaults. Explicit `service_tier` values are resolved through the App Server model catalog before thread creation and the initial turn. Output reports request acceptance, not assistant completion. |
 | `permissions` | `permissionProfile/list` | Reads every cwd-aware profile page, persists bounded metadata/freshness, includes disallowed profiles only on request, and reports older binaries as unsupported. CLI and grouped MCP derive from one read op. |
 | `attach` | `thread/read(includeTurns:false)` (+ register) | Metadata-only by default: verifies the thread id, registers a turn-write locked attached lane, assigns a dispatch ref, and stores sync state without loading turn history. `--sync` runs a quick local index refresh after registration. |
 | `sync` | `thread/read(includeTurns:false)` + metadata-only `thread/resume` + bounded `initialTurnsPage` / `thread/turns/list` / `thread/items/list` + local JSONL parsing + archive reconciliation | Establishes explicit live observation and refreshes Dispatch's normalized history index under one turn/item/time/aggregate-byte budget. Recent App Server history is indexed before remaining budget is used for local JSONL facts; durable cursors continue newer reconciliation and older backfill across calls. Unsupported experimental paging retains metadata-only observation plus JSONL fallback. A raw unmanaged Codex id is registered as an attached read/metadata-managed lane before syncing; sync never grants turn-write authority. |
-| `send` (`mode=send`) | `turn/start` | Delivers a message the lane processes + answers. The DM/`send_message_to_thread` equivalent. `sandboxPolicy` here is an OBJECT (`{type:"readOnly"}`) — different encoding than `thread/start.sandbox`. |
-| `send` (`mode=queue`) | registry queue + later `turn/start` | Persists local queued delivery and starts one queued turn when the lane becomes idle. |
-| `send` (`mode=steer`) | `turn/steer` | Requires `expectedTurnId` (the active turn id from `turn/started`). Adds input to an in-flight turn. |
-| `send` (`mode=context`) | `thread/inject_items` | Silent model-visible context injection (Responses-API items); no turn runs. Trigger actions still call this lower-level behavior `brief`. |
-| `send` (`mode=interject`) | `turn/interrupt` + `turn/start` | Requires an active turn id, cancels that turn, then starts replacement work. |
+| `send` (`mode=send`) | `turn/start` | Delivers text and/or validated local/HTTPS image inputs that the lane processes and answers. The DM/`send_message_to_thread` equivalent. `sandboxPolicy` here is an OBJECT (`{type:"readOnly"}`) — different encoding than `thread/start.sandbox`. |
+| `send` (`mode=queue`) | registry queue + later `turn/start` | Persists text plus image references and bounded metadata, never image bytes, then revalidates files and model modalities before starting one queued turn when the lane becomes idle. |
+| `send` (`mode=steer`) | `turn/steer` | Requires `expectedTurnId` (the active turn id from `turn/started`). Adds validated text/image input to an in-flight turn. |
+| `send` (`mode=context`) | `thread/inject_items` | Silent model-visible text context injection (Responses-API items); no turn runs. Rich images are rejected because an equivalent image injection contract is not verified. Trigger actions still call this lower-level behavior `brief`. |
+| `send` (`mode=interject`) | `turn/interrupt` + `turn/start` | Requires an active turn id, cancels that turn, then starts replacement text/image work. |
 | `stop` | `turn/interrupt` | Requires an active turn id and cancels the active turn without replacement text. |
 | `lane-rename` (`rename`) | `thread/name/set` (+ registry update when managed) | Accepts a managed ref, full Codex thread id, or unique convenience label. Mutating actions do not fuzzy-resolve ambiguous names. |
 | `archive` (`archive`) | `thread/archive` | Accepts managed refs or unmanaged raw thread ids. If App Server reports `no rollout found` for an owned no-rollout lane, dispatch archives the local registry entry so throwaway lanes can be cleaned up. |
@@ -202,7 +202,7 @@ The client classifies command/file/permission approvals, user input, MCP elicita
   and queued sends.
 - `lane_runtime_state`: compact reducer state fed by provider events for future
   DB-backed status, subscriptions, and watch surfaces.
-- `queued_messages`: lane, text, delivery status, timestamps, and error for durable `send --queue` delivery; rows are tied to lanes and cascade with lane deletion.
+- `queued_messages`: lane, text, structured image references and bounded metadata, delivery status, timestamps, and error for durable `send --queue` delivery; image bytes are never stored, and rows are tied to lanes and cascade with lane deletion.
 - `triggers`: id, name, lane selector, when-spec (json), action-spec (json), guard-spec (json), enabled, last_fired_at.
 - `actions_log`: id, ts, lane, op, trigger_id?, request/decision, outcome — full audit of every send/action.
 

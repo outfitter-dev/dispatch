@@ -107,6 +107,12 @@ def test_app_server_protocol_manifest_tracks_v0144_capabilities() -> None:
     )
     assert "permissions" in manifest["selected_shapes"]["thread_start_experimental_fields"]
     assert "permissions" in manifest["selected_shapes"]["turn_start_experimental_fields"]
+    required_user_inputs = {"text", "image", "localImage"}
+    assert required_user_inputs <= set(manifest["selected_shapes"]["turn_start_user_input_types"])
+    assert required_user_inputs <= set(manifest["selected_shapes"]["turn_steer_user_input_types"])
+    expected_image_details = {"auto", "low", "high", "original"}
+    assert expected_image_details == set(manifest["selected_shapes"]["turn_start_image_details"])
+    assert expected_image_details == set(manifest["selected_shapes"]["turn_steer_image_details"])
     assert set(manifest["selected_shapes"]["account_types"]) == {
         "amazonBedrock",
         "apiKey",

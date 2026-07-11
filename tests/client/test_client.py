@@ -9,7 +9,12 @@ import pytest
 from outfitter.dispatch.client.client import AppServerClient
 from outfitter.dispatch.client.errors import AppServerError, ProtocolError, TransportError
 from outfitter.dispatch.client.events import TurnCompleted
-from outfitter.dispatch.client.models import JsonRpcError, ThreadResumeInitialTurnsPageParams
+from outfitter.dispatch.client.models import (
+    ImageInput,
+    JsonRpcError,
+    LocalImageInput,
+    ThreadResumeInitialTurnsPageParams,
+)
 from tests.fixtures import load_json
 
 from .conftest import FakeTransport, Responder
@@ -537,6 +542,86 @@ async def test_turn_start_sends_service_tier_when_set(
         "cwd": "/work",
         "serviceTier": "priority",
     }
+
+
+async def test_turn_start_serializes_mixed_text_and_image_inputs_exactly(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+    fake.auto = _result_for("turn/start", {"turnId": "turn-1"})
+
+    await c.turn_start(
+        "L1",
+        "compare these",
+        cwd="/work",
+        input_items=[
+            ImageInput(url="https://example.test/remote.png", detail="low"),
+            LocalImageInput(path="/work/local.png"),
+        ],
+    )
+
+    assert fake.sent[-1] == {
+        "id": 1,
+        "method": "turn/start",
+        "params": {
+            "threadId": "L1",
+            "input": [
+                {"type": "text", "text": "compare these"},
+                {
+                    "type": "image",
+                    "url": "https://example.test/remote.png",
+                    "detail": "low",
+                },
+                {"type": "localImage", "path": "/work/local.png"},
+            ],
+            "cwd": "/work",
+        },
+    }
+
+
+async def test_turn_steer_serializes_image_only_input_exactly(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+    fake.auto = _result_for("turn/steer", {"turnId": "turn-1"})
+
+    await c.turn_steer(
+        "L1",
+        "turn-1",
+        "",
+        input_items=[ImageInput(url="https://example.test/remote.png", detail="original")],
+    )
+
+    assert fake.sent[-1] == {
+        "id": 1,
+        "method": "turn/steer",
+        "params": {
+            "threadId": "L1",
+            "expectedTurnId": "turn-1",
+            "input": [
+                {
+                    "type": "image",
+                    "url": "https://example.test/remote.png",
+                    "detail": "original",
+                }
+            ],
+        },
+    }
+
+
+@pytest.mark.parametrize("method", ["start", "steer"])
+async def test_turn_methods_reject_empty_input_before_sending(
+    client: tuple[AppServerClient, FakeTransport], method: str
+) -> None:
+    c, fake = client
+
+    with pytest.raises(ProtocolError, match="requires text or at least one structured item"):
+        if method == "start":
+            await c.turn_start("L1", "", cwd="/work")
+        else:
+            await c.turn_steer("L1", "turn-1", "")
+
+    assert fake.sent == []
 
 
 async def test_request_error_raises_app_server_error(

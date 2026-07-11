@@ -411,6 +411,7 @@ class QueuedMessage(BaseModel):
     id: int
     lane: str
     text: str
+    content: list[dict[str, JsonValue]] = Field(default_factory=list)
     status: QueuedMessageStatus = "pending"
     created_at: datetime
     updated_at: datetime

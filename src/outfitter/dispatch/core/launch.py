@@ -20,7 +20,7 @@ from typing import Literal
 
 from outfitter.dispatch.contracts.errors import ValidationError
 
-from .models import LaunchOrigin, LaunchSlot, NewInput, StagePart
+from .models import LaunchOrigin, LaunchSlot, MessageContent, NewInput, StagePart
 from .new_config import NewSettings, ResolvedNew, resolve_new
 from .packet import PacketContent, load_packet, parse_output_schema
 from .staging import StagePlan, resolve_stage_plan
@@ -43,6 +43,7 @@ class ResolvedLaunch:
     resolved: ResolvedNew
     goal: str | None
     text: str | None
+    content: list[MessageContent]
     output_schema: dict[str, object] | None
     packet: PacketContent | None
     sources: list[LaunchSource]
@@ -91,13 +92,14 @@ def resolve_launch(inp: NewInput) -> ResolvedLaunch:
         inp.developer_file,
     )
 
-    would_send = resolved.settings.text is not None and inp.send
+    would_send = (resolved.settings.text is not None or bool(inp.content)) and inp.send
     available = _stage_available(resolved, goal, packet)
     stage_plan = resolve_stage_plan(inp.stage, inp.inline, available)
     return ResolvedLaunch(
         resolved=resolved,
         goal=goal,
         text=resolved.settings.text,
+        content=list(inp.content),
         output_schema=resolved.settings.output_schema,
         packet=packet,
         sources=sources,
