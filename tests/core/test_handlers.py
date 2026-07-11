@@ -2208,6 +2208,9 @@ async def test_sync_reconciles_archived_membership(store: Registry) -> None:
 
     assert out.status == "archived"
     assert (await store.get_lane("T9")).status == "archived"
+    provider_thread = await store.get_provider_thread("codex", "T9")
+    assert provider_thread is not None
+    assert provider_thread.lifecycle_state == "archived"
     assert any(
         name == "thread_list"
         and kw["archived"] is True
@@ -2228,6 +2231,9 @@ async def test_sync_reconciles_restored_membership(store: Registry) -> None:
 
     assert out.status == "idle"
     assert (await store.get_lane("T9")).status == "idle"
+    provider_thread = await store.get_provider_thread("codex", "T9")
+    assert provider_thread is not None
+    assert provider_thread.lifecycle_state == "active"
 
 
 async def test_discover_lists_persisted_sessions_from_client(store: Registry) -> None:
@@ -2275,6 +2281,90 @@ async def test_discover_lists_persisted_sessions_from_client(store: Registry) ->
     )
     # ...and registers nothing (pure read; lane authority untouched).
     assert (await handlers.roster(RosterInput(), ctx)).lanes == []
+
+
+async def test_discover_excludes_managed_threads_without_changing_authority(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    client.list_result = [ThreadInfo(id="managed"), ThreadInfo(id="unmanaged")]
+    ctx = make_ctx(store, client)
+    await store.add_lane(id="managed", handle="@managed", source="attached", status="idle")
+
+    out = await handlers.discover(DiscoverInput(), ctx)
+
+    assert [session.id for session in out.sessions] == ["unmanaged"]
+    assert await store.find_lane("unmanaged") is None
+    assert await store.get_provider_thread("codex", "unmanaged") is not None
+
+
+async def test_show_refreshes_bounded_descendant_topology(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    root = await handlers.open_lane(OpenInput(name="root"), ctx)
+    client.list_result = [
+        ThreadInfo(
+            id="child",
+            parent_thread_id=root.id,
+            source={
+                "subAgent": {
+                    "thread_spawn": {
+                        "parent_thread_id": root.id,
+                        "depth": 1,
+                        "agent_nickname": "Scout",
+                    }
+                }
+            },
+        ),
+        ThreadInfo(id="grandchild", parent_thread_id="child"),
+        ThreadInfo(id="fork", forked_from_id=root.id),
+    ]
+
+    out = await handlers.show(ShowInput(lane=root.ref, topology=True, topology_limit=10), ctx)
+
+    assert [node.id for node in out.topology.children] == ["child"]
+    assert [node.id for node in out.topology.descendants] == ["child", "grandchild"]
+    assert out.topology.children[0].agent_nickname == "Scout"
+    assert all(node.id != "fork" for node in out.topology.descendants)
+    assert any(
+        name == "thread_list" and kwargs["ancestor_thread_id"] == root.id and kwargs["limit"] == 10
+        for name, kwargs in client.calls
+    )
+
+
+async def test_roster_filters_managed_descendants_and_includes_root(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    root = await handlers.open_lane(OpenInput(name="root"), ctx)
+    await store.add_lane(id="child", handle="@child", source="attached", status="idle")
+    await store.add_lane(id="other", handle="@other", source="attached", status="idle")
+    client.list_result = [ThreadInfo(id="child", parent_thread_id=root.id)]
+
+    out = await handlers.roster(RosterInput(root=root.ref), ctx)
+
+    assert {lane.id for lane in out.lanes} == {root.id, "child"}
+    assert any(
+        name == "thread_list" and kwargs["ancestor_thread_id"] == root.id
+        for name, kwargs in client.calls
+    )
+
+
+async def test_discover_uses_native_parent_filter(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.list_result = [
+        ThreadInfo(id="child", parent_thread_id="root"),
+        ThreadInfo(id="other", parent_thread_id="elsewhere"),
+    ]
+    ctx = make_ctx(store, client)
+
+    out = await handlers.discover(DiscoverInput(parent="root"), ctx)
+
+    assert [session.id for session in out.sessions] == ["child"]
+    assert out.sessions[0].topology.parent is None
+    assert any(
+        name == "thread_list" and kwargs["parent_thread_id"] == "root"
+        for name, kwargs in client.calls
+    )
 
 
 async def test_discover_can_list_archived_unmanaged_sessions(store: Registry) -> None:

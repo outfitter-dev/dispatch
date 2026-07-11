@@ -322,6 +322,39 @@ async def test_thread_read_goal_and_history_controls(
         await client.thread_archive(thread.id)
 
 
+async def test_thread_fork_is_not_a_spawned_descendant(
+    client: AppServerClient, work_dir: Path
+) -> None:
+    root = await client.thread_start(
+        cwd=str(work_dir), sandbox="read-only", model="gpt-5.3-codex-spark", ephemeral=False
+    )
+    fork = None
+    try:
+        await run_turn(client, root.id, "Reply with exactly one word: root", str(work_dir))
+        fork = await client.thread_fork(root.id, cwd=str(work_dir), ephemeral=False)
+        await run_turn(client, fork.id, "Reply with exactly one word: fork", str(work_dir))
+
+        direct = await client.thread_list(
+            limit=20,
+            parent_thread_id=root.id,
+            use_state_db_only=True,
+        )
+        descendants = await client.thread_list(
+            limit=20,
+            ancestor_thread_id=root.id,
+            use_state_db_only=True,
+        )
+
+        assert fork.forked_from_id == root.id
+        assert fork.parent_thread_id is None
+        assert all(thread.id != fork.id for thread in direct)
+        assert all(thread.id != fork.id for thread in descendants)
+    finally:
+        if fork is not None:
+            await client.thread_archive(fork.id)
+        await client.thread_archive(root.id)
+
+
 async def test_thread_search_and_unarchive_primitives(
     client: AppServerClient, work_dir: Path
 ) -> None:

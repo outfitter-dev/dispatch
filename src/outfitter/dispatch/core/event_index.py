@@ -14,6 +14,8 @@ from outfitter.dispatch.client.events import (
     StatusChanged,
     ThreadArchived,
     ThreadCompacted,
+    ThreadDeleted,
+    ThreadStarted,
     ThreadUnarchived,
     TokenUsageUpdated,
     TurnCompleted,
@@ -118,10 +120,14 @@ def _event_type(event: LaneEvent) -> str:
         return "thread/goal/cleared"
     if isinstance(event, ThreadCompacted):
         return "thread/compacted"
+    if isinstance(event, ThreadStarted):
+        return "thread/started"
     if isinstance(event, ThreadArchived):
         return "thread/archived"
     if isinstance(event, ThreadUnarchived):
         return "thread/unarchived"
+    if isinstance(event, ThreadDeleted):
+        return "thread/deleted"
     return event.__class__.__name__
 
 
@@ -213,10 +219,14 @@ def _summary(event: LaneEvent, capture: CapturePolicy) -> dict[str, object]:
         return {"status": "cleared"}
     if isinstance(event, ThreadCompacted):
         return {"status": "compacted"}
+    if isinstance(event, ThreadStarted):
+        return {"status": "started"}
     if isinstance(event, ThreadArchived):
         return {"status": "archived"}
     if isinstance(event, ThreadUnarchived):
         return {"status": "unarchived"}
+    if isinstance(event, ThreadDeleted):
+        return {"status": "deleted"}
     return {}
 
 
@@ -319,6 +329,8 @@ def _runtime_state(
         return _state(lane, now, status="archived")
     if isinstance(event, ThreadUnarchived):
         return _state(lane, now, status="idle")
+    if isinstance(event, ThreadDeleted):
+        return _state(lane, now, status="archived")
     return None
 
 

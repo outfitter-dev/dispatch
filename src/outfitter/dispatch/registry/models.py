@@ -30,6 +30,7 @@ LaneStatus = Literal[
 ]
 TurnRuntimeStatus = Literal["started", "completed", "failed"]
 ProviderTurnStatus = Literal["started", "completed", "failed", "unknown"]
+ProviderThreadLifecycleState = Literal["active", "archived", "deleted", "unknown"]
 SyncState = Literal["unknown", "metadata", "partial", "complete", "error"]
 QueuedMessageStatus = Literal["pending", "sending", "sent", "error"]
 MessageReceiptStatus = Literal["created", "sent", "accepted", "completed", "failed", "timed_out"]
@@ -120,6 +121,61 @@ class ProviderEvent(BaseModel):
     summary: dict[str, object] = Field(default_factory=dict)
     payload: dict[str, object] | None = None
     raw_retained: bool = False
+
+
+class ProviderThreadObservation(BaseModel):
+    """Sparse provider thread metadata observed during discovery or sync.
+
+    ``lifecycle_state`` is deliberately optional: omitted observations preserve
+    the stored lifecycle rather than reviving an archived or deleted thread.
+    """
+
+    provider: str = "codex"
+    provider_thread_id: str
+    session_id: str | None = None
+    parent_thread_id: str | None = None
+    forked_from_id: str | None = None
+    source_kind: str | None = None
+    thread_source: str | None = None
+    agent_nickname: str | None = None
+    agent_role: str | None = None
+    agent_depth: int | None = None
+    lifecycle_state: ProviderThreadLifecycleState | None = None
+    relationship_source: str | None = None
+    confidence: float | None = None
+    observed_at: str | None = None
+
+
+class ProviderThread(BaseModel):
+    """A provider-owned thread identity retained independently of lanes."""
+
+    provider: str
+    provider_thread_id: str
+    session_id: str | None = None
+    parent_thread_id: str | None = None
+    forked_from_id: str | None = None
+    source_kind: str | None = None
+    thread_source: str | None = None
+    agent_nickname: str | None = None
+    agent_role: str | None = None
+    agent_depth: int | None = None
+    lifecycle_state: ProviderThreadLifecycleState = "unknown"
+    relationship_source: str | None = None
+    confidence: float | None = None
+    first_seen_at: str
+    last_seen_at: str
+    archived_at: str | None = None
+    deleted_at: str | None = None
+
+
+class ProviderThreadNode(BaseModel):
+    """A provider thread enriched with Dispatch lane ownership when available."""
+
+    thread: ProviderThread
+    managed: bool
+    ref: str | None = None
+    handle: str | None = None
+    lane_status: LaneStatus | None = None
 
 
 class ServerRequest(BaseModel):

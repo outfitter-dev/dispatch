@@ -13,6 +13,8 @@ from outfitter.dispatch.client.events import (
     StatusChanged,
     ThreadArchived,
     ThreadCompacted,
+    ThreadDeleted,
+    ThreadStarted,
     ThreadUnarchived,
     TurnCompleted,
     TurnFailed,
@@ -68,6 +70,27 @@ def test_goal_and_compaction_notifications_project_to_activity_events() -> None:
 def test_archive_notifications_project_to_lifecycle_events() -> None:
     assert project_notification("thread/archived", {"threadId": "L1"}) == [ThreadArchived("L1")]
     assert project_notification("thread/unarchived", {"threadId": "L1"}) == [ThreadUnarchived("L1")]
+    assert project_notification("thread/deleted", {"threadId": "L1"}) == [ThreadDeleted("L1")]
+
+
+def test_thread_started_projects_nested_full_thread() -> None:
+    events = project_notification(
+        "thread/started",
+        {
+            "thread": {
+                "id": "child",
+                "parentThreadId": "parent",
+                "agentNickname": "Hypatia",
+                "agentRole": "worker",
+            }
+        },
+    )
+    assert len(events) == 1
+    event = events[0]
+    assert isinstance(event, ThreadStarted)
+    assert event.lane_id == "child"
+    assert event.thread is not None
+    assert event.thread.parent_thread_id == "parent"
 
 
 def test_status_changed_with_no_flags_also_emits_idle() -> None:

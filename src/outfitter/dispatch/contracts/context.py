@@ -108,6 +108,8 @@ class LaneClient(Protocol):
         sort_direction: SortDirection | None = None,
         sort_key: ThreadSortKey | None = None,
         source_kinds: list[ThreadSourceKind] | None = None,
+        parent_thread_id: str | None = None,
+        ancestor_thread_id: str | None = None,
     ) -> list[ThreadInfo]: ...
 
     async def thread_read(

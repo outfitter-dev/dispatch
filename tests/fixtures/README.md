@@ -18,6 +18,8 @@ Layout:
   compact generated protocol manifest refreshed by `just app-server-manifest`.
   The manifest records canonical `ThreadItem` discriminants, and
   `thread_read/canonical_items_v0144.json` exercises every known 0.144 variant.
+  `thread_list/descendants_v0144.json` exercises tagged subagent sources and
+  parent, ancestor, and fork relationships.
 - `transcripts/` — Codex persisted JSONL source files for sync parsing.
 - `registry/` — builders for registry rows and migration test setup.
 - `cli_smoke/` — notes and recipes for install/first-run smoke checks.

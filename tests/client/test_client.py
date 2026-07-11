@@ -296,6 +296,7 @@ async def test_thread_list_sends_current_native_filters(
         sort_direction="desc",
         sort_key="updated_at",
         source_kinds=["cli"],
+        ancestor_thread_id="root",
         use_state_db_only=True,
     )
     assert fake.sent[-1] == {
@@ -309,6 +310,7 @@ async def test_thread_list_sends_current_native_filters(
             "sortDirection": "desc",
             "sortKey": "updated_at",
             "sourceKinds": ["cli"],
+            "ancestorThreadId": "root",
             "useStateDbOnly": True,
         },
     }

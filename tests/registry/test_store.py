@@ -17,6 +17,7 @@ from outfitter.dispatch.registry.models import (
     SERVER_REQUEST_TEXT_LIMIT,
     LaneRuntimeSettings,
     LaneSync,
+    ProviderThreadObservation,
     Subscription,
 )
 from outfitter.dispatch.registry.refs import BASE58BTC_ALPHABET, codex_ref_payload
@@ -28,6 +29,7 @@ from tests.fixtures.registry.builders import (
     message_receipt,
     model_catalog_entry,
     provider_event,
+    provider_thread_observation,
     server_request,
     thread_item,
     thread_item_ref,
@@ -1533,3 +1535,263 @@ async def test_v5_migration_prunes_existing_orphan_lane_children(tmp_path: Path)
         assert rows == []
     finally:
         await migrated.close()
+
+
+async def test_v16_migration_adds_independent_provider_threads_table(tmp_path: Path) -> None:
+    db = tmp_path / "registry-v15.db"
+    conn = await aiosqlite.connect(db)
+    await conn.executescript(
+        """
+        CREATE TABLE lanes (id TEXT PRIMARY KEY);
+        PRAGMA user_version = 15;
+        """
+    )
+    await conn.commit()
+    await conn.close()
+
+    migrated = await Registry.open(db, now=_clock)
+    try:
+        async with migrated._conn.execute("PRAGMA table_info(provider_threads)") as cur:
+            columns = {str(row["name"]) for row in await cur.fetchall()}
+        assert {
+            "provider",
+            "provider_thread_id",
+            "parent_thread_id",
+            "forked_from_id",
+            "lifecycle_state",
+            "first_seen_at",
+            "last_seen_at",
+            "archived_at",
+            "deleted_at",
+        } <= columns
+        async with migrated._conn.execute("PRAGMA foreign_key_list(provider_threads)") as cur:
+            assert await cur.fetchall() == []
+        async with migrated._conn.execute("PRAGMA user_version") as cur:
+            row = await cur.fetchone()
+        assert row is not None
+        assert int(row[0]) == SCHEMA_VERSION == 16
+    finally:
+        await migrated.close()
+
+
+async def test_provider_thread_sparse_upsert_preserves_identity_lineage_and_lifecycle(
+    store: Registry,
+) -> None:
+    archived_at = "2026-06-03T12:01:00+00:00"
+    observed = provider_thread_observation(
+        provider_thread_id="child",
+        parent_thread_id="parent",
+        forked_from_id="fork-origin",
+        lifecycle_state="archived",
+        observed_at=archived_at,
+    )
+    initial = await store.upsert_provider_thread(observed)
+    assert await store.upsert_provider_thread(observed) == initial
+
+    saved = await store.upsert_provider_thread(
+        ProviderThreadObservation(
+            provider="codex",
+            provider_thread_id="child",
+            observed_at="2026-06-03T12:02:00+00:00",
+        )
+    )
+
+    assert saved.session_id == "session-1"
+    assert saved.parent_thread_id == "parent"
+    assert saved.forked_from_id == "fork-origin"
+    assert saved.agent_nickname == "worker"
+    assert saved.relationship_source == "history"
+    assert saved.lifecycle_state == "archived"
+    assert saved.first_seen_at == archived_at
+    assert saved.last_seen_at == "2026-06-03T12:02:00+00:00"
+    assert saved.archived_at == archived_at
+
+
+async def test_provider_thread_batch_upsert_returns_each_observation(store: Registry) -> None:
+    saved = await store.upsert_provider_threads(
+        [
+            provider_thread_observation(provider_thread_id="one"),
+            provider_thread_observation(provider_thread_id="two", parent_thread_id="one"),
+        ]
+    )
+
+    assert [thread.provider_thread_id for thread in saved] == ["one", "two"]
+    assert saved[1].parent_thread_id == "one"
+
+
+async def test_provider_thread_batch_upsert_rolls_back_as_one_transaction(
+    store: Registry,
+) -> None:
+    await store._conn.executescript(
+        """
+        CREATE TRIGGER reject_bad_provider_thread
+        BEFORE INSERT ON provider_threads
+        WHEN NEW.provider_thread_id = 'bad'
+        BEGIN
+            SELECT RAISE(FAIL, 'rejected provider thread');
+        END;
+        """
+    )
+    await store._conn.commit()
+
+    with pytest.raises(aiosqlite.IntegrityError, match="rejected provider thread"):
+        await store.upsert_provider_threads(
+            [
+                provider_thread_observation(provider_thread_id="good"),
+                provider_thread_observation(provider_thread_id="bad"),
+            ]
+        )
+
+    assert await store.get_provider_thread("codex", "good") is None
+
+
+async def test_provider_thread_lifecycle_tombstones_outlive_lane_deletion(store: Registry) -> None:
+    await store.add_lane(id="thread-1", handle="@one", source="own")
+    await store.upsert_provider_thread(provider_thread_observation())
+    archived = await store.mark_provider_thread_state(
+        "codex", "thread-1", "archived", observed_at="2026-06-03T12:01:00+00:00"
+    )
+    deleted = await store.mark_provider_thread_state(
+        "codex", "thread-1", "deleted", observed_at="2026-06-03T12:02:00+00:00"
+    )
+    await store._conn.execute("DELETE FROM lanes WHERE id = ?", ("thread-1",))
+    await store._conn.commit()
+
+    assert archived.archived_at == "2026-06-03T12:01:00+00:00"
+    assert deleted.lifecycle_state == "deleted"
+    assert deleted.archived_at == "2026-06-03T12:01:00+00:00"
+    assert deleted.deleted_at == "2026-06-03T12:02:00+00:00"
+    assert await store.get_provider_thread("codex", "thread-1") == deleted
+
+
+async def test_provider_thread_topology_completes_after_late_parent_discovery(
+    store: Registry,
+) -> None:
+    await store.upsert_provider_thread(
+        provider_thread_observation(provider_thread_id="child", parent_thread_id="parent")
+    )
+
+    missing = await store.get_provider_thread_topology("codex", "child")
+    assert missing.complete is False
+    assert missing.roots["child"] is None
+    assert missing.missing_thread_ids == ["parent"]
+
+    await store.upsert_provider_thread(provider_thread_observation(provider_thread_id="parent"))
+    discovered = await store.get_provider_thread_topology("codex", "child")
+    assert discovered.complete is True
+    assert [node.thread.provider_thread_id for node in discovered.parent_ancestry["child"]] == [
+        "parent"
+    ]
+    assert discovered.roots["child"] is not None
+    assert discovered.roots["child"].thread.provider_thread_id == "parent"
+
+
+async def test_provider_thread_topology_preserves_parent_cycles(store: Registry) -> None:
+    await store.upsert_provider_thread(
+        provider_thread_observation(provider_thread_id="a", parent_thread_id="b")
+    )
+    await store.upsert_provider_thread(
+        provider_thread_observation(provider_thread_id="b", parent_thread_id="a")
+    )
+
+    topology = await store.get_provider_thread_topology("codex", "a")
+
+    assert topology.cycle_detected is True
+    assert topology.complete is False
+    assert topology.roots["a"] is None
+    saved = await store.get_provider_thread("codex", "a")
+    assert saved is not None
+    assert saved.parent_thread_id == "b"
+
+
+async def test_provider_thread_topology_reports_self_links_as_cycles(store: Registry) -> None:
+    await store.upsert_provider_thread(
+        provider_thread_observation(provider_thread_id="self", parent_thread_id="self")
+    )
+
+    topology = await store.get_provider_thread_topology("codex", "self")
+
+    assert topology.cycle_detected is True
+    assert topology.complete is False
+    assert topology.roots["self"] is None
+
+
+async def test_provider_thread_topology_separates_parent_descendants_and_forks(
+    store: Registry,
+) -> None:
+    root_lane = await store.add_lane(id="root", handle="@root", source="own")
+    await store.update_lane_status("root", "archived")
+    await store.upsert_provider_thread(provider_thread_observation(provider_thread_id="root"))
+    await store.upsert_provider_thread(
+        provider_thread_observation(provider_thread_id="child", parent_thread_id="root")
+    )
+    await store.upsert_provider_thread(
+        provider_thread_observation(provider_thread_id="grand", parent_thread_id="child")
+    )
+    await store.upsert_provider_thread(
+        provider_thread_observation(provider_thread_id="fork", forked_from_id="root")
+    )
+
+    topology = await store.get_provider_thread_topology("codex", ["root", "child", "fork"])
+
+    assert topology.complete is True
+    assert topology.roots["child"] is not None
+    assert topology.roots["child"].thread.provider_thread_id == "root"
+    assert [node.thread.provider_thread_id for node in topology.children["root"]] == ["child"]
+    assert [node.thread.provider_thread_id for node in topology.descendants["root"]] == [
+        "child",
+        "grand",
+    ]
+    assert [node.thread.provider_thread_id for node in topology.forks["root"]] == ["fork"]
+    assert topology.fork_origins["root"] is None
+    assert topology.fork_origins["fork"] is not None
+    assert topology.fork_origins["fork"].thread.provider_thread_id == "root"
+    fork = next(node for node in topology.nodes if node.thread.provider_thread_id == "fork")
+    assert fork not in topology.descendants["root"]
+    root = next(node for node in topology.nodes if node.thread.provider_thread_id == "root")
+    assert root.managed is True
+    assert root.ref == root_lane.ref
+    assert root.handle == "@root"
+    assert root.lane_status == "archived"
+
+
+async def test_provider_thread_topology_joins_current_handle_after_rename(
+    store: Registry,
+) -> None:
+    lane = await store.add_lane(id="root", handle="@before", source="own")
+    await store.upsert_provider_thread(provider_thread_observation(provider_thread_id="root"))
+
+    await store.update_lane_handle(lane.id, "@after")
+    topology = await store.get_provider_thread_topology("codex", lane.id)
+
+    [node] = topology.nodes
+    assert node.thread.provider_thread_id == lane.id
+    assert node.ref == lane.ref
+    assert node.handle == "@after"
+
+
+async def test_provider_thread_topology_reports_nested_depth_and_node_truncation(
+    store: Registry,
+) -> None:
+    for thread_id, parent_id in (
+        ("root", None),
+        ("child-a", "root"),
+        ("child-b", "root"),
+        ("grand", "child-a"),
+    ):
+        await store.upsert_provider_thread(
+            provider_thread_observation(provider_thread_id=thread_id, parent_thread_id=parent_id)
+        )
+
+    depth_limited = await store.get_provider_thread_topology("codex", "root", max_depth=1)
+    assert depth_limited.truncated is True
+    assert depth_limited.complete is False
+    assert [node.thread.provider_thread_id for node in depth_limited.descendants["root"]] == [
+        "child-a",
+        "child-b",
+    ]
+
+    node_limited = await store.get_provider_thread_topology("codex", "root", max_nodes=2)
+    assert node_limited.truncated is True
+    assert node_limited.complete is False
+    assert len(node_limited.nodes) == 2

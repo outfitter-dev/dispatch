@@ -295,6 +295,8 @@ class AppServerClient:
         sort_direction: SortDirection | None = None,
         sort_key: ThreadSortKey | None = None,
         source_kinds: list[ThreadSourceKind] | None = None,
+        parent_thread_id: str | None = None,
+        ancestor_thread_id: str | None = None,
     ) -> list[ThreadInfo]:
         params = ThreadListParams(
             limit=limit,
@@ -306,6 +308,8 @@ class AppServerClient:
             sort_direction=sort_direction,
             sort_key=sort_key,
             source_kinds=source_kinds,
+            parent_thread_id=parent_thread_id,
+            ancestor_thread_id=ancestor_thread_id,
             use_state_db_only=use_state_db_only,
         )
         result = await self._request("thread/list", _dump(params))

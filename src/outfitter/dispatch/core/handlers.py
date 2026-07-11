@@ -149,6 +149,7 @@ from .models import (
     ThreadActionRef,
     ThreadModelView,
     ThreadTargetInput,
+    ThreadTopologyView,
     TranscriptInput,
     TranscriptItem,
     TranscriptOutput,
@@ -161,6 +162,7 @@ from .server_request_policy import expected_response
 from .server_requests import respond_to_server_request
 from .staging import StageContent, stage_session
 from .sync import scan_codex_jsonl
+from .topology import observe_thread, observe_threads, topology_views
 from .turn_settings import (
     load_turn_start_settings,
     runtime_settings_for_lane,
@@ -404,13 +406,18 @@ def _model_view_from_thread(thread: ThreadInfo) -> ThreadModelView:
 
 
 def _list_item(
-    lane: Lane, sync: LaneSync | None, model: LaneModelSettings | None, ctx: Ctx
+    lane: Lane,
+    sync: LaneSync | None,
+    model: LaneModelSettings | None,
+    ctx: Ctx,
+    topology: ThreadTopologyView | None = None,
 ) -> LaneListItem:
     return LaneListItem(
         **_ref(lane, ctx).model_dump(),
         sync=_sync_view(sync),
         latest_turn=_latest_turn_view(lane),
         model=_model_view(model, sync),
+        topology=topology or ThreadTopologyView(),
     )
 
 
@@ -494,6 +501,9 @@ def _require_active_turn(lane: Lane, action: str) -> str:
 
 async def open_lane(inp: OpenInput, ctx: Ctx) -> LaneRef:
     thread = await ctx.client.thread_start(cwd=inp.cwd, sandbox="read-only", ephemeral=False)
+    await observe_thread(
+        ctx.registry, thread, lifecycle_state="active", relationship_source="thread/start"
+    )
     handle = _handle(inp.name)
     lane = await ctx.registry.add_lane(
         id=thread.id, handle=handle, source="own", cwd=inp.cwd, status="idle"
@@ -630,6 +640,9 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         model=settings.model,
         model_provider=settings.model_provider,
         ephemeral=bool(settings.ephemeral),
+    )
+    await observe_thread(
+        ctx.registry, thread, lifecycle_state="active", relationship_source="thread/start"
     )
     lane = await ctx.registry.add_lane(
         id=thread.id, handle=resolved.handle, source="own", cwd=str(effective_cwd), status="idle"
@@ -790,6 +803,7 @@ async def attach_lane(inp: AttachInput, ctx: Ctx) -> LaneRef:
 async def _register_attached_thread(
     thread: ThreadInfo, ctx: Ctx, *, sync: bool, audit_op: str
 ) -> Lane:
+    await observe_thread(ctx.registry, thread, relationship_source="thread/read")
     handle = thread.name or f"@{thread.id[:8]}"
     lane_sync = (
         await _sync_from_thread(thread.id, thread, full=False)
@@ -824,6 +838,7 @@ async def _sync_lane(
     lane: Lane, ctx: Ctx, *, full: bool, metadata: ThreadInfo | None = None
 ) -> LaneSync:
     thread = metadata or await _read_thread_metadata(ctx, lane.id)
+    await observe_thread(ctx.registry, thread, relationship_source="thread/read")
     sync = await ctx.registry.upsert_lane_sync(await _sync_from_thread(lane.id, thread, full=full))
     await _record_observed_model(lane, thread, sync, ctx)
     return sync
@@ -927,7 +942,7 @@ def _metadata_sync(
         display_name=thread.name,
         preview=_short(thread.preview, limit=200),
         cwd=cwd or thread.cwd,
-        source=source or thread.source,
+        source=source or thread.source_kind,
         thread_source=thread_source or thread.thread_source,
         model_provider=model_provider or thread.model_provider,
         model=model or thread.model,
@@ -1430,10 +1445,28 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
     sync = await ctx.registry.get_lane_sync(lane.id)
     model_settings = await ctx.registry.get_lane_model_settings(lane.id)
     transcript: list[TranscriptItem] = []
+    if inp.topology:
+        thread = await _read_thread_metadata(ctx, lane.id)
+        await observe_thread(ctx.registry, thread, relationship_source="thread/read")
+        descendants = await ctx.client.thread_list(
+            limit=inp.topology_limit,
+            ancestor_thread_id=lane.id,
+            archived=False,
+            sort_direction="desc",
+            sort_key="updated_at",
+            use_state_db_only=True,
+        )
+        await observe_threads(
+            ctx.registry,
+            descendants,
+            lifecycle_state="active",
+            relationship_source="thread/list:ancestor",
+        )
     if inp.include_transcript:
         result = await ctx.client.thread_read(lane.id, include_turns=True)
         await index_codex_thread_read(ctx.registry, lane, result, ctx.capture)
         transcript = _transcript_from_thread(result, limit=inp.max_items)
+    topology = await topology_views(ctx.registry, [lane.id], max_nodes=inp.topology_limit)
     return LaneDetail(
         **_ref(lane, ctx).model_dump(),
         active_turn_id=lane.active_turn_id,
@@ -1441,6 +1474,7 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
         sync=_sync_view(sync),
         model=_model_view(model_settings, sync),
         transcript=transcript,
+        topology=topology[lane.id],
     )
 
 
@@ -1466,11 +1500,13 @@ async def sync_lane(inp: LaneSyncInput, ctx: Ctx) -> LaneSyncResult:
 
 async def _reconcile_archive_membership(lane: Lane, ctx: Ctx) -> Lane:
     if await _thread_list_contains(ctx, lane.id, archived=True):
+        await ctx.registry.mark_provider_thread_state("codex", lane.id, "archived")
         if lane.status != "archived":
             await ctx.registry.update_lane_status(lane.id, "archived")
             return await ctx.registry.get_lane(lane.id)
         return lane
     if lane.status == "archived" and await _thread_list_contains(ctx, lane.id, archived=False):
+        await ctx.registry.mark_provider_thread_state("codex", lane.id, "active")
         await ctx.registry.mark_lane_idle(lane.id)
         return await ctx.registry.get_lane(lane.id)
     return lane
@@ -2267,6 +2303,9 @@ async def fork(inp: ForkInput, ctx: Ctx) -> LaneRef:
         last_turn_id=inp.last_turn_id,
         ephemeral=inp.ephemeral,
     )
+    await observe_thread(
+        ctx.registry, thread, lifecycle_state="active", relationship_source="thread/fork"
+    )
     handle = _handle(inp.name)
     lane = await ctx.registry.add_lane(
         id=thread.id,
@@ -2319,10 +2358,55 @@ async def compact(inp: CompactInput, ctx: Ctx) -> ActionAck:
 
 async def roster(inp: RosterInput, ctx: Ctx) -> Roster:
     lanes = await ctx.registry.list_lanes(include_archived=inp.include_archived)
+    selected_ids: set[str] | None = None
+    selector = inp.parent or inp.ancestor or inp.root
+    if selector is not None:
+        resolved = await resolve_thread_selector(
+            ctx, selector, allow_unmanaged_raw=True, allow_fuzzy=False
+        )
+        parent_thread_id = resolved.thread_id if inp.parent is not None else None
+        ancestor_thread_id = resolved.thread_id if inp.parent is None else None
+        active = await ctx.client.thread_list(
+            limit=inp.topology_limit,
+            archived=False,
+            sort_direction="desc",
+            sort_key="updated_at",
+            use_state_db_only=True,
+            parent_thread_id=parent_thread_id,
+            ancestor_thread_id=ancestor_thread_id,
+        )
+        related = active
+        if inp.include_archived:
+            related += await ctx.client.thread_list(
+                limit=inp.topology_limit,
+                archived=True,
+                sort_direction="desc",
+                sort_key="updated_at",
+                use_state_db_only=True,
+                parent_thread_id=parent_thread_id,
+                ancestor_thread_id=ancestor_thread_id,
+            )
+        await observe_threads(ctx.registry, related, relationship_source="thread/list:topology")
+        selected_ids = {thread.id for thread in related}
+        if inp.root is not None:
+            selected_ids.add(resolved.thread_id)
+        lanes = [lane for lane in lanes if lane.id in selected_ids]
     syncs = await ctx.registry.get_lane_sync_many([lane.id for lane in lanes])
     models = await ctx.registry.get_lane_model_settings_many([lane.id for lane in lanes])
+    topology = await topology_views(
+        ctx.registry, [lane.id for lane in lanes], max_nodes=inp.topology_limit
+    )
     return Roster(
-        lanes=[_list_item(lane, syncs.get(lane.id), models.get(lane.id), ctx) for lane in lanes]
+        lanes=[
+            _list_item(
+                lane,
+                syncs.get(lane.id),
+                models.get(lane.id),
+                ctx,
+                topology.get(lane.id),
+            )
+            for lane in lanes
+        ]
     )
 
 
@@ -2335,17 +2419,23 @@ def _short(text: str | None, limit: int = _PREVIEW_MAX) -> str | None:
     return collapsed[: limit - 1].rstrip() + "…"
 
 
-def _session(thread: ThreadInfo, *, archived: bool = False) -> DiscoveredSession:
+def _session(
+    thread: ThreadInfo,
+    *,
+    archived: bool = False,
+    topology: ThreadTopologyView | None = None,
+) -> DiscoveredSession:
     return DiscoveredSession(
         id=thread.id,
         name=thread.name,
         preview=_short(thread.preview),
         cwd=thread.cwd,
         status=thread.status.type if thread.status is not None else None,
-        source=thread.source,
+        source=thread.source_kind,
         archived=archived,
         ephemeral=thread.ephemeral,
         model=_model_view_from_thread(thread),
+        topology=topology or ThreadTopologyView(),
     )
 
 
@@ -2353,14 +2443,47 @@ async def discover(inp: DiscoverInput, ctx: Ctx) -> Discovery:
     """List persisted Codex sessions (``thread/list``, state-db only) — read-only and
     distinct from ``roster``: these are candidates to ``attach``, not managed lanes.
     Discovery does not resume or register anything."""
+    selector = inp.parent or inp.ancestor or inp.root
+    parent_thread_id: str | None = None
+    ancestor_thread_id: str | None = None
+    if selector is not None:
+        resolved = await resolve_thread_selector(
+            ctx, selector, allow_unmanaged_raw=True, allow_fuzzy=False
+        )
+        if inp.parent is not None:
+            parent_thread_id = resolved.thread_id
+        else:
+            ancestor_thread_id = resolved.thread_id
     threads = await ctx.client.thread_list(
         limit=inp.limit,
         archived=inp.archived,
         sort_direction="desc",
         sort_key="updated_at",
         use_state_db_only=True,
+        parent_thread_id=parent_thread_id,
+        ancestor_thread_id=ancestor_thread_id,
     )
-    return Discovery(sessions=[_session(thread, archived=inp.archived) for thread in threads])
+    await observe_threads(
+        ctx.registry,
+        threads,
+        lifecycle_state="archived" if inp.archived else "active",
+        relationship_source="thread/list:discover",
+    )
+    managed = {lane.id for lane in await ctx.registry.list_lanes(include_archived=True)}
+    threads = [thread for thread in threads if thread.id not in managed]
+    topology = await topology_views(
+        ctx.registry, [thread.id for thread in threads], max_nodes=inp.topology_limit
+    )
+    return Discovery(
+        sessions=[
+            _session(
+                thread,
+                archived=inp.archived,
+                topology=topology.get(thread.id),
+            )
+            for thread in threads
+        ]
+    )
 
 
 async def models(inp: ModelsInput, ctx: Ctx) -> ModelCatalogOutput:
@@ -2445,6 +2568,7 @@ async def archive(inp: ThreadTargetInput, ctx: Ctx) -> ThreadActionRef:
     if lane is not None:
         await ctx.registry.update_lane_status(lane.id, "archived")
         lane = await ctx.registry.get_lane(lane.id)
+    await ctx.registry.mark_provider_thread_state("codex", thread_id, "archived")
     await ctx.registry.log_action("archive", lane=thread_id)
     return _action_ref(thread_id=thread_id, lane=lane, status="archived")
 
@@ -2456,6 +2580,9 @@ def _is_no_rollout_archive_error(exc: ClientAppServerError) -> bool:
 async def restore(inp: ThreadTargetInput, ctx: Ctx) -> ThreadActionRef:
     thread_id, lane = await _resolve_thread_target(ctx, inp.target)
     thread = await ctx.client.thread_unarchive(thread_id)
+    await observe_thread(
+        ctx.registry, thread, lifecycle_state="active", relationship_source="thread/unarchive"
+    )
     status = _lane_status(thread)
     if lane is not None:
         await ctx.registry.update_lane_status(lane.id, status)

@@ -14,6 +14,8 @@ from outfitter.dispatch.client.events import (
     LaneIdle,
     ThreadArchived,
     ThreadCompacted,
+    ThreadDeleted,
+    ThreadStarted,
     ThreadUnarchived,
     TurnCompleted,
     TurnFailed,
@@ -27,6 +29,7 @@ from .event_index import index_codex_lane_event
 from .queue import drain_next_queued_message
 from .server_requests import ServerRequestManager
 from .subscriptions import process_event_subscriptions
+from .topology import observe_thread
 from .triggers import TriggerRunner, resolve_lane
 
 
@@ -56,6 +59,19 @@ class Reactor:
 
     async def handle(self, event: LaneEvent) -> None:
         registry = self._ctx.registry
+        if isinstance(event, ThreadStarted) and event.thread is not None:
+            await observe_thread(
+                registry,
+                event.thread,
+                lifecycle_state="active",
+                relationship_source="thread/started",
+            )
+        elif isinstance(event, ThreadArchived):
+            await registry.mark_provider_thread_state("codex", event.lane_id, "archived")
+        elif isinstance(event, ThreadUnarchived):
+            await registry.mark_provider_thread_state("codex", event.lane_id, "active")
+        elif isinstance(event, ThreadDeleted):
+            await registry.mark_provider_thread_state("codex", event.lane_id, "deleted")
         lane = await registry.find_lane(event.lane_id)
         if lane is None:
             return  # an event for a thread dispatch does not track
@@ -84,7 +100,7 @@ class Reactor:
             await registry.touch_lane_event(lane.id)
             await process_event_subscriptions(self._ctx, lane, event)
             await drain_next_queued_message(self._ctx, lane.id)
-        elif isinstance(event, ThreadArchived):
+        elif isinstance(event, ThreadArchived | ThreadDeleted):
             await registry.update_lane_status(lane.id, "archived")
             await registry.touch_lane_event(lane.id)
         elif isinstance(event, ThreadUnarchived):
@@ -97,6 +113,7 @@ class Reactor:
             | GoalUpdated
             | GoalCleared
             | ThreadCompacted
+            | ThreadStarted
             | ApprovalRequested,
         ):
             await registry.touch_lane_event(lane.id)

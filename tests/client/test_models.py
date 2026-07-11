@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from outfitter.dispatch.client.models import (
     AppModel,
     ConfigInfo,
@@ -164,6 +166,7 @@ def test_thread_list_params_include_current_native_filters() -> None:
         sort_direction="desc",
         sort_key="updated_at",
         source_kinds=["cli", "appServer"],
+        parent_thread_id="parent",
         use_state_db_only=True,
     )
     dumped = params.model_dump(by_alias=True, exclude_none=True)
@@ -175,8 +178,14 @@ def test_thread_list_params_include_current_native_filters() -> None:
         "sortDirection": "desc",
         "sortKey": "updated_at",
         "sourceKinds": ["cli", "appServer"],
+        "parentThreadId": "parent",
         "useStateDbOnly": True,
     }
+
+
+def test_thread_list_topology_filters_are_mutually_exclusive() -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        ThreadListParams(parent_thread_id="parent", ancestor_thread_id="root")
 
 
 def test_thread_resume_can_request_low_hydration_subscription() -> None:
@@ -214,6 +223,32 @@ def test_thread_info_keeps_sync_metadata_fields() -> None:
     assert thread.cli_version == "0.144.0"
     assert thread.recency_at == 124
     assert thread.updated_at == 123
+
+
+def test_thread_info_normalizes_subagent_source_union() -> None:
+    thread = ThreadInfo.model_validate(
+        {
+            "id": "child",
+            "source": {
+                "subAgent": {
+                    "thread_spawn": {
+                        "depth": 2,
+                        "parent_thread_id": "parent",
+                        "agent_nickname": "Hypatia",
+                        "agent_role": "worker",
+                    }
+                }
+            },
+        }
+    )
+
+    assert thread.source_kind == "subAgentThreadSpawn"
+    assert thread.spawned_source == {
+        "depth": 2,
+        "parent_thread_id": "parent",
+        "agent_nickname": "Hypatia",
+        "agent_role": "worker",
+    }
 
 
 def test_thread_info_keeps_observed_model_service_tier() -> None:

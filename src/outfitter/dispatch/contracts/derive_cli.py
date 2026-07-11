@@ -847,16 +847,41 @@ def _list_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Ca
         archived: Annotated[
             bool, typer.Option("--archived", help="List archived unmanaged sessions.")
         ] = False,
+        parent: Annotated[
+            str | None, typer.Option("--parent", help="Only direct children of this thread.")
+        ] = None,
+        ancestor: Annotated[
+            str | None, typer.Option("--ancestor", help="Only descendants of this thread.")
+        ] = None,
+        root: Annotated[
+            str | None, typer.Option("--root", help="Only threads in this rooted tree.")
+        ] = None,
         limit: Annotated[int, typer.Option(help="Max unmanaged sessions to list.")] = 50,
+        topology_limit: Annotated[
+            int, typer.Option("--topology-limit", help="Max topology nodes to return.")
+        ] = 50,
         json: Annotated[
             bool, typer.Option("--json", help="Render machine-readable JSON output.")
         ] = False,
     ) -> None:
         op = discover if unmanaged else roster
         params: dict[str, object] = (
-            {"limit": limit, "archived": archived}
+            {
+                "limit": limit,
+                "archived": archived,
+                "parent": parent,
+                "ancestor": ancestor,
+                "root": root,
+                "topology_limit": topology_limit,
+            }
             if unmanaged
-            else {"include_archived": include_archived}
+            else {
+                "include_archived": include_archived,
+                "parent": parent,
+                "ancestor": ancestor,
+                "root": root,
+                "topology_limit": topology_limit,
+            }
         )
         render(op, invoke(op.id, params))
         _ignore_json(json)

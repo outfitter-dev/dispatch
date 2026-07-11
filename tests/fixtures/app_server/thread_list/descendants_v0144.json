@@ -1,0 +1,44 @@
+{
+  "data": [
+    {
+      "id": "019f0000-0000-7000-9000-000000000102",
+      "sessionId": "019f0000-0000-7000-9000-000000000100",
+      "parentThreadId": "019f0000-0000-7000-9000-000000000100",
+      "agentNickname": "Hypatia",
+      "agentRole": "worker",
+      "source": {
+        "subAgent": {
+          "thread_spawn": {
+            "depth": 1,
+            "parent_thread_id": "019f0000-0000-7000-9000-000000000100",
+            "agent_nickname": "Hypatia",
+            "agent_role": "worker"
+          }
+        }
+      },
+      "threadSource": "agent-control",
+      "status": {"type": "idle"},
+      "cwd": "/fixture/repo",
+      "name": "Topology child",
+      "preview": "Inspect topology",
+      "createdAt": 1781190001,
+      "updatedAt": 1781190301
+    },
+    {
+      "id": "019f0000-0000-7000-9000-000000000103",
+      "sessionId": "019f0000-0000-7000-9000-000000000100",
+      "parentThreadId": "019f0000-0000-7000-9000-000000000102",
+      "agentNickname": "Noether",
+      "agentRole": "reviewer",
+      "source": {"subAgent": "review"},
+      "status": {"type": "idle"},
+      "cwd": "/fixture/repo",
+      "name": "Topology grandchild",
+      "preview": "Review topology",
+      "createdAt": 1781190002,
+      "updatedAt": 1781190302
+    }
+  ],
+  "nextCursor": null,
+  "backwardsCursor": null
+}

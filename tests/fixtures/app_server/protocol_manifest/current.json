@@ -190,6 +190,20 @@
       "threadId",
       "threadSource"
     ],
+    "thread_list_experimental_fields": [
+      "ancestorThreadId",
+      "archived",
+      "cursor",
+      "cwd",
+      "limit",
+      "modelProviders",
+      "parentThreadId",
+      "searchTerm",
+      "sortDirection",
+      "sortKey",
+      "sourceKinds",
+      "useStateDbOnly"
+    ],
     "thread_list_result_fields": [
       "backwardsCursor",
       "data",

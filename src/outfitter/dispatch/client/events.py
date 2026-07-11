@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from .models import JsonRpcId, ServerRequestCategory
+from .models import JsonRpcId, ServerRequestCategory, ThreadInfo
 
 ApprovalKind = Literal["command", "file_change"]
 
@@ -105,12 +105,22 @@ class ThreadCompacted(LaneEvent):
 
 
 @dataclass(frozen=True)
+class ThreadStarted(LaneEvent):
+    thread: ThreadInfo | None = None
+
+
+@dataclass(frozen=True)
 class ThreadArchived(LaneEvent):
     pass
 
 
 @dataclass(frozen=True)
 class ThreadUnarchived(LaneEvent):
+    pass
+
+
+@dataclass(frozen=True)
+class ThreadDeleted(LaneEvent):
     pass
 
 
@@ -159,11 +169,17 @@ def project_notification(method: str, params: dict[str, object]) -> list[LaneEve
     Unknown methods project to ``[]`` (ignored), keeping triggers decoupled from
     the long tail of protocol notifications.
     """
+    raw: dict[str, object] = {"method": method, "params": params}
+    if method == "thread/started":
+        raw_thread = params.get("thread")
+        if not isinstance(raw_thread, dict):
+            return []
+        thread = ThreadInfo.model_validate(raw_thread)
+        return [ThreadStarted(thread.id, thread, raw_payload=raw)]
     lane = _thread_id(params)
     if lane is None:
         return []
     turn = _str(params, "turnId")
-    raw: dict[str, object] = {"method": method, "params": params}
     match method:
         case "turn/started":
             return [TurnStarted(lane, turn, raw_payload=raw)]
@@ -201,6 +217,8 @@ def project_notification(method: str, params: dict[str, object]) -> list[LaneEve
             return [ThreadArchived(lane, raw_payload=raw)]
         case "thread/unarchived":
             return [ThreadUnarchived(lane, raw_payload=raw)]
+        case "thread/deleted":
+            return [ThreadDeleted(lane, raw_payload=raw)]
         case "thread/status/changed":
             flags = _active_flags(params)
             events: list[LaneEvent] = [StatusChanged(lane, flags, raw_payload=raw)]

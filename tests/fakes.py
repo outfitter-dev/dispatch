@@ -191,6 +191,8 @@ class FakeLaneClient:
         sort_direction: SortDirection | None = None,
         sort_key: ThreadSortKey | None = None,
         source_kinds: list[ThreadSourceKind] | None = None,
+        parent_thread_id: str | None = None,
+        ancestor_thread_id: str | None = None,
     ) -> list[ThreadInfo]:
         self._record(
             "thread_list",
@@ -203,9 +205,29 @@ class FakeLaneClient:
             sort_direction=sort_direction,
             sort_key=sort_key,
             source_kinds=source_kinds,
+            parent_thread_id=parent_thread_id,
+            ancestor_thread_id=ancestor_thread_id,
             use_state_db_only=use_state_db_only,
         )
-        return self.list_results_by_archived.get(archived, self.list_result)
+        result = self.list_results_by_archived.get(archived, self.list_result)
+        if parent_thread_id is not None:
+            result = [thread for thread in result if thread.parent_thread_id == parent_thread_id]
+        if ancestor_thread_id is not None:
+            by_id = {thread.id: thread for thread in result}
+
+            def has_ancestor(thread: ThreadInfo) -> bool:
+                parent = thread.parent_thread_id
+                seen: set[str] = set()
+                while parent is not None and parent not in seen:
+                    if parent == ancestor_thread_id:
+                        return True
+                    seen.add(parent)
+                    parent_thread = by_id.get(parent)
+                    parent = parent_thread.parent_thread_id if parent_thread is not None else None
+                return False
+
+            result = [thread for thread in result if has_ancestor(thread)]
+        return result
 
     async def thread_read(self, thread_id: str, include_turns: bool = False) -> dict[str, object]:
         self._record("thread_read", thread_id=thread_id, include_turns=include_turns)

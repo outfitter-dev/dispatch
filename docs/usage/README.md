@@ -761,7 +761,24 @@ the first-run cleanup target is an archived Codex thread.
 ```bash
 uv run dispatch list --unmanaged --limit 20
 uv run dispatch list --unmanaged --archived --limit 20
+uv run dispatch list --parent <ref-or-thread-id>
+uv run dispatch list --ancestor <ref-or-thread-id>
+uv run dispatch list --root <ref-or-thread-id>
+uv run dispatch get <ref-or-thread-id> --topology
 ```
+
+Topology is provider metadata, not lane authority. `--parent` uses the App
+Server's direct-child filter; `--ancestor` returns all spawned descendants;
+`--root` returns the rooted managed tree and includes the root when it is a
+managed lane. Unmanaged discovery still excludes every already-managed thread.
+Ordinary history forks appear under `forked_from`/`forks`, never as child
+agents. Results include `complete`, `truncated`, and `cycle_detected` so callers
+do not have to mistake a bounded observation for a complete graph.
+
+Plain `list` and `get` project cached topology. `get --topology` explicitly
+refreshes one thread and a bounded descendant page from App Server. Lifecycle
+events and normal discovery/sync keep the cache current without registering
+unmanaged threads. Use `--topology-limit` to bound provider reads and output.
 
 Each row carries `id`, `name`, a shortened `preview`, `cwd`, `status`, `source`, and
 `ephemeral`; unmanaged archived rows also set `archived: true` in JSON output. Use the
@@ -1005,6 +1022,9 @@ guessing. Each grouped call chooses an `op` inside the tool, and that op's
 arguments/schema still derive from the same contract registry.
 The thread-write tool's `fork` op accepts `last_turn_id`, which asks App Server
 to fork history through that completed turn, inclusive.
+The thread-read tool's `roster`, `discover`, and `show` ops expose the same
+parent/ancestor/root filters and bounded topology fields as the CLI. Reading or
+discovering topology does not create a lane or grant write authority.
 Structured MCP outputs that identify a managed thread include the dispatch `ref`, full
 Codex id, title/handle, managed/source/status, and cwd when available.
 

@@ -2,7 +2,7 @@
 
 Date started: 2026-07-09
 Date finalized: pending
-Status: Active - DIS-44 ready for submit
+Status: Active - DIS-45 ready for merge
 Spec: `.agents/goals/2026-07-09-app-server-adoption/SPEC.md`
 Goal: `.agents/goals/2026-07-09-app-server-adoption/GOAL.md`
 Prompt: `.agents/goals/2026-07-09-app-server-adoption/PROMPT.md`
@@ -13,8 +13,8 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 - Objective: land the clear App Server 0.144 adoption work.
 - Completion horizon: merged, tracker-reconciled, dogfooded, clean `main`.
 - Authority used: Linear planning plus a dedicated Graphite packet commit.
-- Outcome: preparation and DIS-42 are merged; DIS-44 is implemented and in local review.
-- Tracker/PR/source-control state: PRs #73-#76 merged; DIS-44 is on its dedicated
+- Outcome: preparation, DIS-42, and DIS-44 are merged; DIS-45 is in implementation.
+- Tracker/PR/source-control state: PRs #73-#77 merged; DIS-45 is on its dedicated
   Graphite branch above current `main`.
 - Verification: prompt gate passed at 3,752 characters with no placeholders.
 - Review state: DIS-42 round 1 findings fixed; code and surface round 2 are both
@@ -100,6 +100,43 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 - Next: resolve review findings, obtain 5/5, commit/submit/merge DIS-44, reconcile Linear,
   then begin DIS-45.
 - Blockers: none.
+
+2026-07-10 - DIS-44 merge and DIS-45 topology implementation
+- Merged: PR #77 as `bce4243b23cdd5139ecc8cf1a3300776a7189233`; Linear DIS-44
+  moved to Done and Graphite returned to clean `main` before the next slice.
+- Changed for DIS-45: added typed 0.144 parent/ancestor list filters and tagged
+  thread sources; schema-v16 provider thread observations and bounded topology;
+  lifecycle tombstones; cache projections for managed and unmanaged threads;
+  derived list/get CLI and MCP fields; protocol fixtures and manifest guards;
+  ADR, research, usage, and skill guidance.
+- Correctness: provider topology is independent from lane authority; discovery
+  never creates lanes; parent and fork edges stay distinct; managed threads are
+  excluded from unmanaged discovery; ordinary reads are cached and explicit
+  get refresh is bounded.
+- Verified: focused client/registry/core/surface tests passed; final `just check`
+  passed with 486 tests and 13 live tests deselected, strict mypy/Ruff, build,
+  and package contents. A real isolated 0.144 App Server fork test passed in
+  8.44 seconds and proved forks are excluded from parent/ancestor results.
+- Review note: an attempted independent subagent review could not run because
+  the account usage limit was reached. It is not counted as review evidence;
+  the local structured review continues without waiting on it.
+- Review: code round 1 found three P2s: per-thread commits, stale provider
+  lifecycle during sync reconciliation, and missing batch rollback. All were
+  fixed. Code round 2 and surface round 1 are 5/5 clean with zero open P0-P2.
+- Next: commit, submit, reconcile CI/review, merge, and update Linear.
+- Blockers: none.
+
+2026-07-11 - DIS-45 submission
+- Committed: `a8d7e01` (`feat: persist provider thread topology`) and opened
+  draft PR #78 against `main` with a complete context, behavior, verification,
+  and risk description.
+- Hosted verification: CI, CodeQL actions, CodeQL Python, and the aggregate
+  CodeQL check all passed. GitHub reports a clean merge state with no review
+  threads or actionable comments.
+- Tracker: DIS-45 remains In Progress with the PR and full local/live evidence
+  recorded. It will move to Done after merge proof.
+- Next: amend this retro evidence, resubmit, confirm the final commit's checks,
+  mark ready, merge through Graphite, sync clean main, and close DIS-45.
 ```
 
 ## Review Log
@@ -117,6 +154,9 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 | DIS-44 r2 surface | CLI/MCP/docs/fixtures/evidence | `tmp/reviews/dis-44/surface-round-2.json` | 3/5 | changes requested | 2 | Child rollup P1 and docs P2; fixed |
 | DIS-44 r3 code | protocol/convergence/storage/privacy | `tmp/reviews/dis-44/code-round-3.json` | 5/5 | clean | 0 | All six prior findings fixed; full/live gates passed |
 | DIS-44 r3 surface | CLI/MCP/docs/fixtures/evidence | `tmp/reviews/dis-44/surface-round-3.json` | 5/5 | clean | 0 | All prior findings fixed; derived surfaces clean |
+| DIS-45 r1 code | protocol/storage/lifecycle/concurrency | `tmp/reviews/dis-45/code-round-1.json` | 3/5 | changes requested | 3 | Three P2s fixed before final gate |
+| DIS-45 r2 code | protocol/storage/lifecycle/concurrency | `tmp/reviews/dis-45/code-round-2.json` | 5/5 | clean | 0 | Prior findings verified fixed |
+| DIS-45 r1 surface | CLI/MCP/docs/authority/fixtures | `tmp/reviews/dis-45/surface-round-1.json` | 5/5 | clean | 0 | Derived surfaces and guidance aligned |
 
 ## Verification Log
 
@@ -132,6 +172,9 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 | `canonical_item_ingestion.toml` | DIS-44 | passed | Real Spark command item survived partial replay and was queryable locally |
 | App Server manifest comparison | DIS-44 | passed with explained label drift | ThreadItem discriminants match generated 0.144 inventory |
 | `dispatch schema query` / `query --help` | DIS-44 | passed | Derived output fields and CLI filters present; no hand-wired surface |
+| `just check` | DIS-45 | passed | 486 tests passed, 13 live tests deselected; strict mypy/Ruff, package build and contents passed |
+| targeted real App Server fork test | DIS-45 | passed | Persisted fork retained `forkedFromId`, no parent id, and was absent from parent/ancestor results |
+| App Server manifest comparison | DIS-45 | passed with explained label drift | Structural inventory and topology fields match; local binary reports alpha version label |
 
 ## Prompt / Goal Alignment
 
@@ -159,6 +202,10 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 | PR #76 | merged | DIS-42 interactive requests; `d388dd7` |
 | DIS-42 | Done | Acceptance, live scenarios, and 5/5 review completed |
 | DIS-44 | In Progress | Canonical item implementation and local review active |
+| PR #77 | merged | DIS-44 canonical items; `bce4243b23cdd5139ecc8cf1a3300776a7189233` |
+| DIS-44 | Done | Acceptance, live scenario, and 5/5 review completed |
+| DIS-45 | In Progress | Provider topology implementation and local verification active |
+| PR #78 | draft / green before retro amendment | DIS-45 provider topology; no open review threads |
 
 ## Follow-Ups
 

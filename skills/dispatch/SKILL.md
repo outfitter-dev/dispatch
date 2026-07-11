@@ -325,7 +325,18 @@ updates. It is read-only and does not resume or register anything:
 uv run dispatch list
 uv run dispatch list --unmanaged --limit 20
 uv run dispatch list --unmanaged --archived --limit 20
+uv run dispatch list --parent <ref-or-thread-id>
+uv run dispatch list --ancestor <ref-or-thread-id>
+uv run dispatch list --root <ref-or-thread-id>
+uv run dispatch get <ref-or-thread-id> --topology
 ```
+
+Topology does not imply authority. Parent/ancestor filters use App Server's
+native spawned-thread relationships, while ordinary forks remain separate in
+`forked_from` and `forks`. Unmanaged discovery excludes threads that already
+have lanes. Plain reads use the local topology cache; `get --topology` performs
+a bounded refresh. Check `complete`, `truncated`, and `cycle_detected` before
+treating the result as a complete tree, and use `--topology-limit` to bound it.
 
 Use a discovered session `id` with `attach <id>` or `sync <id>`. `list --unmanaged`
 is read-only; `sync <id>` is the explicit step that registers the thread as an
@@ -622,6 +633,8 @@ Use the daemon-read MCP tool's `models` op before setting explicit model or
 service-tier arguments.
 The thread-write MCP tool's `fork` op accepts `last_turn_id` to fork through one
 completed turn, inclusive.
+The thread-read MCP tool derives the same topology inputs and outputs used by
+CLI `list` and `get`; topology reads never attach or grant write authority.
 If the plugin does not appear immediately, restart Codex for the workspace.
 Installed PyPI packages also include read-only copies of these skills and the
 plugin bundle under `outfitter.dispatch.assets`; use the repo copies for editing.
