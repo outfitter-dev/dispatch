@@ -42,6 +42,35 @@ async def test_initialize_sends_request_then_initialized_notification(
     assert "id" not in fake.sent[1]  # initialized is a notification
 
 
+async def test_account_capacity_read_methods_are_typed(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+    responses = {
+        "account/read": load_json("app_server", "account_read", "signed_in.json"),
+        "account/rateLimits/read": load_json("app_server", "account_rate_limits", "current.json"),
+        "account/usage/read": load_json("app_server", "account_usage", "current.json"),
+    }
+
+    def responder(message: dict[str, object]) -> list[dict[str, object]]:
+        method = message.get("method")
+        if isinstance(method, str) and method in responses and "id" in message:
+            return [{"id": message["id"], "result": responses[method]}]
+        return []
+
+    fake.auto = responder
+    account = await c.account_read()
+    limits = await c.account_rate_limits_read()
+    usage = await c.account_usage_read()
+
+    assert account.account is not None and account.account.type == "chatgpt"
+    assert limits.rate_limit_reset_credits is not None
+    assert usage.summary.peak_daily_tokens == 34567
+    assert fake.sent[0]["params"] == {"refreshToken": False}
+    assert fake.sent[1]["params"] == {}
+    assert fake.sent[2]["params"] == {}
+
+
 async def test_bounded_request_timeout_discards_pending(
     client: tuple[AppServerClient, FakeTransport],
 ) -> None:

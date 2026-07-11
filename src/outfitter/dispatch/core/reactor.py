@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from outfitter.dispatch.client.events import (
+    AccountRateLimitsUpdated,
     ApprovalRequested,
     GoalCleared,
     GoalUpdated,
@@ -24,6 +25,7 @@ from outfitter.dispatch.client.events import (
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.registry.models import EventWhen
 
+from .capacity import observe_codex_rate_limits
 from .capture import bound_text
 from .event_index import index_codex_lane_event
 from .queue import drain_next_queued_message
@@ -41,6 +43,7 @@ class Reactor:
     async def run(self) -> None:
         async with asyncio.TaskGroup() as tasks:
             tasks.create_task(self._run_lane_events())
+            tasks.create_task(self._run_account_events())
             tasks.create_task(
                 ServerRequestManager(
                     self._ctx,
@@ -56,6 +59,16 @@ class Reactor:
                 await self.handle(event)
             except Exception:  # never let one bad event kill the reactor
                 self._ctx.log.exception("reactor.handle_failed", lane=event.lane_id)
+
+    async def _run_account_events(self) -> None:
+        async for event in self._ctx.client.account_events():
+            try:
+                await self.handle_account_event(event)
+            except Exception:
+                self._ctx.log.exception("reactor.account_event_failed")
+
+    async def handle_account_event(self, event: AccountRateLimitsUpdated) -> None:
+        await observe_codex_rate_limits(self._ctx, event.rate_limits)
 
     async def handle(self, event: LaneEvent) -> None:
         registry = self._ctx.registry

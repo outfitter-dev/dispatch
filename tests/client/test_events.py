@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from outfitter.dispatch.client.events import (
+    AccountRateLimitsUpdated,
     ApprovalRequested,
     GoalCleared,
     GoalUpdated,
@@ -20,6 +21,7 @@ from outfitter.dispatch.client.events import (
     TurnFailed,
     TurnStarted,
     classify_server_request,
+    project_account_notification,
     project_notification,
     project_server_request,
     project_server_request_received,
@@ -71,6 +73,19 @@ def test_archive_notifications_project_to_lifecycle_events() -> None:
     assert project_notification("thread/archived", {"threadId": "L1"}) == [ThreadArchived("L1")]
     assert project_notification("thread/unarchived", {"threadId": "L1"}) == [ThreadUnarchived("L1")]
     assert project_notification("thread/deleted", {"threadId": "L1"}) == [ThreadDeleted("L1")]
+
+
+def test_account_rate_limit_notification_projects_without_lane_identity() -> None:
+    event = project_account_notification(
+        "account/rateLimits/updated",
+        {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 55}}},
+    )
+
+    assert isinstance(event, AccountRateLimitsUpdated)
+    assert event.rate_limits.limit_id == "codex"
+    assert event.rate_limits.primary is not None
+    assert event.rate_limits.primary.used_percent == 55
+    assert project_account_notification("account/updated", {}) is None
 
 
 def test_thread_started_projects_nested_full_thread() -> None:

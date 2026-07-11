@@ -22,12 +22,39 @@ from outfitter.dispatch.client.events import LaneEvent, TurnCompleted
 from outfitter.dispatch.client.models import SandboxPolicy
 from outfitter.dispatch.config import RuntimePolicy
 from outfitter.dispatch.contracts.context import Ctx
+from outfitter.dispatch.core.capacity import refresh_codex_capacity
 from outfitter.dispatch.core.server_requests import ServerRequestManager, respond_to_server_request
 from outfitter.dispatch.registry.store import Registry
 
 from ._drive import run_turn, run_turn_autoapprove
 
 pytestmark = pytest.mark.integration
+
+
+async def test_account_capacity_probe_prints_only_redacted_observation(
+    client: AppServerClient,
+) -> None:
+    account = await client.account_read()
+    registry = await Registry.open()
+    ctx = Ctx(
+        client=client,
+        registry=registry,
+        log=structlog.get_logger(),
+        abort=asyncio.Event(),
+        policy=RuntimePolicy(),
+        provider_session_id="integration-app-server",
+    )
+    try:
+        observation = await refresh_codex_capacity(ctx)
+        payload = observation.model_dump_json()
+        print(payload)
+        assert "accessToken" not in payload
+        assert "refreshToken" not in payload
+        if account.account is not None and account.account.email is not None:
+            assert account.account.email not in payload
+            assert observation.account_label != account.account.email
+    finally:
+        await registry.close()
 
 
 async def test_read_only_turn_returns_pong(client: AppServerClient, work_dir: Path) -> None:

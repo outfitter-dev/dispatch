@@ -1,0 +1,39 @@
+{
+  "rateLimits": {
+    "limitId": "codex",
+    "limitName": "Codex",
+    "planType": "pro",
+    "primary": {"usedPercent": 25, "windowDurationMins": 300, "resetsAt": 1783764000},
+    "secondary": {"usedPercent": 40, "windowDurationMins": 10080, "resetsAt": 1784196000},
+    "credits": {"hasCredits": true, "unlimited": false, "balance": "12.34"},
+    "individualLimit": {"limit": "100", "used": "30", "remainingPercent": 70, "resetsAt": 1784196000}
+  },
+  "rateLimitsByLimitId": {
+    "codex": {
+      "limitId": "codex",
+      "limitName": "Codex",
+      "planType": "pro",
+      "primary": {"usedPercent": 25, "windowDurationMins": 300, "resetsAt": 1783764000},
+      "secondary": {"usedPercent": 40, "windowDurationMins": 10080, "resetsAt": 1784196000}
+    },
+    "review": {
+      "limitId": "review",
+      "limitName": "Code review",
+      "primary": {"usedPercent": 10, "resetsAt": null}
+    }
+  },
+  "rateLimitResetCredits": {
+    "availableCount": 2,
+    "credits": [
+      {
+        "id": "opaque-credit-1",
+        "resetType": "codexRateLimits",
+        "status": "available",
+        "grantedAt": 1783700000,
+        "expiresAt": 1784300000,
+        "title": "One reset",
+        "description": "Reset one Codex rate-limit window"
+      }
+    ]
+  }
+}

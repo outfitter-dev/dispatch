@@ -12,8 +12,17 @@ from datetime import datetime, timedelta
 
 import structlog
 
-from outfitter.dispatch.client.events import LaneEvent, ServerRequestReceived
+from outfitter.dispatch.client.events import (
+    AccountRateLimitsUpdated,
+    LaneEvent,
+    ServerRequestReceived,
+)
 from outfitter.dispatch.client.models import (
+    AccountInfo,
+    AccountRateLimitsResult,
+    AccountReadResult,
+    AccountUsageResult,
+    AccountUsageSummary,
     AppModel,
     ApprovalPolicy,
     ApprovalsReviewer,
@@ -24,6 +33,7 @@ from outfitter.dispatch.client.models import (
     JsonRpcId,
     ModelServiceTier,
     Personality,
+    RateLimitSnapshot,
     ReasoningSummary,
     SandboxPolicy,
     SortDirection,
@@ -64,6 +74,12 @@ class FakeLaneClient:
             service_tier=None,
             model_reasoning_effort="xhigh",
         )
+        self.account_result = AccountReadResult(
+            account=AccountInfo(type="chatgpt", email="user@example.com", plan_type="pro"),
+            requires_openai_auth=True,
+        )
+        self.rate_limits_result = AccountRateLimitsResult(rate_limits=RateLimitSnapshot())
+        self.usage_result = AccountUsageResult(summary=AccountUsageSummary())
         self.models_result: list[AppModel] = [
             AppModel(
                 id="gpt-5.5",
@@ -86,6 +102,7 @@ class FakeLaneClient:
         self.event_log: list[LaneEvent] = []
         self.server_request_log: list[ServerRequestReceived] = []
         self.raw_log: list[dict[str, object]] = []
+        self.account_event_log: list[AccountRateLimitsUpdated] = []
 
     def _record(self, name: str, **kwargs: object) -> None:
         self.calls.append((name, kwargs))
@@ -93,6 +110,21 @@ class FakeLaneClient:
     async def config_read(self) -> ConfigInfo:
         self._record("config_read")
         return self.config_result
+
+    async def account_read(self) -> AccountReadResult:
+        self._record("account_read")
+        return self.account_result
+
+    async def account_rate_limits_read(self) -> AccountRateLimitsResult:
+        self._record("account_rate_limits_read")
+        return self.rate_limits_result
+
+    async def account_usage_read(self) -> AccountUsageResult:
+        self._record("account_usage_read")
+        return self.usage_result
+
+    def account_events(self) -> AsyncIterator[AccountRateLimitsUpdated]:
+        return _aiter(self.account_event_log)
 
     async def model_list(self) -> list[AppModel]:
         self._record("model_list")

@@ -16,9 +16,14 @@ from outfitter.dispatch.registry.models import (
     LaneRuntimeState,
     MessageReceipt,
     ModelCatalogEntry,
+    ProviderCapacityObservation,
+    ProviderCapacityWindow,
+    ProviderDailyUsage,
     ProviderEvent,
+    ProviderResetCredit,
     ProviderThreadLifecycleState,
     ProviderThreadObservation,
+    ProviderUsageSummary,
     ServerRequest,
     ServiceTierEntry,
     ThreadItem,
@@ -157,6 +162,59 @@ def provider_thread_observation(
         relationship_source="history",
         confidence=0.9,
         observed_at=observed_at or fixed_now_iso(),
+    )
+
+
+def provider_capacity_observation(
+    *,
+    provider: str = "codex",
+    host_scope: str = "local",
+    config_scope: str = "default",
+    observed_at: str | None = None,
+) -> ProviderCapacityObservation:
+    return ProviderCapacityObservation(
+        provider=provider,
+        host_scope=host_scope,
+        config_scope=config_scope,
+        state="ready",
+        account_type="chatgpt",
+        account_fingerprint="sha256:0123456789abcdef",
+        account_label="a***@example.com",
+        plan="pro",
+        requires_auth=True,
+        windows=[
+            ProviderCapacityWindow(
+                limit_id="codex",
+                limit_name="Codex",
+                window="primary",
+                used_percent=25,
+                remaining_percent=75,
+                duration_minutes=300,
+                resets_at=1783764000,
+                observed_at=observed_at or fixed_now_iso(),
+            )
+        ],
+        reset_credits_available=1,
+        reset_credits=[
+            ProviderResetCredit(
+                fingerprint="sha256:credit0123456789",
+                reset_type="codexRateLimits",
+                status="available",
+                granted_at=1783700000,
+                expires_at=1784300000,
+                title="One reset",
+            )
+        ],
+        usage_summary=ProviderUsageSummary(lifetime_tokens=123456),
+        daily_usage=[ProviderDailyUsage(start_date="2026-07-10", tokens=3400)],
+        has_credits=True,
+        unlimited_credits=False,
+        source=["account/read", "account/rateLimits/read", "account/usage/read"],
+        observed_at=observed_at or fixed_now_iso(),
+        account_observed_at=observed_at or fixed_now_iso(),
+        capacity_observed_at=observed_at or fixed_now_iso(),
+        usage_observed_at=observed_at or fixed_now_iso(),
+        confidence=1.0,
     )
 
 

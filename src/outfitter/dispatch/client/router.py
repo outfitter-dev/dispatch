@@ -14,8 +14,10 @@ from collections.abc import AsyncIterator, Callable
 
 from .errors import AppServerError, ClientError
 from .events import (
+    AccountRateLimitsUpdated,
     LaneEvent,
     ServerRequestReceived,
+    project_account_notification,
     project_approval_request,
     project_notification,
     project_server_request_received,
@@ -86,6 +88,7 @@ class Router:
         self.events: Broadcaster[LaneEvent] = Broadcaster()
         self.raw: Broadcaster[dict[str, object]] = Broadcaster()
         self.requests: Broadcaster[ServerRequestReceived] = Broadcaster()
+        self.account_events: Broadcaster[AccountRateLimitsUpdated] = Broadcaster()
 
     def new_request(self, request_id: JsonRpcId) -> asyncio.Future[dict[str, object]]:
         fut: asyncio.Future[dict[str, object]] = asyncio.get_running_loop().create_future()
@@ -145,6 +148,9 @@ class Router:
 
     def _notification(self, method: str, params: object) -> None:
         p = params if isinstance(params, dict) else {}
+        account_event = project_account_notification(method, p)
+        if account_event is not None:
+            self.account_events.publish(None, account_event)
         lane = p.get("threadId")
         if isinstance(lane, str):
             self.raw.publish(lane, {"method": method, "params": p})
@@ -159,3 +165,4 @@ class Router:
         self.events.close()
         self.raw.close()
         self.requests.close()
+        self.account_events.close()

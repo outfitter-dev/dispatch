@@ -111,6 +111,28 @@ def build_manifest(command: list[str]) -> dict[str, object]:
                 "model_fields": _properties(
                     stable / "v2" / "ModelListResponse.json", definition="Model"
                 ),
+                "account_result_fields": _properties(stable / "v2" / "GetAccountResponse.json"),
+                "account_types": _variant_discriminants(
+                    stable / "v2" / "GetAccountResponse.json", "Account", "type"
+                ),
+                "rate_limit_result_fields": _properties(
+                    stable / "v2" / "GetAccountRateLimitsResponse.json"
+                ),
+                "rate_limit_snapshot_fields": _properties(
+                    stable / "v2" / "GetAccountRateLimitsResponse.json",
+                    definition="RateLimitSnapshot",
+                ),
+                "reset_credit_fields": _properties(
+                    stable / "v2" / "GetAccountRateLimitsResponse.json",
+                    definition="RateLimitResetCredit",
+                ),
+                "usage_result_fields": _properties(
+                    stable / "v2" / "GetAccountTokenUsageResponse.json"
+                ),
+                "usage_summary_fields": _properties(
+                    stable / "v2" / "GetAccountTokenUsageResponse.json",
+                    definition="AccountTokenUsageSummary",
+                ),
                 "thread_fields": _properties(
                     stable / "v2" / "ThreadReadResponse.json", definition="Thread"
                 ),

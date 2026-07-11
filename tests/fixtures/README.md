@@ -20,6 +20,9 @@ Layout:
   `thread_read/canonical_items_v0144.json` exercises every known 0.144 variant.
   `thread_list/descendants_v0144.json` exercises tagged subagent sources and
   parent, ancestor, and fork relationships.
+  `account_read/`, `account_rate_limits/`, and `account_usage/` exercise
+  signed-in/signed-out accounts, multi-window limits, reset credits, and daily
+  usage without real account data.
 - `transcripts/` — Codex persisted JSONL source files for sync parsing.
 - `registry/` — builders for registry rows and migration test setup.
 - `cli_smoke/` — notes and recipes for install/first-run smoke checks.

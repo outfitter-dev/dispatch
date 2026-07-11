@@ -115,6 +115,30 @@ Lifecycle/threads/turns: `thread/start resume fork read list loaded/list archive
   exist, but Dispatch does not yet expose them. Credits and permanent deletion
   need explicit product/policy decisions rather than implicit pass-throughs.
 
+### Account and capacity reads (0.144)
+
+- `account/read` returns `{account, requiresOpenaiAuth}`. `account` is nullable
+  and currently distinguishes `apiKey`, `chatgpt`, and `amazonBedrock` shapes.
+  ChatGPT accounts may include email and plan; responses must be normalized
+  without retaining raw auth payloads or credentials.
+- `account/rateLimits/read` returns the historical `rateLimits` snapshot plus
+  optional `rateLimitsByLimitId` multi-bucket snapshots and
+  `rateLimitResetCredits`. Snapshots can include primary/secondary rolling
+  windows, plan, reached reason, credit availability, and individual spend
+  control. Reset-credit ids are opaque mutation handles and should be
+  fingerprinted for read-only inventory rather than persisted raw.
+- `account/usage/read` returns a summary and optional daily token buckets. The
+  current summary includes lifetime tokens, streaks, peak daily tokens, and
+  longest-running turn seconds.
+- `account/rateLimits/updated` is a threadless notification carrying one
+  `rateLimits` snapshot. It can refresh local capacity without polling on every
+  command, but does not carry account, historical usage, multi-bucket, or reset
+  credit details.
+- A live-safe 0.144 probe confirmed all three reads work without starting a
+  model turn. Dispatch stores a masked account label and deterministic
+  fingerprints for account/credit identity; raw email, credit id, token fields,
+  and raw auth responses are excluded.
+
 ### Client → server methods (EXPERIMENTAL-gated — diff stable↔exp)
 `process/{spawn,kill,writeStdin,resizePty}` (unsandboxed; matches report's warning), `thread/{search,turns/list,items/list,settings/update,memoryMode/set,increment_elicitation,decrement_elicitation,backgroundTerminals/{clean,list,terminate}}`, `thread/realtime/{start,stop,appendAudio,appendSpeech,appendText,listVoices}`, `remoteControl/{enable,disable,status/read,pairing/{start,status},client/{list,revoke}}`, `collaborationMode/list`, `environment/{add,info}`, experimental `fuzzyFileSearch/session{Start,Update,Stop}`, `memory/reset`, `mock/experimentalMethod`.
 > Note: `thread/turns/list` and `thread/search` are EXPERIMENTAL here — the report

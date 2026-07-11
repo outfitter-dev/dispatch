@@ -133,6 +133,15 @@
     "stable": 267
   },
   "selected_shapes": {
+    "account_result_fields": [
+      "account",
+      "requiresOpenaiAuth"
+    ],
+    "account_types": [
+      "amazonBedrock",
+      "apiKey",
+      "chatgpt"
+    ],
     "model_fields": [
       "additionalSpeedTiers",
       "availabilityNux",
@@ -150,6 +159,30 @@
       "supportsPersonality",
       "upgrade",
       "upgradeInfo"
+    ],
+    "rate_limit_result_fields": [
+      "rateLimitResetCredits",
+      "rateLimits",
+      "rateLimitsByLimitId"
+    ],
+    "rate_limit_snapshot_fields": [
+      "credits",
+      "individualLimit",
+      "limitId",
+      "limitName",
+      "planType",
+      "primary",
+      "rateLimitReachedType",
+      "secondary"
+    ],
+    "reset_credit_fields": [
+      "description",
+      "expiresAt",
+      "grantedAt",
+      "id",
+      "resetType",
+      "status",
+      "title"
     ],
     "thread_fields": [
       "agentNickname",
@@ -208,6 +241,17 @@
       "backwardsCursor",
       "data",
       "nextCursor"
+    ],
+    "usage_result_fields": [
+      "dailyUsageBuckets",
+      "summary"
+    ],
+    "usage_summary_fields": [
+      "currentStreakDays",
+      "lifetimeTokens",
+      "longestRunningTurnSec",
+      "longestStreakDays",
+      "peakDailyTokens"
     ]
   },
   "server_notifications": [
