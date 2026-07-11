@@ -1,8 +1,8 @@
 # Execution Retro: App Server Adoption
 
 Date started: 2026-07-09
-Date finalized: pending
-Status: Active - full-stack review repairs
+Date finalized: 2026-07-11
+Status: Complete
 Spec: `.agents/goals/2026-07-09-app-server-adoption/SPEC.md`
 Goal: `.agents/goals/2026-07-09-app-server-adoption/GOAL.md`
 Prompt: `.agents/goals/2026-07-09-app-server-adoption/PROMPT.md`
@@ -13,26 +13,25 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 - Objective: land the clear App Server 0.144 adoption work.
 - Completion horizon: merged, tracker-reconciled, dogfooded, clean `main`.
 - Authority used: Linear planning plus a dedicated Graphite packet commit.
-- Outcome: preparation, DIS-42, DIS-44, DIS-45, DIS-35, DIS-39, DIS-18, DIS-46,
-  and DIS-47 are merged. Goal-wide review found cross-milestone repairs now in progress.
-- Tracker/PR/source-control state: PRs #73-#84 merged; DIS-41 and every scoped child
-  are Done; `main` is synchronized and clean at `00f7f32`. Release/publish work remained
+- Outcome: preparation, every scoped child, and the goal-wide review repairs are merged.
+- Tracker/PR/source-control state: PRs #73-#85 merged; DIS-41 and every scoped child
+  are Done. The implementation closeout merged as `472dcee`; release/publish work remained
   outside this goal.
 - Verification: prompt gate passed at 3,752 characters with no placeholders.
-- Review state: milestone reviews are clean. Full-stack round one found five P1 and four
-  P2 findings across cumulative behavior and closeout evidence; repairs are active.
-- Remaining risks: unresolved full-stack findings and hosted review threads block closeout.
+- Review state: milestone and final code reviews are 5/5 with no unresolved P0-P2. The
+  post-merge surface review found only this stale retro; this reconciliation closes it.
+- Remaining risks: one non-blocking P3 notes that `handlers.py` and `registry/store.py`
+  should be split by established domain boundaries before further material growth.
 
 ## Readiness
 
 - Prompt checked: passed at 3,752 characters with no unresolved placeholders.
 - Goal/prompt alignment checked: passed manually after the final prompt gate.
-- Review blockers: full-stack round one findings must be fixed and independently re-reviewed.
+- Review blockers: none.
 - Verification blockers: none known.
-- Tracker blockers: merged issue states are reconciled, but the goal closeout remains active.
+- Tracker blockers: none; DIS-41 and all scoped children are Done.
 - Authority blockers: release/publish intentionally excluded.
-- Next action: finish full-stack repairs, reconcile hosted threads, rerun the full gate and
-  targeted live proof, merge this closeout branch, then verify clean `main`.
+- Next action: none for this goal. DIS-34 and realtime voice remain explicit future scope.
 
 ## Goal Amendments
 
@@ -323,6 +322,17 @@ The superseding matrix covers the promised combined scenario behavior without on
 - Next: submit this repair/closeout PR, reply to and resolve all six hosted review threads,
   obtain clean full-stack re-reviews, merge, and verify clean `main`.
 - Blockers: hosted review reconciliation and full-stack re-review.
+
+2026-07-11 - Full-stack closeout
+- Submitted PR #85, answered and resolved all six carried hosted review threads, and obtained
+  clean 5/5 code and surface re-reviews with no unresolved P0-P2 findings.
+- PR #85 passed CI and CodeQL and merged as `472dcee`. A second Graphite sync corrected an
+  initial fetch race and proved local `HEAD`, `origin/main`, and GitHub `main` were identical.
+- The authoritative post-merge `just check` passed 613 tests with 17 opt-in tests deselected,
+  strict mypy/Ruff, wheel/sdist builds, and package-content checks.
+- Final code closeout was 5/5. The post-merge surface closeout found only stale status in this
+  retro; this documentation-only reconciliation resolves that final P2.
+- Blockers: none.
 ```
 
 ## Review Log
@@ -368,6 +378,9 @@ The superseding matrix covers the promised combined scenario behavior without on
 | full-stack r1 surface | cumulative product/surfaces/tracker | `tmp/reviews/full-stack-surface/round-1.json` | 2/5 | changes requested | 8 | Five P1 and three P2; repairs active |
 | full-stack r2 code | cumulative repair reconciliation | `tmp/reviews/full-stack-code/round-2.json` | 5/5 | clean | 0 | All code/runtime findings fixed; 215 focused tests and live proof |
 | full-stack r2 surface | cumulative surface/tracker reconciliation | `tmp/reviews/full-stack-surface/round-2.json` | 4/5 | changes requested | 1 | All defects fixed; only six hosted threads remain to reconcile after submit |
+| full-stack r3 surface | hosted reconciliation and exact-head proof | `tmp/reviews/full-stack-surface/round-3.json` | 5/5 | clean | 0 | Hosted threads resolved; exact draft head green and mergeable |
+| full-stack r3 code | post-merge cumulative closeout | `tmp/reviews/full-stack-code/round-3.json` | 5/5 | clean | 0 | Clean synchronized implementation main; one non-blocking module-size P3 |
+| full-stack r4 surface | post-merge durable-state closeout | `tmp/reviews/full-stack-surface/round-4.json` | 4/5 | changes requested | 1 | Runtime and hosted state clean; this retro was the sole stale artifact |
 
 ## Verification Log
 
@@ -409,6 +422,8 @@ The superseding matrix covers the promised combined scenario behavior without on
 | hosted checks for PR #85 | full-stack repairs | passed | CI and all CodeQL jobs completed successfully |
 | hosted review reconciliation | full goal | passed | Six carried P2 threads on PRs #78, #79, #82, and #83 were answered with PR #85 evidence and resolved; those PRs and #85 have zero unresolved current threads |
 | full-stack surface review round 3 | full goal | 5/5 | Zero P0-P2; 39 cumulative surface tests passed, manifest reproduced byte-for-byte, and exact hosted head was draft, mergeable, green, and thread-clean |
+| post-merge `just check` | full goal | passed | Exact implementation merge `472dcee`: 613 tests passed, 17 opt-in tests deselected, strict mypy/Ruff and package gates passed |
+| post-merge code closeout | full goal | 5/5 | Zero P0-P2; 215 focused boundary tests, 21 migration/concurrency tests, and 3 isolated App Server integrations passed |
 
 ## Prompt / Goal Alignment
 
@@ -451,7 +466,7 @@ The superseding matrix covers the promised combined scenario behavior without on
 | DIS-47 | In Progress | Rich image implementation and final local review active |
 | PR #84 / DIS-47 | merged / Done | Rich image inputs; `00f7f32`; hosted checks and local reviews clean |
 | DIS-41 | Done | App Server 0.144 fast-track parent closed after every scoped child merged |
-| PR #85 | draft / green | Full-stack review repairs; hosted checks green and carried review threads reconciled |
+| PR #85 | merged | Full-stack review repairs; `472dcee`; hosted checks green and carried review threads reconciled |
 
 ## Follow-Ups
 
@@ -460,18 +475,19 @@ The superseding matrix covers the promised combined scenario behavior without on
 
 ## Final State
 
-- Completion proof: pending final full-stack re-review and closeout merge. PRs #73-#84 are
-  merged and DIS-41/scoped children are Done, but cumulative repairs remain on this branch.
+- Completion proof: PRs #73-#85 are merged; DIS-41 and every scoped child are Done; the
+  implementation closeout is `472dcee` and the final docs-only reconciliation records it.
 - Prompt length: 3,752 characters; no unresolved placeholders.
 - Review report summary: milestone reviews converged to 5/5. Full-stack round one reopened
-  five P1 and four P2 findings; code round two and surface round three are 5/5 with zero
-  unresolved P0-P2 findings. Post-merge clean-main reconciliation remains.
+  five P1 and four P2 findings; all implementation findings were fixed. Final code review is
+  5/5, and the sole post-merge surface P2 was this stale retro state.
 - Verification summary: latest `just check` passed 613 tests with 17 opt-in tests deselected,
   strict mypy/Ruff, wheel/sdist, and package contents; targeted post-repair integration passed.
 - Forbidden actions audit: this goal agent performed no release/publish, secret mutation,
   destructive git, remote config, or out-of-scope tracker action. Independent PR #81 merged
   the 0.8.2 version bump during the execution window; package publishing was not part of this goal.
-- Remaining P3s / risks: pending final full-stack review. Older App Server capability limits
+- Remaining P3s / risks: future material additions should split `handlers.py` and
+  `registry/store.py` along established domain boundaries. Older App Server capability limits
   and DIS-34 remain explicit future scope.
 - Final transcript proof: the authored rich-input live path returned `RED PYTHON`; final
   clean-main account/capacity, permissions, and rich-input dogfood passed 3 tests in 12.07s.
