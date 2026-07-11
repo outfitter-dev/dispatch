@@ -17,6 +17,26 @@ from tests.fixtures import load_json
 runner = CliRunner()
 
 
+def test_permissions_options_map_to_authored_contract() -> None:
+    captured: dict[str, object] = {}
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        captured["op"] = op_id
+        captured["params"] = params
+        return {"profiles": []}
+
+    result = runner.invoke(
+        derive_cli(REGISTRY, invoke),
+        ["permissions", "--cwd", "/work", "--include-disallowed", "--no-refresh"],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "op": "permissions",
+        "params": {"refresh": False, "cwd": "/work", "include_disallowed": True},
+    }
+
+
 def test_usage_options_map_to_authored_contract() -> None:
     captured: dict[str, object] = {}
 

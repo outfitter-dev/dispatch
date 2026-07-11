@@ -131,6 +131,26 @@ async def test_daemon_read_usage_routes_to_same_authored_operation(socket_path: 
     }
 
 
+async def test_daemon_read_permissions_routes_to_same_authored_operation(
+    socket_path: Path,
+) -> None:
+    result = await handle_tool_call(
+        socket_path,
+        "dispatch_daemon_read",
+        {"op": "permissions", "cwd": "/work", "refresh": False},
+    )
+
+    assert result.isError is False
+    assert result.structuredContent == {
+        "cwd": "/work",
+        "refreshed_at": None,
+        "source": "registry",
+        "catalog_state": "empty",
+        "hint": "run dispatch permissions without --no-refresh to refresh the catalog",
+        "profiles": [],
+    }
+
+
 async def test_tool_call_rejects_unknown_grouped_action(socket_path: Path) -> None:
     result = await handle_tool_call(socket_path, "dispatch_thread_read", {"op": "send"})
     assert result.isError is True

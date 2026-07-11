@@ -69,6 +69,7 @@ _EXPECTED_CLI_SCHEMA_ROUTES = {
     "archive": "archive",
     "restore": "restore",
     "models": "models",
+    "permissions": "permissions",
     "usage": "usage",
     "goal status": "goal-get",
     "goal set": "goal-set",

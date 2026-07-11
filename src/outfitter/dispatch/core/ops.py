@@ -43,6 +43,8 @@ from .models import (
     NewInput,
     NewLane,
     OpenInput,
+    PermissionProfilesInput,
+    PermissionProfilesOutput,
     QueryInput,
     QueryOutput,
     RollbackInput,
@@ -263,6 +265,7 @@ NEW_PLAN = define_op(
                 },
                 "packet": None,
                 "settings": {
+                    "permission_profile": None,
                     "sandbox": None,
                     "approval_policy": None,
                     "approvals_reviewer": None,
@@ -548,6 +551,30 @@ MODELS = define_op(
                     "model_reasoning_effort": "xhigh",
                 },
                 "models": [],
+            },
+        )
+    ],
+)
+
+PERMISSIONS = define_op(
+    id="permissions",
+    summary="List Codex permission profiles available for a project directory.",
+    input=PermissionProfilesInput,
+    output=PermissionProfilesOutput,
+    intent="read",
+    idempotent=True,
+    handler=handlers.permission_profiles,
+    examples=[
+        Example(
+            "empty-cache",
+            input={"refresh": False, "cwd": "/work"},
+            output={
+                "cwd": "/work",
+                "refreshed_at": None,
+                "source": "registry",
+                "catalog_state": "empty",
+                "hint": "run dispatch permissions without --no-refresh to refresh the catalog",
+                "profiles": [],
             },
         )
     ],
@@ -907,6 +934,7 @@ _ALL = (
     SEARCH,
     QUERY,
     MODELS,
+    PERMISSIONS,
     USAGE,
     INBOX_LIST,
     INBOX_READ,

@@ -260,6 +260,23 @@ class ModelListParams(WireModel):
     limit: int | None = None
 
 
+class PermissionProfileSummary(WireModel):
+    id: str
+    description: str | None = None
+    allowed: bool
+
+
+class PermissionProfileListResult(WireModel):
+    data: list[PermissionProfileSummary] = Field(default_factory=list)
+    next_cursor: str | None = None
+
+
+class PermissionProfileListParams(WireModel):
+    cursor: str | None = None
+    cwd: str | None = None
+    limit: int | None = Field(default=None, ge=0)
+
+
 # --- shared shapes ------------------------------------------------------------
 
 
@@ -346,6 +363,7 @@ class ThreadInfo(WireModel):
 
 class ThreadStartParams(WireModel):
     cwd: str | None = None
+    permissions: str | None = None
     sandbox: ThreadSandbox | None = None
     approval_policy: ApprovalPolicy | None = None
     approvals_reviewer: ApprovalsReviewer | None = None
@@ -357,9 +375,16 @@ class ThreadStartParams(WireModel):
     model_provider: str | None = None
     ephemeral: bool = False
 
+    @model_validator(mode="after")
+    def _permissions_excludes_sandbox(self) -> ThreadStartParams:
+        if self.permissions is not None and self.sandbox is not None:
+            raise ValueError("permissions cannot be combined with sandbox")
+        return self
+
 
 class ThreadResumeParams(WireModel):
     thread_id: str
+    permissions: str | None = None
     exclude_turns: bool | None = None
     initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None
 
@@ -373,6 +398,7 @@ class ThreadResumeInitialTurnsPageParams(WireModel):
 class ThreadForkParams(WireModel):
     thread_id: str
     cwd: str | None = None
+    permissions: str | None = None
     sandbox: ThreadSandbox | None = None
     approval_policy: ApprovalPolicy | None = None
     approvals_reviewer: ApprovalsReviewer | None = None
@@ -383,6 +409,12 @@ class ThreadForkParams(WireModel):
     model_provider: str | None = None
     last_turn_id: str | None = None
     ephemeral: bool = False
+
+    @model_validator(mode="after")
+    def _permissions_excludes_sandbox(self) -> ThreadForkParams:
+        if self.permissions is not None and self.sandbox is not None:
+            raise ValueError("permissions cannot be combined with sandbox")
+        return self
 
 
 class ThreadSetNameParams(WireModel):
@@ -581,6 +613,7 @@ class TurnStartParams(WireModel):
     thread_id: str
     input: list[TextInput]
     cwd: str
+    permissions: str | None = None
     approval_policy: ApprovalPolicy | None = None
     approvals_reviewer: ApprovalsReviewer | None = None
     sandbox_policy: SandboxPolicy | None = None
@@ -590,6 +623,12 @@ class TurnStartParams(WireModel):
     service_tier: str | None = None
     output_schema: dict[str, object] | None = None
     personality: Personality | None = None
+
+    @model_validator(mode="after")
+    def _permissions_excludes_sandbox(self) -> TurnStartParams:
+        if self.permissions is not None and self.sandbox_policy is not None:
+            raise ValueError("permissions cannot be combined with sandboxPolicy")
+        return self
 
 
 class TurnSteerParams(WireModel):

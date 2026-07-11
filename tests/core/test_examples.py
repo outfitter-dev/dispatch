@@ -28,6 +28,7 @@ async def test_registry_has_the_v1_ops() -> None:
         "search",
         "query",
         "models",
+        "permissions",
         "usage",
         "inbox-list",
         "inbox-read",

@@ -33,6 +33,7 @@ from outfitter.dispatch.client.models import (
     JsonRpcError,
     JsonRpcId,
     ModelServiceTier,
+    PermissionProfileSummary,
     Personality,
     RateLimitSnapshot,
     ReasoningSummary,
@@ -119,6 +120,11 @@ class FakeLaneClient:
             ),
             AppModel(id="gpt-5.3-codex-spark"),
         ]
+        self.permission_profiles_result = [
+            PermissionProfileSummary(id=":read-only", allowed=True),
+            PermissionProfileSummary(id=":workspace", allowed=True),
+            PermissionProfileSummary(id=":danger-full-access", allowed=True),
+        ]
         self.goal_result: ThreadGoal | None = None
         self.event_log: list[LaneEvent] = []
         self.server_request_log: list[ServerRequestReceived] = []
@@ -151,9 +157,16 @@ class FakeLaneClient:
         self._record("model_list")
         return self.models_result
 
+    async def permission_profile_list(
+        self, *, cwd: str | None = None, limit: int | None = None
+    ) -> list[PermissionProfileSummary]:
+        self._record("permission_profile_list", cwd=cwd, limit=limit)
+        return self.permission_profiles_result
+
     async def thread_start(
         self,
         cwd: str | None,
+        permission_profile: str | None = None,
         sandbox: ThreadSandbox | None = None,
         approval_policy: ApprovalPolicy | None = None,
         approvals_reviewer: ApprovalsReviewer | None = None,
@@ -168,6 +181,7 @@ class FakeLaneClient:
         self._record(
             "thread_start",
             cwd=cwd,
+            permission_profile=permission_profile,
             sandbox=sandbox,
             approval_policy=approval_policy,
             approvals_reviewer=approvals_reviewer,
@@ -187,12 +201,14 @@ class FakeLaneClient:
         self,
         thread_id: str,
         *,
+        permission_profile: str | None = None,
         exclude_turns: bool | None = None,
         initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None,
     ) -> ThreadInfo:
         self._record(
             "thread_resume",
             thread_id=thread_id,
+            permission_profile=permission_profile,
             exclude_turns=exclude_turns,
             initial_turns_page=initial_turns_page,
         )
@@ -202,11 +218,13 @@ class FakeLaneClient:
         self,
         thread_id: str,
         *,
+        permission_profile: str | None = None,
         exclude_turns: bool | None = None,
         initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None,
     ) -> ThreadResumeResult:
         thread = await self.thread_resume(
             thread_id,
+            permission_profile=permission_profile,
             exclude_turns=exclude_turns,
             initial_turns_page=initial_turns_page,
         )
@@ -317,6 +335,7 @@ class FakeLaneClient:
         thread_id: str,
         *,
         cwd: str | None = None,
+        permission_profile: str | None = None,
         sandbox: ThreadSandbox | None = None,
         approval_policy: ApprovalPolicy | None = None,
         approvals_reviewer: ApprovalsReviewer | None = None,
@@ -332,6 +351,7 @@ class FakeLaneClient:
             "thread_fork",
             thread_id=thread_id,
             cwd=cwd,
+            permission_profile=permission_profile,
             sandbox=sandbox,
             approval_policy=approval_policy,
             approvals_reviewer=approvals_reviewer,
@@ -495,6 +515,7 @@ class FakeLaneClient:
         thread_id: str,
         text: str,
         cwd: str,
+        permission_profile: str | None = None,
         approval_policy: ApprovalPolicy | None = None,
         approvals_reviewer: ApprovalsReviewer | None = None,
         sandbox_policy: SandboxPolicy | None = None,
@@ -510,6 +531,7 @@ class FakeLaneClient:
             thread_id=thread_id,
             text=text,
             cwd=cwd,
+            permission_profile=permission_profile,
             approval_policy=approval_policy,
             approvals_reviewer=approvals_reviewer,
             sandbox_policy=sandbox_policy.model_dump(mode="python") if sandbox_policy else None,
@@ -605,12 +627,14 @@ class FakeSupervisedClient(FakeLaneClient):
         self,
         thread_id: str,
         *,
+        permission_profile: str | None = None,
         exclude_turns: bool | None = None,
         initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None,
     ) -> ThreadInfo:
         self.resumed.append(thread_id)
         return await super().thread_resume(
             thread_id,
+            permission_profile=permission_profile,
             exclude_turns=exclude_turns,
             initial_turns_page=initial_turns_page,
         )

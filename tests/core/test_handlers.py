@@ -19,6 +19,7 @@ from outfitter.dispatch.client.models import (
     ApprovalPolicy,
     ApprovalsReviewer,
     Effort,
+    PermissionProfileSummary,
     Personality,
     ReasoningSummary,
     SandboxPolicy,
@@ -61,6 +62,7 @@ from outfitter.dispatch.core.models import (
     ModelsInput,
     NewInput,
     OpenInput,
+    PermissionProfilesInput,
     QueryInput,
     RollbackInput,
     RosterInput,
@@ -296,6 +298,104 @@ async def test_new_lane_omits_policy_fields_to_inherit_codex_config(
     assert settings is not None
     assert settings.sandbox is None
     assert settings.approval_policy is None
+
+
+async def test_new_lane_validates_and_persists_permission_profile(
+    store: Registry, tmp_path: Path
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.new_lane(
+        NewInput(
+            name="profiled",
+            cwd=str(tmp_path),
+            text="start",
+            permission_profile=":workspace",
+        ),
+        ctx,
+    )
+
+    assert any(
+        name == "permission_profile_list" and kw["cwd"] == str(tmp_path)
+        for name, kw in client.calls
+    )
+    assert any(
+        name == "thread_start" and kw["permission_profile"] == ":workspace"
+        for name, kw in client.calls
+    )
+    assert any(
+        name == "turn_start" and kw["permission_profile"] == ":workspace"
+        for name, kw in client.calls
+    )
+    stored = await store.get_lane_runtime_settings(out.id)
+    assert stored is not None and stored.permission_profile == ":workspace"
+    await store.update_lane_status(out.id, "idle")
+    await handlers.send(LaneTextInput(lane=out.ref, text="continue"), ctx)
+    assert client.calls[-1][0] == "turn_start"
+    assert client.calls[-1][1]["permission_profile"] == ":workspace"
+
+
+async def test_new_lane_rejects_unknown_or_disallowed_permission_profile(
+    store: Registry, tmp_path: Path
+) -> None:
+    client = FakeLaneClient()
+    client.permission_profiles_result = [
+        PermissionProfileSummary(id=":read-only", allowed=True),
+        PermissionProfileSummary(id=":workspace", allowed=False),
+    ]
+    ctx = make_ctx(store, client)
+
+    with pytest.raises(ValidationError, match=r"not allowed.*:read-only"):
+        await handlers.new_lane(
+            NewInput(name="blocked", cwd=str(tmp_path), permission_profile=":workspace"), ctx
+        )
+    with pytest.raises(ValidationError, match=r"unknown.*:read-only"):
+        await handlers.new_lane(
+            NewInput(name="missing", cwd=str(tmp_path), permission_profile=":missing"), ctx
+        )
+
+
+async def test_permissions_reports_live_and_older_binary_states(
+    store: Registry, tmp_path: Path
+) -> None:
+    client = FakeLaneClient()
+    out = await handlers.permission_profiles(
+        PermissionProfilesInput(cwd=str(tmp_path)), make_ctx(store, client)
+    )
+    assert out.catalog_state == "ready"
+    assert out.source == "app-server"
+    assert [profile.id for profile in out.profiles] == [
+        ":read-only",
+        ":workspace",
+        ":danger-full-access",
+    ]
+
+    class OlderClient(FakeLaneClient):
+        async def permission_profile_list(
+            self, *, cwd: str | None = None, limit: int | None = None
+        ) -> list[PermissionProfileSummary]:
+            raise ClientAppServerError(-32601, "method not found")
+
+    unsupported = await handlers.permission_profiles(
+        PermissionProfilesInput(cwd=str(tmp_path)), make_ctx(store, OlderClient())
+    )
+    assert unsupported.catalog_state == "unsupported"
+    assert unsupported.source == "registry"
+    with pytest.raises(ValidationError, match="not supported"):
+        await handlers.new_lane(
+            NewInput(name="old", cwd=str(tmp_path), permission_profile=":read-only"),
+            make_ctx(store, OlderClient()),
+        )
+
+    disallowed = FakeLaneClient()
+    disallowed.permission_profiles_result = [PermissionProfileSummary(id=":blocked", allowed=False)]
+    filtered = await handlers.permission_profiles(
+        PermissionProfilesInput(cwd=str(tmp_path)), make_ctx(store, disallowed)
+    )
+    assert filtered.catalog_state == "ready"
+    assert filtered.refreshed_at is not None
+    assert filtered.profiles == []
 
 
 async def test_new_lane_resolves_fast_service_tier_alias_and_records_provenance(
@@ -593,6 +693,7 @@ class _CompletingBeforeReturnClient(FakeLaneClient):
         thread_id: str,
         text: str,
         cwd: str,
+        permission_profile: str | None = None,
         approval_policy: ApprovalPolicy | None = None,
         approvals_reviewer: ApprovalsReviewer | None = None,
         sandbox_policy: SandboxPolicy | None = None,
@@ -607,6 +708,7 @@ class _CompletingBeforeReturnClient(FakeLaneClient):
             thread_id,
             text,
             cwd,
+            permission_profile=permission_profile,
             approval_policy=approval_policy,
             approvals_reviewer=approvals_reviewer,
             sandbox_policy=sandbox_policy,

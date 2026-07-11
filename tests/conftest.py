@@ -22,6 +22,12 @@ import pytest
 SUN_PATH_MAX = 104
 
 
+@pytest.fixture(autouse=True)
+def isolated_dispatch_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep every test away from the operator's live Dispatch config and database."""
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path / "dispatch-home"))
+
+
 def _short_tmp_root() -> Path:
     """Shortest writable temp root, independent of a long ``$TMPDIR``."""
     candidate = Path("/tmp")  # short root for AF_UNIX sockets, not user data

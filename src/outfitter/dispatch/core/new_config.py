@@ -12,7 +12,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic import ValidationError as PydanticValidationError
 
 from outfitter.dispatch.client.models import (
@@ -23,6 +23,7 @@ from outfitter.dispatch.client.models import (
     ReasoningSummary,
     ThreadSandbox,
 )
+from outfitter.dispatch.config import config_path as global_config_path
 from outfitter.dispatch.contracts.errors import ValidationError
 
 _CONFIG_PATH = Path(".dispatch") / "config.toml"
@@ -36,6 +37,7 @@ class NewSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     cwd: str | None = None
+    permission_profile: str | None = None
     sandbox: ThreadSandbox | None = None
     approval_policy: ApprovalPolicy | None = None
     approvals_reviewer: ApprovalsReviewer | None = None
@@ -54,8 +56,28 @@ class NewSettings(BaseModel):
     developer_file: str | None = None
     output_schema: dict[str, object] | None = None
 
+    @model_validator(mode="after")
+    def _permission_profile_is_exclusive(self) -> NewSettings:
+        if self.permission_profile is not None and any(
+            value is not None
+            for value in (self.sandbox, self.approval_policy, self.approvals_reviewer)
+        ):
+            raise ValueError(
+                "permission_profile cannot be combined with sandbox, approval_policy, "
+                "or approvals_reviewer"
+            )
+        return self
+
     def merged(self, other: NewSettings) -> NewSettings:
         update = other.model_dump(exclude_none=True)
+        if "permission_profile" in update:
+            update.update(
+                sandbox=None,
+                approval_policy=None,
+                approvals_reviewer=None,
+            )
+        elif any(name in update for name in ("sandbox", "approval_policy", "approvals_reviewer")):
+            update["permission_profile"] = None
         return self.model_copy(update=update)
 
 
@@ -124,13 +146,27 @@ def resolve_new(
     """
 
     start_cwd = _absolute(Path(cli.cwd or "."))
-    config_path = _find_config(start_cwd)
-    config_dir = config_path.parent.parent if config_path is not None else None
-    config = _load_config(config_path) if config_path is not None else NewConfigFile()
+    repo_config_path = _find_config(start_cwd)
+    config_dir = repo_config_path.parent.parent if repo_config_path is not None else None
+    global_path = global_config_path()
+    global_config = (
+        _load_config(global_path, known_sections_only=True)
+        if global_path.is_file() and global_path != repo_config_path
+        else NewConfigFile()
+    )
+    repo_config = (
+        _load_config(repo_config_path) if repo_config_path is not None else NewConfigFile()
+    )
+    global_config = global_config.model_copy(
+        update={
+            "workspace": _resolve_workspace_paths(global_config.workspace, base=global_path.parent)
+        }
+    )
     if config_dir is not None:
-        config = config.model_copy(
-            update={"workspace": _resolve_workspace_paths(config.workspace, base=config_dir)}
+        repo_config = repo_config.model_copy(
+            update={"workspace": _resolve_workspace_paths(repo_config.workspace, base=config_dir)}
         )
+    config = _merge_configs(global_config, repo_config)
 
     settings = NewSettings(
         cwd=str(start_cwd),
@@ -147,6 +183,10 @@ def resolve_new(
     if packet is not None:
         settings = settings.merged(packet)
     settings = settings.merged(cli)
+    try:
+        settings = NewSettings.model_validate(settings.model_dump())
+    except PydanticValidationError as exc:
+        raise ValidationError(f"invalid resolved new settings: {exc}") from exc
     cwd = _resolve_path(settings.cwd or str(start_cwd), base=config_dir or start_cwd)
     settings = settings.model_copy(update={"cwd": str(cwd)})
     prefix = _render_prefix(settings.prefix, cwd=cwd, presets=presets)
@@ -171,7 +211,7 @@ def resolve_new(
     )
 
 
-def _load_config(path: Path) -> NewConfigFile:
+def _load_config(path: Path, *, known_sections_only: bool = False) -> NewConfigFile:
     try:
         raw = tomllib.loads(path.read_text())
     except OSError as exc:
@@ -179,6 +219,8 @@ def _load_config(path: Path) -> NewConfigFile:
     except tomllib.TOMLDecodeError as exc:
         raise ValidationError(f"invalid dispatch config {path}: {exc}") from exc
     try:
+        if known_sections_only:
+            raw = {key: raw[key] for key in ("defaults", "presets", "workspace") if key in raw}
         return NewConfigFile.model_validate(_normalize_config(raw))
     except PydanticValidationError as exc:
         raise ValidationError(f"invalid dispatch config {path}: {exc}") from exc
@@ -195,6 +237,25 @@ def _normalize_config(raw: dict[str, Any]) -> dict[str, Any]:
             for name, value in presets.items()
         }
     return data
+
+
+def _merge_configs(global_config: NewConfigFile, repo_config: NewConfigFile) -> NewConfigFile:
+    presets = dict(global_config.presets)
+    for name, preset in repo_config.presets.items():
+        presets[name] = presets[name].merged(preset) if name in presets else preset
+    workspace_update = repo_config.workspace.model_dump(
+        include=repo_config.workspace.model_fields_set,
+        exclude_none=True,
+    )
+    workspace_presets = dict(global_config.workspace.presets)
+    workspace_presets.update(repo_config.workspace.presets)
+    workspace_update["presets"] = workspace_presets
+    return NewConfigFile(
+        defaults=global_config.defaults.merged(repo_config.defaults),
+        presets=presets,
+        workspace=global_config.workspace.model_copy(update=workspace_update),
+        policy=repo_config.policy or global_config.policy,
+    )
 
 
 def _flatten_instructions(section: dict[str, Any]) -> dict[str, Any]:

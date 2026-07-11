@@ -34,7 +34,10 @@ dispatch new --name builder --preset builder --preset fast --no-send
 
 ### Config
 
-Support repo-local configuration at `.dispatch/config.toml`, with a later optional global layer (`~/.dispatch/config.toml`) if needed. The repo config is discovered from the requested `cwd` by walking upward to the repo/project root.
+Support global configuration at `~/.dispatch/config.toml` plus repo-local
+configuration at `.dispatch/config.toml`. The repo config is discovered from
+the requested `cwd` by walking upward to the repo/project root and overrides
+the global layer.
 
 Configuration has defaults plus named presets:
 
@@ -65,6 +68,9 @@ prefix = "[${DISPATCH.CWD.REPO}]"
 
 [presets.fast]
 effort = "low"
+
+[presets.safe-profile]
+permission_profile = ":read-only"
 ```
 
 Omit `model` unless you intentionally want Codex to use an explicit model.
@@ -74,7 +80,7 @@ When a preset does pin a model, choose it from the live App Server catalog
 Merge order:
 
 1. Built-in safe defaults.
-2. Global config, if added.
+2. Global `~/.dispatch/config.toml`.
 3. Repo `.dispatch/config.toml`.
 4. Presets in CLI order, left to right.
 5. CLI flags.
@@ -110,10 +116,13 @@ Do not expose arbitrary environment interpolation in v1; it is too easy to leak 
 
 dispatch should project App Server/SDK options where they are available and verified, but not invent fake knobs. Initial candidates:
 
-- thread/session: `cwd`, `sandbox`, `approval_policy`, `approvals_reviewer`, `model`, `model_provider`, `base_instructions`, `developer_instructions`, `personality`, `ephemeral`, `service_tier`.
+- thread/session: `cwd`, `permission_profile`, `sandbox`, `approval_policy`, `approvals_reviewer`, `model`, `model_provider`, `base_instructions`, `developer_instructions`, `personality`, `ephemeral`, `service_tier`.
 - initial turn: `text`, `effort`, `summary`, `sandbox_policy`, `approval_policy`, `approvals_reviewer`, `model`, `service_tier`, `output_schema`.
 
 Options should be added through the contract layer so CLI, MCP, remote, docs, schemas, and examples derive from one source.
+
+`permission_profile` is validated against the cwd-aware App Server catalog and
+is mutually exclusive with explicit sandbox and granular approval settings.
 
 ## Consequences
 

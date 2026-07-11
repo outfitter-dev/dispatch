@@ -75,7 +75,8 @@ def _run(command: list[str], *args: str) -> str:
 
 
 def build_manifest(command: list[str]) -> dict[str, object]:
-    version = _run(command, "--version").removeprefix("codex-cli ")
+    installed_version = _run(command, "--version").removeprefix("codex-cli ")
+    version = installed_version.partition("-")[0]
     with tempfile.TemporaryDirectory(prefix="dispatch-app-server-schema-") as tmp:
         root = Path(tmp)
         stable = root / "stable"
@@ -111,6 +112,16 @@ def build_manifest(command: list[str]) -> dict[str, object]:
                 "model_fields": _properties(
                     stable / "v2" / "ModelListResponse.json", definition="Model"
                 ),
+                "permission_profile_list_fields": _properties(
+                    stable / "v2" / "PermissionProfileListParams.json"
+                ),
+                "permission_profile_result_fields": _properties(
+                    stable / "v2" / "PermissionProfileListResponse.json"
+                ),
+                "permission_profile_summary_fields": _properties(
+                    stable / "v2" / "PermissionProfileListResponse.json",
+                    definition="PermissionProfileSummary",
+                ),
                 "account_result_fields": _properties(stable / "v2" / "GetAccountResponse.json"),
                 "account_types": _variant_discriminants(
                     stable / "v2" / "GetAccountResponse.json", "Account", "type"
@@ -135,6 +146,14 @@ def build_manifest(command: list[str]) -> dict[str, object]:
                 ),
                 "thread_fields": _properties(
                     stable / "v2" / "ThreadReadResponse.json", definition="Thread"
+                ),
+                "thread_start_fields": _properties(stable / "v2" / "ThreadStartParams.json"),
+                "thread_start_experimental_fields": _properties(
+                    experimental / "v2" / "ThreadStartParams.json"
+                ),
+                "turn_start_fields": _properties(stable / "v2" / "TurnStartParams.json"),
+                "turn_start_experimental_fields": _properties(
+                    experimental / "v2" / "TurnStartParams.json"
                 ),
                 "thread_fork_fields": _properties(stable / "v2" / "ThreadForkParams.json"),
                 "thread_list_result_fields": _properties(stable / "v2" / "ThreadListResponse.json"),

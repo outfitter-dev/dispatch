@@ -454,6 +454,44 @@ async def test_model_list_reads_every_catalog_page(
     ]
 
 
+async def test_permission_profile_list_reads_every_page(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+
+    def responder(message: dict[str, object]) -> list[dict[str, object]]:
+        if message.get("method") != "permissionProfile/list":
+            return []
+        params = message.get("params")
+        cursor = params.get("cursor") if isinstance(params, dict) else None
+        result = (
+            {"data": [{"id": ":read-only", "allowed": True}], "nextCursor": "1"}
+            if cursor is None
+            else {"data": [{"id": ":workspace", "allowed": False}]}
+        )
+        return [{"id": message["id"], "result": result}]
+
+    fake.auto = responder
+    profiles = await c.permission_profile_list(cwd="/work", limit=1)
+
+    assert [(profile.id, profile.allowed) for profile in profiles] == [
+        (":read-only", True),
+        (":workspace", False),
+    ]
+    assert fake.sent == [
+        {
+            "id": 1,
+            "method": "permissionProfile/list",
+            "params": {"cwd": "/work", "limit": 1},
+        },
+        {
+            "id": 2,
+            "method": "permissionProfile/list",
+            "params": {"cursor": "1", "cwd": "/work", "limit": 1},
+        },
+    ]
+
+
 async def test_thread_list_sends_current_native_filters(
     client: tuple[AppServerClient, FakeTransport],
 ) -> None:

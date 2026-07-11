@@ -9,9 +9,14 @@ from datetime import UTC, datetime
 import pytest_asyncio
 
 from outfitter.dispatch.client.errors import AppServerError
-from outfitter.dispatch.client.models import ThreadInfo, ThreadResumeInitialTurnsPageParams
+from outfitter.dispatch.client.models import (
+    PermissionProfileSummary,
+    ThreadInfo,
+    ThreadResumeInitialTurnsPageParams,
+)
 from outfitter.dispatch.core.reactor import Reactor
 from outfitter.dispatch.core.triggers import TriggerRunner
+from outfitter.dispatch.core.turn_settings import runtime_settings_for_lane
 from outfitter.dispatch.daemon.supervisor import Supervisor
 from outfitter.dispatch.registry.models import LaneSync
 from outfitter.dispatch.registry.store import Registry
@@ -32,6 +37,13 @@ async def store() -> AsyncIterator[Registry]:
 async def test_supervisor_restarts_and_restores_lanes_on_crash(store: Registry) -> None:
     await store.add_lane(id="D1", handle="@desktop", source="attached", status="idle")
     await store.add_lane(id="O1", handle="@own", source="own", status="idle")
+    await store.upsert_lane_runtime_settings(
+        runtime_settings_for_lane(
+            lane="O1",
+            updated_at="2026-06-03T12:00:00+00:00",
+            permission_profile=":read-only",
+        )
+    )
     ctx = make_ctx(store)
     clients: list[FakeSupervisedClient] = []
 
@@ -51,6 +63,10 @@ async def test_supervisor_restarts_and_restores_lanes_on_crash(store: Registry) 
     # metadata-only after restart (ADR-0017).
     assert clients[0].resumed == ["O1"]
     assert any(
+        name == "thread_resume" and kw["permission_profile"] == ":read-only"
+        for name, kw in clients[0].calls
+    )
+    assert any(
         name == "thread_read" and kw["thread_id"] == "D1" and kw["include_turns"] is False
         for name, kw in clients[0].calls
     )
@@ -65,6 +81,10 @@ async def test_supervisor_restarts_and_restores_lanes_on_crash(store: Registry) 
     # Supervisor started a fresh client and restored lanes on it.
     assert len(clients) == 2
     assert clients[1].resumed == ["O1"]
+    assert any(
+        name == "thread_resume" and kw["permission_profile"] == ":read-only"
+        for name, kw in clients[1].calls
+    )
     assert any(
         name == "thread_read" and kw["thread_id"] == "D1" and kw["include_turns"] is False
         for name, kw in clients[1].calls
@@ -105,6 +125,43 @@ async def test_supervisor_recovers_and_drains_idle_queue_on_start(store: Registr
     await asyncio.wait_for(task, timeout=1)
 
 
+async def test_supervisor_revalidates_profile_and_fails_closed_on_older_binary(
+    store: Registry,
+) -> None:
+    await store.add_lane(id="O1", handle="@own", source="own", cwd="/work", status="idle")
+    await store.upsert_lane_runtime_settings(
+        runtime_settings_for_lane(
+            lane="O1",
+            updated_at="2026-06-03T12:00:00+00:00",
+            permission_profile=":read-only",
+        )
+    )
+
+    class OlderClient(FakeSupervisedClient):
+        async def permission_profile_list(
+            self, *, cwd: str | None = None, limit: int | None = None
+        ) -> list[PermissionProfileSummary]:
+            raise AppServerError(-32601, "method not found")
+
+    ctx = make_ctx(store)
+
+    async def make_client() -> OlderClient:
+        return OlderClient()
+
+    runner = TriggerRunner(ctx, lambda: _T0)
+    supervisor = Supervisor(ctx, make_client, lambda: Reactor(ctx, runner).run(), backoff=0)
+    client = await make_client()
+    task = asyncio.create_task(supervisor.supervise(client))
+    await asyncio.sleep(0.05)
+
+    assert client.resumed == []
+    assert (await store.get_lane("O1")).status == "error"
+    assert not any(name == "thread_resume" for name, _ in client.calls)
+
+    await supervisor.stop()
+    await asyncio.wait_for(task, timeout=1)
+
+
 async def test_supervisor_starts_reactor_before_restoring_lanes(store: Registry) -> None:
     await store.add_lane(id="O1", handle="@own", source="own", status="idle")
     ctx = make_ctx(store)
@@ -116,12 +173,14 @@ async def test_supervisor_starts_reactor_before_restoring_lanes(store: Registry)
             self,
             thread_id: str,
             *,
+            permission_profile: str | None = None,
             exclude_turns: bool | None = None,
             initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None,
         ) -> ThreadInfo:
             resume_observations.append(reactor_started.is_set())
             return await super().thread_resume(
                 thread_id,
+                permission_profile=permission_profile,
                 exclude_turns=exclude_turns,
                 initial_turns_page=initial_turns_page,
             )

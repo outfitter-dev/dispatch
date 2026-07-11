@@ -36,6 +36,7 @@ from .models import (
     LaneSync,
     MessageReceipt,
     ModelCatalogEntry,
+    PermissionProfileEntry,
     ProviderCapacityObservation,
     ProviderEvent,
     ProviderThread,
@@ -57,7 +58,7 @@ from .models import (
 from .refs import BASE58BTC_ALPHABET, CODEX_REF_SOURCE, codex_ref_payload, make_ref
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 
 class _ReentrantAsyncLock:
@@ -564,6 +565,16 @@ CREATE TABLE IF NOT EXISTS model_catalog (
     source TEXT NOT NULL DEFAULT 'app-server',
     PRIMARY KEY(provider, id)
 );
+CREATE TABLE IF NOT EXISTS permission_profiles (
+    id TEXT NOT NULL,
+    cwd TEXT NOT NULL,
+    description TEXT,
+    allowed INTEGER NOT NULL,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'app-server',
+    PRIMARY KEY(cwd, id)
+);
 CREATE TABLE IF NOT EXISTS lane_model_settings (
     lane TEXT PRIMARY KEY,
     model_provider TEXT,
@@ -578,6 +589,7 @@ CREATE TABLE IF NOT EXISTS lane_model_settings (
 );
 CREATE TABLE IF NOT EXISTS lane_runtime_settings (
     lane TEXT PRIMARY KEY,
+    permission_profile TEXT,
     sandbox TEXT,
     approval_policy TEXT,
     approvals_reviewer TEXT,
@@ -739,6 +751,30 @@ class Registry:
             await self._ensure_lane_sync_progress_columns()
         if user_version < 19:
             await self._ensure_lane_sync_continuation_columns()
+        if user_version < 20:
+            await self._ensure_permission_profiles_table()
+
+    async def _ensure_permission_profiles_table(self) -> None:
+        await self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS permission_profiles (
+                id TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                description TEXT,
+                allowed INTEGER NOT NULL,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'app-server',
+                PRIMARY KEY(cwd, id)
+            )
+            """
+        )
+        async with self._conn.execute("PRAGMA table_info(lane_runtime_settings)") as cur:
+            columns = {str(row["name"]) for row in await cur.fetchall()}
+        if "permission_profile" not in columns:
+            await self._conn.execute(
+                "ALTER TABLE lane_runtime_settings ADD COLUMN permission_profile TEXT"
+            )
 
     async def _ensure_lane_sync_progress_columns(self) -> None:
         async with self._conn.execute("PRAGMA table_info(lane_sync_sources)") as cur:
@@ -862,6 +898,7 @@ class Registry:
             """
             CREATE TABLE IF NOT EXISTS lane_runtime_settings (
                 lane TEXT PRIMARY KEY,
+                permission_profile TEXT,
                 sandbox TEXT,
                 approval_policy TEXT,
                 approvals_reviewer TEXT,
@@ -1874,6 +1911,48 @@ class Registry:
         return _row_to_model_catalog_entry(row) if row is not None else None
 
     @_serialized_access
+    async def replace_permission_profiles(
+        self, cwd: str, profiles: list[PermissionProfileEntry]
+    ) -> None:
+        async with self._transaction():
+            existing = {entry.id: entry for entry in await self.list_permission_profiles(cwd=cwd)}
+            await self._conn.execute("DELETE FROM permission_profiles WHERE cwd = ?", (cwd,))
+            for profile in profiles:
+                previous = existing.get(profile.id)
+                await self._conn.execute(
+                    "INSERT INTO permission_profiles (id, cwd, description, allowed, "
+                    "first_seen_at, last_seen_at, source) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        profile.id,
+                        cwd,
+                        profile.description,
+                        int(profile.allowed),
+                        previous.first_seen_at if previous is not None else profile.first_seen_at,
+                        profile.last_seen_at,
+                        profile.source,
+                    ),
+                )
+
+    @_serialized_access
+    async def list_permission_profiles(self, *, cwd: str) -> list[PermissionProfileEntry]:
+        async with self._conn.execute(
+            "SELECT * FROM permission_profiles WHERE cwd = ? ORDER BY id", (cwd,)
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_permission_profile_entry(row) for row in rows]
+
+    @_serialized_access
+    async def get_permission_profile(
+        self, profile_id: str, *, cwd: str
+    ) -> PermissionProfileEntry | None:
+        async with self._conn.execute(
+            "SELECT * FROM permission_profiles WHERE cwd = ? AND id = ?",
+            (cwd, profile_id),
+        ) as cur:
+            row = await cur.fetchone()
+        return _row_to_permission_profile_entry(row) if row is not None else None
+
+    @_serialized_access
     async def upsert_lane_model_settings(self, settings: LaneModelSettings) -> None:
         async with self._transaction():
             await self._conn.execute(
@@ -1928,10 +2007,12 @@ class Registry:
     async def upsert_lane_runtime_settings(self, settings: LaneRuntimeSettings) -> None:
         async with self._transaction():
             await self._conn.execute(
-                "INSERT INTO lane_runtime_settings (lane, sandbox, approval_policy, "
+                "INSERT INTO lane_runtime_settings "
+                "(lane, permission_profile, sandbox, approval_policy, "
                 "approvals_reviewer, effort, summary, model, service_tier, output_schema, "
-                "personality, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(lane) DO UPDATE SET sandbox = excluded.sandbox, "
+                "personality, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(lane) DO UPDATE SET permission_profile = excluded.permission_profile, "
+                "sandbox = excluded.sandbox, "
                 "approval_policy = excluded.approval_policy, "
                 "approvals_reviewer = excluded.approvals_reviewer, effort = excluded.effort, "
                 "summary = excluded.summary, model = excluded.model, "
@@ -1939,6 +2020,7 @@ class Registry:
                 "personality = excluded.personality, updated_at = excluded.updated_at",
                 (
                     settings.lane,
+                    settings.permission_profile,
                     settings.sandbox,
                     settings.approval_policy,
                     settings.approvals_reviewer,
@@ -3699,6 +3781,12 @@ def _row_to_model_catalog_entry(row: aiosqlite.Row) -> ModelCatalogEntry:
         None if data["supports_personality"] is None else bool(data["supports_personality"])
     )
     return ModelCatalogEntry.model_validate(data)
+
+
+def _row_to_permission_profile_entry(row: aiosqlite.Row) -> PermissionProfileEntry:
+    data = _row_dict(row)
+    data["allowed"] = bool(data["allowed"])
+    return PermissionProfileEntry.model_validate(data)
 
 
 def _row_to_lane_model_settings(row: aiosqlite.Row) -> LaneModelSettings:

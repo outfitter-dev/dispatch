@@ -35,6 +35,9 @@ from .models import (
     JsonRpcId,
     ModelListParams,
     ModelListResult,
+    PermissionProfileListParams,
+    PermissionProfileListResult,
+    PermissionProfileSummary,
     Personality,
     ReasoningSummary,
     SandboxPolicy,
@@ -237,11 +240,30 @@ class AppServerClient:
                 raise ProtocolError(f"model/list repeated pagination cursor {cursor!r}")
             seen_cursors.add(cursor)
 
+    async def permission_profile_list(
+        self, *, cwd: str | None = None, limit: int | None = None
+    ) -> list[PermissionProfileSummary]:
+        profiles: list[PermissionProfileSummary] = []
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        while True:
+            params = PermissionProfileListParams(cursor=cursor, cwd=cwd, limit=limit)
+            result = await self._request("permissionProfile/list", _dump(params))
+            page = PermissionProfileListResult.model_validate(result)
+            profiles.extend(page.data)
+            cursor = page.next_cursor
+            if cursor is None:
+                return profiles
+            if cursor in seen_cursors:
+                raise ProtocolError(f"permissionProfile/list repeated pagination cursor {cursor!r}")
+            seen_cursors.add(cursor)
+
     # --- threads --------------------------------------------------------------
 
     async def thread_start(
         self,
         cwd: str | None,
+        permission_profile: str | None = None,
         sandbox: ThreadSandbox | None = None,
         approval_policy: ApprovalPolicy | None = None,
         approvals_reviewer: ApprovalsReviewer | None = None,
@@ -255,6 +277,7 @@ class AppServerClient:
     ) -> ThreadInfo:
         params = ThreadStartParams(
             cwd=cwd,
+            permissions=permission_profile,
             sandbox=sandbox,
             approval_policy=approval_policy,
             approvals_reviewer=approvals_reviewer,
@@ -273,11 +296,13 @@ class AppServerClient:
         self,
         thread_id: str,
         *,
+        permission_profile: str | None = None,
         exclude_turns: bool | None = None,
         initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None,
     ) -> ThreadInfo:
         response = await self.thread_resume_full(
             thread_id,
+            permission_profile=permission_profile,
             exclude_turns=exclude_turns,
             initial_turns_page=initial_turns_page,
         )
@@ -287,6 +312,7 @@ class AppServerClient:
         self,
         thread_id: str,
         *,
+        permission_profile: str | None = None,
         exclude_turns: bool | None = None,
         initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None,
     ) -> ThreadResumeResult:
@@ -295,6 +321,7 @@ class AppServerClient:
             _dump(
                 ThreadResumeParams(
                     thread_id=thread_id,
+                    permissions=permission_profile,
                     exclude_turns=exclude_turns,
                     initial_turns_page=initial_turns_page,
                 )
@@ -352,6 +379,7 @@ class AppServerClient:
         thread_id: str,
         *,
         cwd: str | None = None,
+        permission_profile: str | None = None,
         sandbox: ThreadSandbox | None = None,
         approval_policy: ApprovalPolicy | None = None,
         approvals_reviewer: ApprovalsReviewer | None = None,
@@ -366,6 +394,7 @@ class AppServerClient:
         params = ThreadForkParams(
             thread_id=thread_id,
             cwd=cwd,
+            permissions=permission_profile,
             sandbox=sandbox,
             approval_policy=approval_policy,
             approvals_reviewer=approvals_reviewer,
@@ -499,6 +528,7 @@ class AppServerClient:
         thread_id: str,
         text: str,
         cwd: str,
+        permission_profile: str | None = None,
         approval_policy: ApprovalPolicy | None = None,
         approvals_reviewer: ApprovalsReviewer | None = None,
         sandbox_policy: SandboxPolicy | None = None,
@@ -513,6 +543,7 @@ class AppServerClient:
             thread_id=thread_id,
             input=[TextInput(text=text)],
             cwd=cwd,
+            permissions=permission_profile,
             approval_policy=approval_policy,
             approvals_reviewer=approvals_reviewer,
             sandbox_policy=sandbox_policy,

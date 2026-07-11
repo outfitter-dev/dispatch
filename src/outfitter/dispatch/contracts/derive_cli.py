@@ -65,6 +65,7 @@ _SIMPLE_ROUTES: tuple[CliRoute, ...] = (
     CliRoute(("archive",), "archive", ("target",)),
     CliRoute(("restore",), "restore", ("target",)),
     CliRoute(("models",), "models"),
+    CliRoute(("permissions",), "permissions"),
     CliRoute(("usage",), "usage"),
     CliRoute(("inbox", "read"), "inbox-read", ("id",)),
     CliRoute(("request", "list"), "server-request-list"),

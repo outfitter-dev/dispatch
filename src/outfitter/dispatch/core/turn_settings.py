@@ -19,6 +19,7 @@ from outfitter.dispatch.registry.store import Registry
 
 @dataclass(frozen=True)
 class TurnStartSettings:
+    permission_profile: str | None = None
     sandbox_policy: SandboxPolicy | None = None
     approval_policy: ApprovalPolicy | None = None
     approvals_reviewer: ApprovalsReviewer | None = None
@@ -44,6 +45,7 @@ def runtime_settings_for_lane(
     *,
     lane: str,
     updated_at: str,
+    permission_profile: str | None = None,
     sandbox: ThreadSandbox | None = None,
     approval_policy: ApprovalPolicy | None = None,
     approvals_reviewer: ApprovalsReviewer | None = None,
@@ -56,6 +58,7 @@ def runtime_settings_for_lane(
 ) -> LaneRuntimeSettings:
     return LaneRuntimeSettings(
         lane=lane,
+        permission_profile=permission_profile,
         sandbox=sandbox,
         approval_policy=approval_policy,
         approvals_reviewer=approvals_reviewer,
@@ -74,6 +77,7 @@ async def load_turn_start_settings(registry: Registry, lane_id: str) -> TurnStar
     if stored is None:
         return TurnStartSettings()
     return TurnStartSettings(
+        permission_profile=stored.permission_profile,
         sandbox_policy=(
             thread_sandbox_to_turn_policy(stored.sandbox) if stored.sandbox is not None else None
         ),

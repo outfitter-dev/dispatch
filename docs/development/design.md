@@ -116,7 +116,8 @@ for collisions. Titles and `@handles` are mutable convenience labels.
 | Op | App Server call | Notes (verified) |
 | --- | --- | --- |
 | `open` | `thread/start` (then register) | `sandbox` is a STRING enum (`read-only`/`workspace-write`/`danger-full-access`); persists by default (`ephemeral:false`) → spawned lanes show in desktop app, matching the `→ @project:name` convention. |
-| `new` | `thread/start` + `thread/name/set` + optional `thread/goal/set` + optional `turn/start` | Applies `.dispatch/config.toml` defaults/presets, name prefixes, verified session/turn options, optional native goal, and optional initial payload. Explicit `sandbox`, approval, model, and `service_tier` values are sent as overrides; omitted values are omitted from App Server calls so Codex global/profile/project config can apply. Explicit `service_tier` values are resolved through the App Server model catalog before being sent to thread creation and the initial turn. Output reports request acceptance, not assistant completion. |
+| `new` | `thread/start` + `thread/name/set` + optional `thread/goal/set` + optional `turn/start` | Applies global/repo config and presets, name prefixes, verified session/turn options, optional native goal, and optional initial payload. A named `permission_profile` is cwd-validated and excludes explicit sandbox/approval overrides; omitted values remain Codex defaults. Explicit `service_tier` values are resolved through the App Server model catalog before thread creation and the initial turn. Output reports request acceptance, not assistant completion. |
+| `permissions` | `permissionProfile/list` | Reads every cwd-aware profile page, persists bounded metadata/freshness, includes disallowed profiles only on request, and reports older binaries as unsupported. CLI and grouped MCP derive from one read op. |
 | `attach` | `thread/read(includeTurns:false)` (+ register) | Metadata-only by default: verifies the thread id, registers a turn-write locked attached lane, assigns a dispatch ref, and stores sync state without loading turn history. `--sync` runs a quick local index refresh after registration. |
 | `sync` | `thread/read(includeTurns:false)` + metadata-only `thread/resume` + bounded `initialTurnsPage` / `thread/turns/list` / `thread/items/list` + local JSONL parsing + archive reconciliation | Establishes explicit live observation and refreshes Dispatch's normalized history index under one turn/item/time/aggregate-byte budget. Recent App Server history is indexed before remaining budget is used for local JSONL facts; durable cursors continue newer reconciliation and older backfill across calls. Unsupported experimental paging retains metadata-only observation plus JSONL fallback. A raw unmanaged Codex id is registered as an attached read/metadata-managed lane before syncing; sync never grants turn-write authority. |
 | `send` (`mode=send`) | `turn/start` | Delivers a message the lane processes + answers. The DM/`send_message_to_thread` equivalent. `sandboxPolicy` here is an OBJECT (`{type:"readOnly"}`) — different encoding than `thread/start.sandbox`. |
@@ -183,8 +184,12 @@ The client classifies command/file/permission approvals, user input, MCP elicita
 - `lane_sync_sources`: lane, sync state, source path/file identity, source size/mtime, parsed offsets, line count, last synced timestamp, error.
 - `lane_snapshots`: lane, display name, preview, cwd, source/model/session facts, latest event timestamp, latest turn id, transcript-partial flag.
 - `model_catalog`: provider/model rows refreshed from App Server `model/list`, including reasoning efforts, service tiers, aliases, and first/last seen timestamps.
+- `permission_profiles`: cwd-scoped profile id, description, allowed state,
+  source, and first/last seen timestamps from `permissionProfile/list`.
 - `lane_model_settings`: per-lane model/provider/reasoning/service-tier provenance, distinguishing Dispatch-authored settings from configured defaults and observed metadata.
-- `lane_runtime_settings`: per-lane turn-start defaults such as sandbox, approval policy, reviewer, model/effort/tier, structured output schema, and personality; follow-up sends reuse these settings.
+- `lane_runtime_settings`: per-lane turn-start defaults such as permission
+  profile, sandbox, approval policy, reviewer, model/effort/tier, structured
+  output schema, and personality; follow-up sends reuse these settings.
 - `provider_events`: append-only provider event records, starting with Codex
   `LaneEvent` projections from the reactor.
 - `thread_turns`: normalized provider turn lifecycle facts backfilled from live

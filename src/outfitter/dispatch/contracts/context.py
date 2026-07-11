@@ -37,6 +37,7 @@ from outfitter.dispatch.client.models import (
     Effort,
     JsonRpcError,
     JsonRpcId,
+    PermissionProfileSummary,
     Personality,
     ReasoningSummary,
     SandboxPolicy,
@@ -76,9 +77,14 @@ class LaneClient(Protocol):
 
     async def model_list(self) -> list[AppModel]: ...
 
+    async def permission_profile_list(
+        self, *, cwd: str | None = None, limit: int | None = None
+    ) -> list[PermissionProfileSummary]: ...
+
     async def thread_start(
         self,
         cwd: str | None,
+        permission_profile: str | None = None,
         sandbox: ThreadSandbox | None = None,
         approval_policy: ApprovalPolicy | None = None,
         approvals_reviewer: ApprovalsReviewer | None = None,
@@ -95,6 +101,7 @@ class LaneClient(Protocol):
         self,
         thread_id: str,
         *,
+        permission_profile: str | None = None,
         exclude_turns: bool | None = None,
         initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None,
     ) -> ThreadInfo: ...
@@ -103,6 +110,7 @@ class LaneClient(Protocol):
         self,
         thread_id: str,
         *,
+        permission_profile: str | None = None,
         exclude_turns: bool | None = None,
         initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None,
     ) -> ThreadResumeResult: ...
@@ -132,6 +140,7 @@ class LaneClient(Protocol):
         thread_id: str,
         *,
         cwd: str | None = None,
+        permission_profile: str | None = None,
         sandbox: ThreadSandbox | None = None,
         approval_policy: ApprovalPolicy | None = None,
         approvals_reviewer: ApprovalsReviewer | None = None,
@@ -205,6 +214,7 @@ class LaneClient(Protocol):
         thread_id: str,
         text: str,
         cwd: str,
+        permission_profile: str | None = None,
         approval_policy: ApprovalPolicy | None = None,
         approvals_reviewer: ApprovalsReviewer | None = None,
         sandbox_policy: SandboxPolicy | None = None,

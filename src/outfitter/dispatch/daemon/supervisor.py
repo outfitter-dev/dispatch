@@ -16,6 +16,8 @@ from uuid import uuid4
 
 from outfitter.dispatch.client.errors import AppServerError, ClientError
 from outfitter.dispatch.contracts.context import Ctx, LaneClient
+from outfitter.dispatch.contracts.errors import DispatchError
+from outfitter.dispatch.core.permission_profiles import resolve_permission_profile
 from outfitter.dispatch.core.queue import drain_idle_queues
 
 
@@ -87,22 +89,40 @@ class Supervisor:
         Attached lanes stay metadata-only unless an explicit sync previously
         established live observation; plain registration never becomes a resume.
         """
+        validated_profiles: dict[tuple[str, str], str] = {}
         for lane in await self._ctx.registry.list_lanes():
             try:
                 sync = await self._ctx.registry.get_lane_sync(lane.id)
                 observed = sync is not None and sync.observation_enabled
                 if lane.source == "own" or observed:
+                    runtime = await self._ctx.registry.get_lane_runtime_settings(lane.id)
+                    permission_profile = runtime.permission_profile if runtime is not None else None
+                    if permission_profile is not None:
+                        cwd = lane.cwd or "."
+                        key = (cwd, permission_profile)
+                        if key not in validated_profiles:
+                            validated = await resolve_permission_profile(
+                                self._ctx, permission_profile, cwd=cwd
+                            )
+                            assert validated is not None
+                            validated_profiles[key] = validated
+                        permission_profile = validated_profiles[key]
                     try:
-                        await client.thread_resume(lane.id, exclude_turns=True)
+                        await client.thread_resume(
+                            lane.id,
+                            permission_profile=permission_profile,
+                            exclude_turns=True,
+                        )
                     except AppServerError as exc:
                         if exc.code != -32602:
                             raise
-                        await client.thread_resume(lane.id)
+                        await client.thread_resume(lane.id, permission_profile=permission_profile)
                     self._ctx.log.info("lane.resumed", lane=lane.id, source=lane.source)
                 else:
                     await client.thread_read(lane.id, include_turns=False)
                     self._ctx.log.info("lane.metadata_read", lane=lane.id, source=lane.source)
-            except ClientError as exc:
+            except (ClientError, DispatchError) as exc:
+                await self._ctx.registry.update_lane_status(lane.id, "error")
                 self._ctx.log.warning("lane.restore_failed", lane=lane.id, error=str(exc))
         drained = await drain_idle_queues(self._ctx)
         if drained:

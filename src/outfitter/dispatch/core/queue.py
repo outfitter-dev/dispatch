@@ -39,6 +39,7 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
             lane.id,
             message.text,
             cwd=lane.cwd or ".",
+            permission_profile=turn_settings.permission_profile,
             approval_policy=turn_settings.approval_policy,
             approvals_reviewer=turn_settings.approvals_reviewer,
             sandbox_policy=turn_settings.sandbox_policy,

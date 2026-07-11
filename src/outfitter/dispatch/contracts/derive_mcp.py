@@ -140,6 +140,7 @@ _GROUPS: tuple[_ToolGroup, ...] = (
             ("status", "status"),
             ("log", "log"),
             ("models", "models"),
+            ("permissions", "permissions"),
             ("usage", "usage"),
         ),
     ),
