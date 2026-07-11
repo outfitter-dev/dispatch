@@ -67,6 +67,20 @@ def test_registry_sql_exercise_sets_schema_version_and_rolls_back(tmp_path: Path
         )
         conn.commit()
 
+        provider_capacity_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(provider_capacity_observations)").fetchall()
+        }
+        assert {
+            "provider",
+            "host_scope",
+            "config_scope",
+            "state",
+            "account_fingerprint",
+            "observed_at",
+            "payload",
+        } <= provider_capacity_columns
+
         thread_item_columns = {
             str(row[1]) for row in conn.execute("PRAGMA table_info(thread_items)").fetchall()
         }

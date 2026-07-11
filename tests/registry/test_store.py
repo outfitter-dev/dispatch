@@ -28,6 +28,7 @@ from tests.fixtures.registry.builders import (
     lane_runtime_state,
     message_receipt,
     model_catalog_entry,
+    provider_capacity_observation,
     provider_event,
     provider_thread_observation,
     server_request,
@@ -1569,9 +1570,70 @@ async def test_v16_migration_adds_independent_provider_threads_table(tmp_path: P
         async with migrated._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
         assert row is not None
-        assert int(row[0]) == SCHEMA_VERSION == 16
+        assert int(row[0]) == SCHEMA_VERSION
     finally:
         await migrated.close()
+
+
+async def test_v17_migration_adds_replace_in_place_provider_capacity_table(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "registry-v16.db"
+    conn = await aiosqlite.connect(db)
+    await conn.executescript(
+        """
+        CREATE TABLE lanes (id TEXT PRIMARY KEY);
+        PRAGMA user_version = 16;
+        """
+    )
+    await conn.commit()
+    await conn.close()
+
+    migrated = await Registry.open(db, now=_clock)
+    try:
+        async with migrated._conn.execute(
+            "PRAGMA table_info(provider_capacity_observations)"
+        ) as cur:
+            columns = {str(row["name"]) for row in await cur.fetchall()}
+        assert {
+            "provider",
+            "host_scope",
+            "config_scope",
+            "state",
+            "account_fingerprint",
+            "observed_at",
+            "payload",
+        } <= columns
+        async with migrated._conn.execute("PRAGMA user_version") as cur:
+            row = await cur.fetchone()
+        assert row is not None
+        assert int(row[0]) == SCHEMA_VERSION == 17
+    finally:
+        await migrated.close()
+
+
+async def test_provider_capacity_observation_replaces_current_scope_without_duplicates(
+    store: Registry,
+) -> None:
+    first = provider_capacity_observation(observed_at="2026-07-10T12:00:00+00:00")
+    second = provider_capacity_observation(observed_at="2026-07-10T12:05:00+00:00").model_copy(
+        update={"plan": "team"}
+    )
+
+    await store.upsert_provider_capacity_observation(first)
+    saved = await store.upsert_provider_capacity_observation(second)
+
+    assert saved.plan == "team"
+    assert saved.observed_at == "2026-07-10T12:05:00+00:00"
+    assert await store.list_provider_capacity_observations(provider="codex") == [saved]
+    async with store._conn.execute(
+        "SELECT COUNT(*) AS count, payload FROM provider_capacity_observations"
+    ) as cur:
+        row = await cur.fetchone()
+    assert row is not None and int(row["count"]) == 1
+    payload = str(row["payload"])
+    assert "agent@example.com" not in payload
+    assert "opaque-credit-1" not in payload
 
 
 async def test_provider_thread_sparse_upsert_preserves_identity_lineage_and_lifecycle(

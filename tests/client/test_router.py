@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import asyncio
 
-from outfitter.dispatch.client.events import ApprovalRequested, ServerRequestReceived, TurnStarted
+from outfitter.dispatch.client.events import (
+    AccountRateLimitsUpdated,
+    ApprovalRequested,
+    ServerRequestReceived,
+    TurnStarted,
+)
 from outfitter.dispatch.client.router import Broadcaster, Router
 
 
@@ -33,6 +38,22 @@ async def test_router_routes_notification_to_lane_events_and_raw() -> None:
     assert await asyncio.wait_for(events.__anext__(), timeout=1) == TurnStarted("L1", "T1")
     raw_msg = await asyncio.wait_for(raw.__anext__(), timeout=1)
     assert raw_msg["method"] == "turn/started"
+
+
+async def test_router_routes_account_notifications_to_provider_stream() -> None:
+    router = Router()
+    events = router.account_events.subscribe(None)
+    router.handle(
+        {
+            "method": "account/rateLimits/updated",
+            "params": {"rateLimits": {"primary": {"usedPercent": 55}}},
+        }
+    )
+
+    event = await asyncio.wait_for(events.__anext__(), timeout=1)
+    assert isinstance(event, AccountRateLimitsUpdated)
+    assert event.rate_limits.primary is not None
+    assert event.rate_limits.primary.used_percent == 55
 
 
 async def test_discard_request_drops_pending_and_ignores_late_response() -> None:

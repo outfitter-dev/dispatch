@@ -9,6 +9,7 @@ from __future__ import annotations
 from .client import AppServerClient
 from .errors import AppServerError, ClientError, ProtocolError, TransportError
 from .events import (
+    AccountRateLimitsUpdated,
     ApprovalRequested,
     DiffUpdated,
     ItemCompleted,
@@ -28,6 +29,7 @@ from .models import InitializeResult, JsonRpcError, SandboxPolicy, ThreadInfo
 from .transport import StdioTransport, Transport
 
 __all__ = [
+    "AccountRateLimitsUpdated",
     "AppServerClient",
     "AppServerError",
     "ApprovalRequested",

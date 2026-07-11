@@ -13,6 +13,9 @@ from outfitter.dispatch.client.events import (
     project_notification,
 )
 from outfitter.dispatch.client.models import (
+    AccountRateLimitsResult,
+    AccountReadResult,
+    AccountUsageResult,
     ConfigInfo,
     ModelListResult,
     ThreadInfo,
@@ -41,6 +44,24 @@ def test_app_server_protocol_fixtures_validate_against_wire_models() -> None:
     )
     thread_payload = load_json("app_server", "thread_read", "with_turns.json")["thread"]
     thread = ThreadInfo.model_validate(thread_payload)
+    account = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    signed_out = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_out.json")
+    )
+    rate_limits = AccountRateLimitsResult.model_validate(
+        load_json("app_server", "account_rate_limits", "current.json")
+    )
+    usage = AccountUsageResult.model_validate(
+        load_json("app_server", "account_usage", "current.json")
+    )
+    partial_limits = AccountRateLimitsResult.model_validate(
+        load_json("app_server", "account_rate_limits", "partial.json")
+    )
+    partial_usage = AccountUsageResult.model_validate(
+        load_json("app_server", "account_usage", "partial.json")
+    )
 
     assert config.model == "gpt-5.5"
     assert config.service_tier == "fast"
@@ -56,6 +77,12 @@ def test_app_server_protocol_fixtures_validate_against_wire_models() -> None:
     assert descendants.data[1].source_kind == "subAgentReview"
     assert descendants.data[1].parent_thread_id == descendants.data[0].id
     assert thread.turns[0]["id"] == "turn-1"
+    assert account.account is not None and account.account.plan_type == "pro"
+    assert signed_out.account is None
+    assert rate_limits.rate_limit_reset_credits is not None
+    assert usage.summary.lifetime_tokens == 123456
+    assert partial_limits.rate_limits.primary is None
+    assert partial_usage.daily_usage_buckets is None
 
 
 def test_app_server_protocol_manifest_tracks_v0144_capabilities() -> None:
@@ -69,6 +96,16 @@ def test_app_server_protocol_manifest_tracks_v0144_capabilities() -> None:
     assert "thread/deleted" in manifest["server_notifications"]
     assert set(manifest["thread_item_types"]) == CODEX_ITEM_TYPES
     assert "supportsPersonality" in manifest["selected_shapes"]["model_fields"]
+    assert set(manifest["selected_shapes"]["account_types"]) == {
+        "amazonBedrock",
+        "apiKey",
+        "chatgpt",
+    }
+    assert "rateLimitsByLimitId" in manifest["selected_shapes"]["rate_limit_result_fields"]
+    assert "rateLimitReachedType" in manifest["selected_shapes"]["rate_limit_snapshot_fields"]
+    assert "expiresAt" in manifest["selected_shapes"]["reset_credit_fields"]
+    assert "dailyUsageBuckets" in manifest["selected_shapes"]["usage_result_fields"]
+    assert "lifetimeTokens" in manifest["selected_shapes"]["usage_summary_fields"]
     assert "lastTurnId" in manifest["selected_shapes"]["thread_fork_fields"]
     assert "backwardsCursor" in manifest["selected_shapes"]["thread_list_result_fields"]
     assert {

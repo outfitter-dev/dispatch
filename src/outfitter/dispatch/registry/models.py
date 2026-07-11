@@ -31,6 +31,9 @@ LaneStatus = Literal[
 TurnRuntimeStatus = Literal["started", "completed", "failed"]
 ProviderTurnStatus = Literal["started", "completed", "failed", "unknown"]
 ProviderThreadLifecycleState = Literal["active", "archived", "deleted", "unknown"]
+ProviderCapacityState = Literal[
+    "ready", "partial", "signed_out", "unsupported", "unavailable", "disabled"
+]
 SyncState = Literal["unknown", "metadata", "partial", "complete", "error"]
 QueuedMessageStatus = Literal["pending", "sending", "sent", "error"]
 MessageReceiptStatus = Literal["created", "sent", "accepted", "completed", "failed", "timed_out"]
@@ -176,6 +179,66 @@ class ProviderThreadNode(BaseModel):
     ref: str | None = None
     handle: str | None = None
     lane_status: LaneStatus | None = None
+
+
+class ProviderCapacityWindow(BaseModel):
+    limit_id: str
+    limit_name: str | None = None
+    window: str
+    used_percent: int | None = Field(default=None, ge=0, le=100)
+    remaining_percent: int | None = Field(default=None, ge=0, le=100)
+    duration_minutes: int | None = Field(default=None, ge=0)
+    resets_at: int | None = None
+    reached_type: str | None = None
+    observed_at: str
+
+
+class ProviderResetCredit(BaseModel):
+    fingerprint: str
+    reset_type: str
+    status: str
+    granted_at: int
+    expires_at: int | None = None
+    title: str | None = None
+
+
+class ProviderUsageSummary(BaseModel):
+    lifetime_tokens: int | None = None
+    current_streak_days: int | None = None
+    longest_streak_days: int | None = None
+    peak_daily_tokens: int | None = None
+    longest_running_turn_seconds: int | None = None
+
+
+class ProviderDailyUsage(BaseModel):
+    start_date: str
+    tokens: int = Field(ge=0)
+
+
+class ProviderCapacityObservation(BaseModel):
+    provider: str
+    host_scope: str = "local"
+    config_scope: str = "default"
+    state: ProviderCapacityState
+    account_type: str | None = None
+    account_fingerprint: str | None = None
+    account_label: str | None = None
+    plan: str | None = None
+    requires_auth: bool | None = None
+    windows: list[ProviderCapacityWindow] = Field(default_factory=list)
+    reset_credits_available: int | None = Field(default=None, ge=0)
+    reset_credits: list[ProviderResetCredit] = Field(default_factory=list)
+    usage_summary: ProviderUsageSummary | None = None
+    daily_usage: list[ProviderDailyUsage] = Field(default_factory=list)
+    has_credits: bool | None = None
+    unlimited_credits: bool | None = None
+    source: list[str] = Field(default_factory=list)
+    observed_at: str
+    account_observed_at: str | None = None
+    capacity_observed_at: str | None = None
+    usage_observed_at: str | None = None
+    confidence: float = Field(ge=0.0, le=1.0)
+    error: str | None = None
 
 
 class ServerRequest(BaseModel):

@@ -35,6 +35,7 @@ from .models import (
     LaneSync,
     MessageReceipt,
     ModelCatalogEntry,
+    ProviderCapacityObservation,
     ProviderEvent,
     ProviderThread,
     ProviderThreadLifecycleState,
@@ -55,7 +56,7 @@ from .models import (
 from .refs import BASE58BTC_ALPHABET, CODEX_REF_SOURCE, codex_ref_payload, make_ref
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 
 @dataclass(frozen=True)
@@ -198,6 +199,29 @@ CREATE INDEX IF NOT EXISTS idx_provider_threads_parent
 ON provider_threads(provider, parent_thread_id);
 CREATE INDEX IF NOT EXISTS idx_provider_threads_fork
 ON provider_threads(provider, forked_from_id);
+"""
+
+_PROVIDER_CAPACITY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS provider_capacity_observations (
+    provider TEXT NOT NULL,
+    host_scope TEXT NOT NULL,
+    config_scope TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN (
+        'ready', 'partial', 'signed_out', 'unsupported', 'unavailable', 'disabled'
+    )),
+    account_type TEXT,
+    account_fingerprint TEXT,
+    account_label TEXT,
+    plan TEXT,
+    source TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    payload TEXT NOT NULL,
+    error TEXT,
+    PRIMARY KEY(provider, host_scope, config_scope)
+);
+CREATE INDEX IF NOT EXISTS idx_provider_capacity_state
+ON provider_capacity_observations(provider, state, observed_at);
 """
 
 _PROVIDER_HISTORY_SCHEMA = """
@@ -410,6 +434,7 @@ CREATE TABLE IF NOT EXISTS actions_log (
 );
 {_QUEUED_MESSAGES_SCHEMA}
 {_PROVIDER_THREADS_SCHEMA}
+{_PROVIDER_CAPACITY_SCHEMA}
 CREATE TABLE IF NOT EXISTS lane_sync_sources (
     lane TEXT PRIMARY KEY,
     state TEXT NOT NULL,
@@ -629,6 +654,8 @@ class Registry:
             await self._ensure_thread_item_canonical_columns()
         if user_version < 16:
             await self._ensure_provider_threads_table()
+        if user_version < 17:
+            await self._ensure_provider_capacity_table()
 
     async def _ensure_ref_columns(self) -> None:
         async with self._conn.execute("PRAGMA table_info(lanes)") as cur:
@@ -826,6 +853,9 @@ class Registry:
 
     async def _ensure_provider_threads_table(self) -> None:
         await self._conn.executescript(_PROVIDER_THREADS_SCHEMA)
+
+    async def _ensure_provider_capacity_table(self) -> None:
+        await self._conn.executescript(_PROVIDER_CAPACITY_SCHEMA)
 
     async def _ensure_thread_item_position_column(self) -> None:
         async with self._conn.execute("PRAGMA table_info(thread_items)") as cur:
@@ -2030,6 +2060,97 @@ class Registry:
             node = _row_to_provider_thread_node(row)
             result[node.thread.provider_thread_id] = node
         return result
+
+    # --- provider account / capacity observations ----------------------------
+
+    async def upsert_provider_capacity_observation(
+        self, observation: ProviderCapacityObservation
+    ) -> ProviderCapacityObservation:
+        payload = _json_dump_compact(observation.model_dump(mode="json"))
+        async with self._write_lock:
+            try:
+                await self._conn.execute(
+                    "INSERT INTO provider_capacity_observations (provider, host_scope, "
+                    "config_scope, state, account_type, account_fingerprint, account_label, "
+                    "plan, source, observed_at, confidence, payload, error) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(provider, host_scope, config_scope) DO UPDATE SET "
+                    "state = excluded.state, account_type = excluded.account_type, "
+                    "account_fingerprint = excluded.account_fingerprint, "
+                    "account_label = excluded.account_label, plan = excluded.plan, "
+                    "source = excluded.source, observed_at = excluded.observed_at, "
+                    "confidence = excluded.confidence, payload = excluded.payload, "
+                    "error = excluded.error",
+                    (
+                        observation.provider,
+                        observation.host_scope,
+                        observation.config_scope,
+                        observation.state,
+                        observation.account_type,
+                        observation.account_fingerprint,
+                        observation.account_label,
+                        observation.plan,
+                        _json_dump_compact(observation.source),
+                        observation.observed_at,
+                        observation.confidence,
+                        payload,
+                        observation.error,
+                    ),
+                )
+                await self._conn.commit()
+            except Exception:
+                await self._conn.rollback()
+                raise
+        saved = await self.get_provider_capacity_observation(
+            observation.provider,
+            host_scope=observation.host_scope,
+            config_scope=observation.config_scope,
+        )
+        if saved is None:
+            raise RuntimeError("provider capacity upsert did not return a row")
+        return saved
+
+    async def get_provider_capacity_observation(
+        self,
+        provider: str,
+        *,
+        host_scope: str = "local",
+        config_scope: str = "default",
+    ) -> ProviderCapacityObservation | None:
+        async with self._conn.execute(
+            "SELECT payload FROM provider_capacity_observations "
+            "WHERE provider = ? AND host_scope = ? AND config_scope = ?",
+            (provider, host_scope, config_scope),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return ProviderCapacityObservation.model_validate_json(str(row["payload"]))
+
+    async def list_provider_capacity_observations(
+        self,
+        *,
+        provider: str | None = None,
+        host_scope: str | None = None,
+    ) -> list[ProviderCapacityObservation]:
+        clauses: list[str] = []
+        params: list[str] = []
+        if provider is not None:
+            clauses.append("provider = ?")
+            params.append(provider)
+        if host_scope is not None:
+            clauses.append("host_scope = ?")
+            params.append(host_scope)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        async with self._conn.execute(
+            "SELECT payload FROM provider_capacity_observations"
+            f"{where} ORDER BY provider, host_scope, config_scope",
+            tuple(params),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [
+            ProviderCapacityObservation.model_validate_json(str(row["payload"])) for row in rows
+        ]
 
     # --- provider events / normalized history ---------------------------------
 

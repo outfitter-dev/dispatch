@@ -5,6 +5,9 @@ from __future__ import annotations
 import pytest
 
 from outfitter.dispatch.client.models import (
+    AccountRateLimitsResult,
+    AccountReadResult,
+    AccountUsageResult,
     AppModel,
     ConfigInfo,
     InitializeResult,
@@ -30,6 +33,43 @@ from outfitter.dispatch.client.models import (
     is_json_rpc_id,
 )
 from tests.fixtures import load_json
+
+
+def test_account_capacity_models_parse_current_and_signed_out_shapes() -> None:
+    signed_in = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    signed_out = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_out.json")
+    )
+    limits = AccountRateLimitsResult.model_validate(
+        load_json("app_server", "account_rate_limits", "current.json")
+    )
+    usage = AccountUsageResult.model_validate(
+        load_json("app_server", "account_usage", "current.json")
+    )
+    partial_limits = AccountRateLimitsResult.model_validate(
+        load_json("app_server", "account_rate_limits", "partial.json")
+    )
+    partial_usage = AccountUsageResult.model_validate(
+        load_json("app_server", "account_usage", "partial.json")
+    )
+
+    assert signed_in.account is not None
+    assert signed_in.account.plan_type == "pro"
+    assert "accessToken" not in signed_in.account.model_dump(by_alias=True)
+    assert signed_out.account is None
+    assert limits.rate_limits_by_limit_id is not None
+    assert limits.rate_limits_by_limit_id["codex"].secondary is not None
+    assert limits.rate_limits_by_limit_id["codex"].secondary.used_percent == 40
+    assert limits.rate_limit_reset_credits is not None
+    assert limits.rate_limit_reset_credits.credits is not None
+    assert limits.rate_limit_reset_credits.credits[0].status == "available"
+    assert usage.summary.lifetime_tokens == 123456
+    assert usage.daily_usage_buckets is not None
+    assert usage.daily_usage_buckets[-1].tokens == 3400
+    assert partial_limits.rate_limits.primary is None
+    assert partial_usage.summary.lifetime_tokens is None
 
 
 def test_thread_start_sandbox_is_string_enum() -> None:

@@ -20,8 +20,15 @@ from typing import TYPE_CHECKING, Protocol
 
 import structlog
 
-from outfitter.dispatch.client.events import LaneEvent, ServerRequestReceived
+from outfitter.dispatch.client.events import (
+    AccountRateLimitsUpdated,
+    LaneEvent,
+    ServerRequestReceived,
+)
 from outfitter.dispatch.client.models import (
+    AccountRateLimitsResult,
+    AccountReadResult,
+    AccountUsageResult,
     AppModel,
     ApprovalPolicy,
     ApprovalsReviewer,
@@ -53,6 +60,14 @@ class LaneClient(Protocol):
     """The App Server primitives handlers depend on (ADR-0006 DI seam)."""
 
     async def config_read(self) -> ConfigInfo: ...
+
+    async def account_read(self) -> AccountReadResult: ...
+
+    async def account_rate_limits_read(self) -> AccountRateLimitsResult: ...
+
+    async def account_usage_read(self) -> AccountUsageResult: ...
+
+    def account_events(self) -> AsyncIterator[AccountRateLimitsUpdated]: ...
 
     async def model_list(self) -> list[AppModel]: ...
 

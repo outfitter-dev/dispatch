@@ -78,6 +78,10 @@ Introduce storage concepts along these lines:
   transport, accepted by provider, completed, failed, or timed out.
 - `lane_runtime_state` — derived compact state used by `list`, `status`, `get`,
   `watch`, subscriptions, and triggers.
+- `provider_capacity_observations` — one replace-in-place, provider-neutral
+  account/capacity observation per provider, host scope, and config scope. It
+  stores normalized windows, reset-credit summaries, historical usage, source,
+  freshness, and confidence without raw auth responses or mutation handles.
 
 The existing `lanes`, `lane_sync_sources`, `lane_snapshots`, `queued_messages`,
 `inbox_messages`, `subscriptions`, `triggers`, and `actions_log` tables remain

@@ -1,0 +1,9 @@
+{
+  "account": {
+    "type": "chatgpt",
+    "email": "agent@example.com",
+    "planType": "pro",
+    "accessToken": "must-not-survive-validation"
+  },
+  "requiresOpenaiAuth": true
+}

@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from .models import JsonRpcId, ServerRequestCategory, ThreadInfo
+from .models import JsonRpcId, RateLimitSnapshot, ServerRequestCategory, ThreadInfo
 
 ApprovalKind = Literal["command", "file_change"]
 
@@ -122,6 +122,22 @@ class ThreadUnarchived(LaneEvent):
 @dataclass(frozen=True)
 class ThreadDeleted(LaneEvent):
     pass
+
+
+@dataclass(frozen=True)
+class AccountRateLimitsUpdated:
+    rate_limits: RateLimitSnapshot
+
+
+def project_account_notification(
+    method: str, params: dict[str, object]
+) -> AccountRateLimitsUpdated | None:
+    if method != "account/rateLimits/updated":
+        return None
+    snapshot = params.get("rateLimits")
+    if not isinstance(snapshot, dict):
+        return None
+    return AccountRateLimitsUpdated(RateLimitSnapshot.model_validate(snapshot))
 
 
 @dataclass(frozen=True)

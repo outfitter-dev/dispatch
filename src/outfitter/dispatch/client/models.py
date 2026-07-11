@@ -69,6 +69,90 @@ class WireModel(BaseModel):
     )
 
 
+# --- account / capacity ------------------------------------------------------
+
+
+class AccountInfo(WireModel):
+    type: str
+    email: str | None = None
+    plan_type: str | None = None
+    credential_source: str | None = None
+
+
+class AccountReadResult(WireModel):
+    account: AccountInfo | None = None
+    requires_openai_auth: bool
+
+
+class RateLimitWindow(WireModel):
+    used_percent: int
+    window_duration_mins: int | None = None
+    resets_at: int | None = None
+
+
+class CreditsSnapshot(WireModel):
+    has_credits: bool
+    unlimited: bool
+    balance: str | None = None
+
+
+class SpendControlLimitSnapshot(WireModel):
+    limit: str
+    used: str
+    remaining_percent: int
+    resets_at: int
+
+
+class RateLimitSnapshot(WireModel):
+    limit_id: str | None = None
+    limit_name: str | None = None
+    plan_type: str | None = None
+    primary: RateLimitWindow | None = None
+    secondary: RateLimitWindow | None = None
+    credits: CreditsSnapshot | None = None
+    individual_limit: SpendControlLimitSnapshot | None = None
+    rate_limit_reached_type: str | None = None
+
+
+class RateLimitResetCredit(WireModel):
+    id: str
+    reset_type: str
+    status: str
+    granted_at: int
+    expires_at: int | None = None
+    title: str | None = None
+    description: str | None = None
+
+
+class RateLimitResetCreditsSummary(WireModel):
+    available_count: int
+    credits: list[RateLimitResetCredit] | None = None
+
+
+class AccountRateLimitsResult(WireModel):
+    rate_limits: RateLimitSnapshot
+    rate_limits_by_limit_id: dict[str, RateLimitSnapshot] | None = None
+    rate_limit_reset_credits: RateLimitResetCreditsSummary | None = None
+
+
+class AccountUsageSummary(WireModel):
+    lifetime_tokens: int | None = None
+    current_streak_days: int | None = None
+    longest_streak_days: int | None = None
+    peak_daily_tokens: int | None = None
+    longest_running_turn_sec: int | None = None
+
+
+class AccountUsageDailyBucket(WireModel):
+    start_date: str
+    tokens: int
+
+
+class AccountUsageResult(WireModel):
+    summary: AccountUsageSummary
+    daily_usage_buckets: list[AccountUsageDailyBucket] | None = None
+
+
 def is_json_rpc_id(value: object) -> TypeGuard[JsonRpcId]:
     """Return whether ``value`` is a JSON-RPC request/response id.
 

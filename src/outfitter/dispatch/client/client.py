@@ -16,8 +16,11 @@ from typing import Self
 from pydantic import BaseModel
 
 from .errors import ClientError, ProtocolError, TransportError
-from .events import LaneEvent, ServerRequestReceived
+from .events import AccountRateLimitsUpdated, LaneEvent, ServerRequestReceived
 from .models import (
+    AccountRateLimitsResult,
+    AccountReadResult,
+    AccountUsageResult,
     AppModel,
     ApprovalPolicy,
     ApprovalsReviewer,
@@ -183,6 +186,18 @@ class AppServerClient:
         result = await self._request("config/read", {})
         payload = result.get("config") if isinstance(result.get("config"), dict) else result
         return ConfigInfo.model_validate(payload)
+
+    async def account_read(self) -> AccountReadResult:
+        result = await self._request("account/read", {"refreshToken": False})
+        return AccountReadResult.model_validate(result)
+
+    async def account_rate_limits_read(self) -> AccountRateLimitsResult:
+        result = await self._request("account/rateLimits/read", {})
+        return AccountRateLimitsResult.model_validate(result)
+
+    async def account_usage_read(self) -> AccountUsageResult:
+        result = await self._request("account/usage/read", {})
+        return AccountUsageResult.model_validate(result)
 
     async def model_list(self) -> list[AppModel]:
         models: list[AppModel] = []
@@ -481,6 +496,10 @@ class AppServerClient:
     def server_requests(self, lane: str | None = None) -> AsyncIterator[ServerRequestReceived]:
         """Server requests for one lane, or all requests including threadless ones."""
         return self._router.requests.subscribe(lane)
+
+    def account_events(self) -> AsyncIterator[AccountRateLimitsUpdated]:
+        """Normalized provider-level account notifications."""
+        return self._router.account_events.subscribe(None)
 
     async def close(self) -> None:
         if self._closed:

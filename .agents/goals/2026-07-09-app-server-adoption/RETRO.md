@@ -2,7 +2,7 @@
 
 Date started: 2026-07-09
 Date finalized: pending
-Status: Active - DIS-45 ready for merge
+Status: Active - DIS-35 implementation
 Spec: `.agents/goals/2026-07-09-app-server-adoption/SPEC.md`
 Goal: `.agents/goals/2026-07-09-app-server-adoption/GOAL.md`
 Prompt: `.agents/goals/2026-07-09-app-server-adoption/PROMPT.md`
@@ -13,9 +13,9 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 - Objective: land the clear App Server 0.144 adoption work.
 - Completion horizon: merged, tracker-reconciled, dogfooded, clean `main`.
 - Authority used: Linear planning plus a dedicated Graphite packet commit.
-- Outcome: preparation, DIS-42, and DIS-44 are merged; DIS-45 is in implementation.
-- Tracker/PR/source-control state: PRs #73-#77 merged; DIS-45 is on its dedicated
-  Graphite branch above current `main`.
+- Outcome: preparation, DIS-42, DIS-44, and DIS-45 are merged; DIS-35 is in implementation.
+- Tracker/PR/source-control state: PRs #73-#78 merged; DIS-35 is on its dedicated
+  Graphite branch above clean `main`.
 - Verification: prompt gate passed at 3,752 characters with no placeholders.
 - Review state: DIS-42 round 1 findings fixed; code and surface round 2 are both
   5/5 clean with zero open P0-P2.
@@ -137,6 +137,25 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
   recorded. It will move to Done after merge proof.
 - Next: amend this retro evidence, resubmit, confirm the final commit's checks,
   mark ready, merge through Graphite, sync clean main, and close DIS-45.
+
+2026-07-11 - DIS-45 merge and DIS-35 capacity substrate
+- Merged: PR #78 as `d1aa3428ac9aa5f6be15fc176e033dfc6e2f7559` after final CI
+  and CodeQL passed with no review threads. Graphite synced clean `main`, removed
+  the merged branch, and Linear DIS-45 moved to Done with final proof.
+- Changed for DIS-35: typed account, multi-bucket rate-limit, reset-credit, and
+  historical usage reads; current/signed-out fixtures and generated schema
+  guards; schema-v17 provider-neutral replace-in-place capacity observations;
+  masked account labels and fingerprinted account/reset-credit identities;
+  normalized account notification stream and reactor refresh.
+- Live proof: a real local 0.144 App Server probe called all three read methods
+  without a model turn and printed only the redacted Dispatch observation.
+- Review: round 1 found two P2 freshness/merge issues. Component and per-window
+  timestamps now prevent a rate push from refreshing unrelated facts, and
+  sparse pushes preserve unmentioned windows. Round 2 is 5/5 clean with zero
+  open P0-P2; final `just check` passed with 497 tests and 14 live deselected.
+- Next: complete DIS-35 verification and review, then commit its Graphite slice
+  before building the derived DIS-39 usage surface above it.
+- Blockers: none.
 ```
 
 ## Review Log
@@ -157,6 +176,8 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 | DIS-45 r1 code | protocol/storage/lifecycle/concurrency | `tmp/reviews/dis-45/code-round-1.json` | 3/5 | changes requested | 3 | Three P2s fixed before final gate |
 | DIS-45 r2 code | protocol/storage/lifecycle/concurrency | `tmp/reviews/dis-45/code-round-2.json` | 5/5 | clean | 0 | Prior findings verified fixed |
 | DIS-45 r1 surface | CLI/MCP/docs/authority/fixtures | `tmp/reviews/dis-45/surface-round-1.json` | 5/5 | clean | 0 | Derived surfaces and guidance aligned |
+| DIS-35 r1 code | protocol/storage/privacy/freshness | `tmp/reviews/dis-35/code-round-1.json` | 3/5 | changes requested | 2 | Two P2s fixed |
+| DIS-35 r2 code | protocol/storage/privacy/freshness | `tmp/reviews/dis-35/code-round-2.json` | 5/5 | clean | 0 | Prior findings verified fixed |
 
 ## Verification Log
 
@@ -175,6 +196,8 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 | `just check` | DIS-45 | passed | 486 tests passed, 13 live tests deselected; strict mypy/Ruff, package build and contents passed |
 | targeted real App Server fork test | DIS-45 | passed | Persisted fork retained `forkedFromId`, no parent id, and was absent from parent/ancestor results |
 | App Server manifest comparison | DIS-45 | passed with explained label drift | Structural inventory and topology fields match; local binary reports alpha version label |
+| `just check` | DIS-35 | passed | 497 tests passed, 14 live tests deselected; strict mypy/Ruff, package build and contents passed |
+| real App Server account/capacity probe | DIS-35 | passed | Redacted JSON from account, multi-bucket limits, reset credits, and usage without a model turn |
 
 ## Prompt / Goal Alignment
 
@@ -206,6 +229,10 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 | DIS-44 | Done | Acceptance, live scenario, and 5/5 review completed |
 | DIS-45 | In Progress | Provider topology implementation and local verification active |
 | PR #78 | draft / green before retro amendment | DIS-45 provider topology; no open review threads |
+| PR #78 | merged | DIS-45 provider topology; `d1aa3428ac9aa5f6be15fc176e033dfc6e2f7559` |
+| DIS-45 | Done | Topology acceptance, live proof, and 5/5 reviews complete |
+| DIS-35 | In Progress | Codex account/capacity substrate implementation active |
+| DIS-39 | In Progress | Usage surface queued above DIS-35 |
 
 ## Follow-Ups
 
