@@ -408,6 +408,7 @@ The superseding matrix covers the promised combined scenario behavior without on
 | full-stack code review round 2 | full goal | 5/5 | No unresolved P0-P2 findings on the closeout branch |
 | hosted checks for PR #85 | full-stack repairs | passed | CI and all CodeQL jobs completed successfully |
 | hosted review reconciliation | full goal | passed | Six carried P2 threads on PRs #78, #79, #82, and #83 were answered with PR #85 evidence and resolved; those PRs and #85 have zero unresolved current threads |
+| full-stack surface review round 3 | full goal | 5/5 | Zero P0-P2; 39 cumulative surface tests passed, manifest reproduced byte-for-byte, and exact hosted head was draft, mergeable, green, and thread-clean |
 
 ## Prompt / Goal Alignment
 
@@ -463,8 +464,8 @@ The superseding matrix covers the promised combined scenario behavior without on
   merged and DIS-41/scoped children are Done, but cumulative repairs remain on this branch.
 - Prompt length: 3,752 characters; no unresolved placeholders.
 - Review report summary: milestone reviews converged to 5/5. Full-stack round one reopened
-  five P1 and four P2 findings; code round two is 5/5 and surface round two verified every
-  repair except hosted-thread reconciliation, which is now complete and pending final re-review.
+  five P1 and four P2 findings; code round two and surface round three are 5/5 with zero
+  unresolved P0-P2 findings. Post-merge clean-main reconciliation remains.
 - Verification summary: latest `just check` passed 613 tests with 17 opt-in tests deselected,
   strict mypy/Ruff, wheel/sdist, and package contents; targeted post-repair integration passed.
 - Forbidden actions audit: this goal agent performed no release/publish, secret mutation,
