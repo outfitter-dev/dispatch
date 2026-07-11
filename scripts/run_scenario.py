@@ -36,6 +36,7 @@ class ScenarioLane:
     approval_policy: str | None
     expect_file: str | None
     expect_file_contains: str | None
+    expect_tool: str | None
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,7 @@ class LaneRun:
     expect_contains: str
     expect_file: str | None
     expect_file_contains: str | None
+    expect_tool: str | None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -136,6 +138,7 @@ def _load_lane(index: int, raw: object) -> ScenarioLane:
         approval_policy=_optional_string(raw, "approval_policy"),
         expect_file=_optional_string(raw, "expect_file"),
         expect_file_contains=_optional_string(raw, "expect_file_contains"),
+        expect_tool=_optional_string(raw, "expect_tool"),
     )
 
 
@@ -196,6 +199,7 @@ class ScenarioRunner:
             for lane in lanes:
                 self._wait_for_completion(lane)
                 self._assert_tail_contains(lane)
+                self._assert_query_contains(lane)
                 self._assert_expected_file(lane)
             self._dispatch_json(["down", "--json"])
             print("scenario passed")
@@ -297,6 +301,7 @@ class ScenarioRunner:
             expect_contains=lane.expect_contains,
             expect_file=lane.expect_file,
             expect_file_contains=lane.expect_file_contains,
+            expect_tool=lane.expect_tool,
         )
 
     def _assert_list_contains(self, lanes: list[LaneRun]) -> None:
@@ -346,6 +351,17 @@ class ScenarioRunner:
                 raise SystemExit(
                     f"{lane.alias} expected {lane.expect_file_contains!r} in {path}: {contents!r}"
                 )
+
+    def _assert_query_contains(self, lane: LaneRun) -> None:
+        if lane.expect_tool is None:
+            return
+        out = self._dispatch_json(
+            ["query", "--lane", lane.id, "--tool", lane.expect_tool, "--json"]
+        )
+        if not _list(out.get("matches")):
+            raise SystemExit(
+                f"{lane.alias} local query did not index tool {lane.expect_tool!r}: {out}"
+            )
 
     def _dispatch_json(self, args: list[str], *, timeout: float = 90.0) -> dict[str, Any]:
         result = self._dispatch(args, timeout=timeout)

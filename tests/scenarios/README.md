@@ -10,6 +10,7 @@ them intentionally:
 ```bash
 just scenario -- tests/scenarios/basic_coordination.toml
 just scenario -- tests/scenarios/interactive_requests.toml
+just scenario -- tests/scenarios/canonical_item_ingestion.toml
 ```
 
 The runner creates temporary `DISPATCH_HOME`, `CODEX_HOME`, and work directories

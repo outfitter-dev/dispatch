@@ -43,3 +43,21 @@ def test_interactive_request_scenario_dry_run_validates() -> None:
     assert "scenario=interactive_requests" in result.stdout
     assert "owned_interactive_requests=permissive" in result.stdout
     assert "lane approval" in result.stdout
+
+
+def test_canonical_item_ingestion_scenario_dry_run_validates() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/run_scenario.py",
+            "--dry-run",
+            "tests/scenarios/canonical_item_ingestion.toml",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "scenario=canonical_item_ingestion" in result.stdout
+    assert "lane canonical" in result.stdout

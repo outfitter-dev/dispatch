@@ -64,7 +64,6 @@ from .history import (
     history_items_from_indexed,
     history_items_from_thread,
     history_rollups_from_indexed,
-    summarize_history,
 )
 from .history_index import index_codex_thread_read
 from .launch import ResolvedLaunch, resolve_launch
@@ -205,7 +204,7 @@ class _SubscriptionSettings(TypedDict):
 @dataclass(frozen=True)
 class _IndexedHistory:
     indexed: list[ThreadItem]
-    refs: dict[str, list[ThreadItemRef]]
+    refs: dict[tuple[str, str, str], list[ThreadItemRef]]
 
 
 _ATTACHED_WRITE_LOCK_REASON = (
@@ -1586,7 +1585,14 @@ async def history(inp: HistoryInput, ctx: Ctx) -> HistoryOutput:
             history_items_from_thread(
                 result,
                 item_type=inp.item_type,
+                role=inp.role,
+                phase=inp.phase,
                 tool=inp.tool,
+                tool_server=inp.tool_server,
+                tool_status=inp.tool_status,
+                errored=inp.errored,
+                mentions_thread=inp.mentions_thread,
+                arg_key=inp.arg_key,
                 grep=inp.grep,
                 raw=True,
                 limit=inp.limit,
@@ -1596,7 +1602,14 @@ async def history(inp: HistoryInput, ctx: Ctx) -> HistoryOutput:
                 items.indexed,
                 items.refs,
                 item_type=inp.item_type,
+                role=inp.role,
+                phase=inp.phase,
                 tool=inp.tool,
+                tool_server=inp.tool_server,
+                tool_status=inp.tool_status,
+                errored=inp.errored,
+                mentions_thread=inp.mentions_thread,
+                arg_key=inp.arg_key,
                 grep=inp.grep,
                 raw=False,
                 limit=inp.limit,
@@ -1652,6 +1665,8 @@ async def _history_summary_from_index(lane: Lane, ctx: Ctx) -> HistoryThreadSumm
         files_changed=[HistoryFileStat(path=file.path, count=file.count) for file in stats.files],
         transcript_bytes=transcript_bytes,
         estimated_tokens=(transcript_bytes // 4) if transcript_bytes is not None else None,
+        subagents_count=len(stats.child_thread_ids),
+        subagent_thread_ids=stats.child_thread_ids,
         worktree=worktree,
     )
 
@@ -1660,11 +1675,7 @@ async def _history_details(
     lane: Lane, result: dict[str, object], ctx: Ctx
 ) -> tuple[HistoryThreadSummary, _IndexedHistory, list[HistoryToolStat], list[HistoryFileStat]]:
     await index_codex_thread_read(ctx.registry, lane, result, ctx.capture)
-    sync = await ctx.registry.get_lane_sync(lane.id)
-    worktree = await detect_worktree(lane.cwd)
-    summary, _live_items, _live_tools, _live_files = summarize_history(
-        result, lane=lane, sync=sync, worktree=worktree
-    )
+    summary = await _history_summary_from_index(lane, ctx)
     indexed_items = await ctx.registry.list_thread_items(lane=lane.id, limit=None)
     refs = await ctx.registry.list_thread_item_refs_many(indexed_items)
     tools, files = history_rollups_from_indexed(indexed_items, refs)
@@ -1787,7 +1798,7 @@ async def query(inp: QueryInput, ctx: Ctx) -> QueryOutput:
         lane = lane_map.get(item.lane)
         if lane is None:
             continue
-        refs = refs_by_item.get(item.item_id, [])
+        refs = refs_by_item.get((item.provider, item.provider_thread_id, item.item_id), [])
         matches.append(_query_match(lane, item, refs, query=inp.query))
     return QueryOutput(query=inp.query, matches=matches, scanned=scanned)
 
@@ -1842,16 +1853,33 @@ def _query_match(
         type=item.item_type,
         role=item.role,
         tool=item.tool,
+        phase=item.phase,
+        command=item.command,
+        command_cwd=item.cwd,
+        arguments=item.arguments,
+        success=item.success,
+        error=item.error,
+        agent_nickname=item.agent_nickname,
+        agent_role=item.agent_role,
         snippet=_query_snippet(item, refs, query=query),
         files=file_refs,
         refs=ref_views,
         created_at=item.created_at,
         inserted_at=item.inserted_at,
         raw_retained=item.raw_retained,
-        tool_server=_string_from_raw(raw, "server") or _ref_value(refs, "tool_server"),
-        tool_status=_string_from_raw(raw, "status") or _ref_value(refs, "tool_status"),
-        errored=bool(raw.get("error")) or any(ref.ref_type == "tool_error" for ref in refs),
-        duration_ms=_int_from_raw(raw, "durationMs"),
+        tool_server=item.server
+        or _string_from_raw(raw, "server")
+        or _ref_value(refs, "tool_server"),
+        tool_status=item.status
+        or _string_from_raw(raw, "status")
+        or _ref_value(refs, "tool_status"),
+        errored=item.error is not None
+        or item.success is False
+        or bool(raw.get("error"))
+        or any(ref.ref_type == "tool_error" for ref in refs),
+        duration_ms=(
+            item.duration_ms if item.duration_ms is not None else _int_from_raw(raw, "durationMs")
+        ),
     )
 
 

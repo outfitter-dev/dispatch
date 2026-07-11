@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from pydantic import JsonValue
+
 from outfitter.dispatch.registry.models import (
     LaneModelSettings,
     LaneRuntimeSettings,
@@ -175,6 +177,17 @@ def thread_item(
     item_id: str = "item-1",
     position: int | None = None,
     inserted_at: str | None = None,
+    phase: str | None = "analysis",
+    status: str | None = "completed",
+    server: str | None = "shell",
+    command: str | None = "uv run pytest",
+    cwd: str | None = "/work",
+    error: str | None = None,
+    duration_ms: int | None = 125,
+    arguments: JsonValue = None,
+    success: bool | None = True,
+    agent_nickname: str | None = None,
+    agent_role: str | None = None,
 ) -> ThreadItem:
     return ThreadItem(
         provider="codex",
@@ -183,8 +196,19 @@ def thread_item(
         lane=lane,
         turn_id=turn_id,
         item_type="toolCall",
+        phase=phase,
+        status=status,
         text="uv run pytest",
         tool="bash",
+        server=server,
+        command=command,
+        cwd=cwd,
+        error=error,
+        duration_ms=duration_ms,
+        arguments=arguments if arguments is not None else {"command": "uv run pytest"},
+        success=success,
+        agent_nickname=agent_nickname,
+        agent_role=agent_role,
         position=position,
         inserted_at=inserted_at or fixed_now_iso(),
         payload={"type": "toolCall", "command": "uv run pytest"},

@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 
 from outfitter.dispatch.config import CapturePolicy
-from outfitter.dispatch.core.capture import bound_payload, bound_text
+from outfitter.dispatch.core.capture import (
+    bound_payload,
+    bound_redacted_json,
+    bound_redacted_text,
+    bound_text,
+)
 
 
 def test_bound_text_tracks_original_size_without_truncating() -> None:
@@ -55,3 +60,24 @@ def test_bound_payload_retains_metadata_when_it_fits() -> None:
     assert isinstance(bounded.payload["preview"], str)
     retained_bytes = len(json.dumps(bounded.payload, separators=(",", ":")).encode("utf-8"))
     assert retained_bytes <= 80
+
+
+def test_normalized_fields_redact_secrets_and_respect_bounds() -> None:
+    policy = CapturePolicy(max_text_bytes=32, max_payload_bytes=96)
+    text = bound_redacted_text("--token supersecret " + "x" * 100, policy)
+    arguments = bound_redacted_json(
+        {
+            "token": "supersecret",
+            "nested": {"authorization": "Bearer hidden"},
+            "prompt": "password=hunter2 " + "x" * 200,
+        },
+        policy,
+    )
+
+    assert text is not None
+    assert "supersecret" not in text.text
+    assert len(text.text.encode()) <= 32
+    encoded = json.dumps(arguments, separators=(",", ":")).encode()
+    assert b"supersecret" not in encoded
+    assert b"hunter2" not in encoded
+    assert len(encoded) <= 96

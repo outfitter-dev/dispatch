@@ -18,6 +18,7 @@ from outfitter.dispatch.client.models import (
     ThreadInfo,
     ThreadListResult,
 )
+from outfitter.dispatch.core.codex_items import CODEX_ITEM_TYPES
 from outfitter.dispatch.core.history import summarize_history
 from outfitter.dispatch.core.sync import SyncLimits, scan_codex_jsonl
 from outfitter.dispatch.registry.models import Lane, ProviderEvent
@@ -60,6 +61,7 @@ def test_app_server_protocol_manifest_tracks_v0144_capabilities() -> None:
     assert "thread/delete" in manifest["client_requests"]["stable"]
     assert "thread/items/list" in manifest["client_requests"]["experimental_only"]
     assert "thread/deleted" in manifest["server_notifications"]
+    assert set(manifest["thread_item_types"]) == CODEX_ITEM_TYPES
     assert "supportsPersonality" in manifest["selected_shapes"]["model_fields"]
     assert "lastTurnId" in manifest["selected_shapes"]["thread_fork_fields"]
     assert "backwardsCursor" in manifest["selected_shapes"]["thread_list_result_fields"]

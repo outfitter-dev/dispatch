@@ -79,6 +79,18 @@ Lifecycle/threads/turns: `thread/start resume fork read list loaded/list archive
   truth but does not send omitted model/tier values just to mirror config.
 - `thread/resume` accepts `excludeTurns` / `initialTurnsPage`, useful for future
   live observation without heavy initial history hydration.
+- `ThreadItem` has 18 canonical variants in 0.144: user/hook/agent messages,
+  plan, reasoning, command execution, file change, MCP/dynamic/collaboration
+  tool calls, subagent activity, web search, image view/generation, sleep,
+  review-mode entry/exit, and context compaction. Both `item/started` and
+  `item/completed` carry the full item object under `params.item` plus
+  `threadId` and `turnId`; the item id is not a top-level field in the current
+  shape. The compact protocol manifest records these discriminants so additions
+  cannot silently bypass Dispatch's disposition table.
+  Live verification also showed that a later `thread/read(includeTurns:true)`
+  can omit a completed `commandExecution` that was present in the live stream
+  and can assign different persisted message ids. Treat thread reads as
+  additive replay, not an authoritative deletion snapshot.
 - `thread/fork.lastTurnId` forks history through a specific completed turn,
   inclusive. Dispatch exposes it as `last_turn_id` in the authored fork op and
   its derived MCP schema.

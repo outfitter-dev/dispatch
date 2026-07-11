@@ -9,8 +9,10 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from outfitter.dispatch.config import CapturePolicy
 from outfitter.dispatch.registry.models import Lane, LaneSync, ThreadItem, ThreadItemRef
 
+from .codex_items import normalize_codex_item
 from .models import (
     HistoryFileStat,
     HistoryItem,
@@ -24,24 +26,52 @@ def history_items_from_thread(
     result: dict[str, object],
     *,
     item_type: str | None = None,
+    role: str | None = None,
+    phase: str | None = None,
     tool: str | None = None,
+    tool_server: str | None = None,
+    tool_status: str | None = None,
+    errored: bool | None = None,
+    mentions_thread: str | None = None,
+    arg_key: str | None = None,
     grep: str | None = None,
     raw: bool = False,
     limit: int = 50,
 ) -> list[HistoryItem]:
     items = _all_history_items(result, raw=raw)
     filtered = [
-        item for item in items if _matches_filter(item, item_type=item_type, tool=tool, grep=grep)
+        item
+        for item in items
+        if _matches_filter(
+            item,
+            item_type=item_type,
+            role=role,
+            phase=phase,
+            tool=tool,
+            tool_server=tool_server,
+            tool_status=tool_status,
+            errored=errored,
+            mentions_thread=mentions_thread,
+            arg_key=arg_key,
+            grep=grep,
+        )
     ]
     return filtered[-limit:]
 
 
 def history_items_from_indexed(
     items: list[ThreadItem],
-    refs_by_item: dict[str, list[ThreadItemRef]],
+    refs_by_item: dict[tuple[str, str, str], list[ThreadItemRef]],
     *,
     item_type: str | None = None,
+    role: str | None = None,
+    phase: str | None = None,
     tool: str | None = None,
+    tool_server: str | None = None,
+    tool_status: str | None = None,
+    errored: bool | None = None,
+    mentions_thread: str | None = None,
+    arg_key: str | None = None,
     grep: str | None = None,
     raw: bool = False,
     limit: int = 50,
@@ -49,22 +79,35 @@ def history_items_from_indexed(
     """Project normalized DB-backed history rows into user-facing history items."""
 
     projected = [
-        _indexed_history_item(item, refs_by_item.get(item.item_id, []), include_raw=raw)
+        _indexed_history_item(item, refs_by_item.get(_item_identity(item), []), include_raw=raw)
         for item in reversed(items)
     ]
     filtered = [
         item
         for item in projected
-        if _matches_filter(item, item_type=item_type, tool=tool, grep=grep)
+        if _matches_filter(
+            item,
+            item_type=item_type,
+            role=role,
+            phase=phase,
+            tool=tool,
+            tool_server=tool_server,
+            tool_status=tool_status,
+            errored=errored,
+            mentions_thread=mentions_thread,
+            arg_key=arg_key,
+            grep=grep,
+        )
     ]
     return filtered[-limit:]
 
 
 def history_rollups_from_indexed(
-    items: list[ThreadItem], refs_by_item: dict[str, list[ThreadItemRef]]
+    items: list[ThreadItem],
+    refs_by_item: dict[tuple[str, str, str], list[ThreadItemRef]],
 ) -> tuple[list[HistoryToolStat], list[HistoryFileStat]]:
     projected = [
-        _indexed_history_item(item, refs_by_item.get(item.item_id, []), include_raw=False)
+        _indexed_history_item(item, refs_by_item.get(_item_identity(item), []), include_raw=False)
         for item in reversed(items)
     ]
     return _history_rollups(projected)
@@ -228,17 +271,18 @@ def _all_history_items(result: dict[str, object], *, raw: bool) -> list[HistoryI
 def _history_item(
     turn_id: str | None, item: dict[str, object], *, include_raw: bool
 ) -> HistoryItem:
-    item_type = _string(item.get("type")) or "unknown"
-    return HistoryItem(
+    item_id = _string(item.get("id")) or "raw-history-item"
+    normalized, refs = normalize_codex_item(
+        item if item.get("id") is not None else {**item, "id": item_id},
+        provider_thread_id="raw-history",
+        lane="raw-history",
         turn_id=turn_id,
-        item_id=_string(item.get("id")),
-        type=item_type,
-        text=_item_text(item),
-        role=_string(item.get("role")),
-        tool=_tool_name(item),
-        files=_file_paths(item),
-        raw=dict(item) if include_raw else None,
+        inserted_at="",
+        position=None,
+        capture=CapturePolicy(),
     )
+    projected = _indexed_history_item(normalized, refs, include_raw=False)
+    return projected.model_copy(update={"raw": dict(item) if include_raw else None})
 
 
 def _indexed_history_item(
@@ -250,10 +294,29 @@ def _indexed_history_item(
         type=item.item_type,
         text=item.text,
         role=item.role,
+        phase=item.phase,
         tool=item.tool,
+        tool_server=item.server,
+        tool_status=item.status,
+        command=item.command,
+        command_cwd=item.cwd,
+        arguments=item.arguments,
+        success=item.success,
+        error=item.error,
+        errored=item.error is not None or item.success is False,
+        duration_ms=item.duration_ms,
+        agent_nickname=item.agent_nickname,
+        agent_role=item.agent_role,
+        thread_ids=sorted(ref.ref_value for ref in refs if ref.ref_type == "thread"),
+        child_thread_ids=sorted(ref.ref_value for ref in refs if ref.ref_type == "child_thread"),
+        argument_keys=sorted(ref.ref_value for ref in refs if ref.ref_type == "tool_arg_key"),
         files=sorted(ref.ref_value for ref in refs if ref.ref_type == "file"),
         raw=item.payload if include_raw and item.raw_retained else None,
     )
+
+
+def _item_identity(item: ThreadItem) -> tuple[str, str, str]:
+    return (item.provider, item.provider_thread_id, item.item_id)
 
 
 def _turns(thread: dict[str, object]) -> list[dict[str, object]]:
@@ -267,47 +330,45 @@ def _matches_filter(
     item: HistoryItem,
     *,
     item_type: str | None,
+    role: str | None,
+    phase: str | None,
     tool: str | None,
+    tool_server: str | None,
+    tool_status: str | None,
+    errored: bool | None,
+    mentions_thread: str | None,
+    arg_key: str | None,
     grep: str | None,
 ) -> bool:
     if item_type is not None and item_type.casefold() not in item.type.casefold():
         return False
     if tool is not None and (item.tool is None or tool.casefold() not in item.tool.casefold()):
         return False
+    if role is not None and (item.role is None or role.casefold() not in item.role.casefold()):
+        return False
+    if phase is not None and (item.phase is None or phase.casefold() not in item.phase.casefold()):
+        return False
+    if tool_server is not None and (
+        item.tool_server is None or tool_server.casefold() not in item.tool_server.casefold()
+    ):
+        return False
+    if tool_status is not None and (
+        item.tool_status is None or tool_status.casefold() not in item.tool_status.casefold()
+    ):
+        return False
+    if errored is not None and item.errored != errored:
+        return False
+    if mentions_thread is not None and not any(
+        mentions_thread.casefold() in thread_id.casefold() for thread_id in item.thread_ids
+    ):
+        return False
+    if arg_key is not None and arg_key not in item.argument_keys:
+        return False
     return not (grep is not None and grep.casefold() not in (item.text or "").casefold())
 
 
 def _is_message(item: HistoryItem) -> bool:
     return "message" in item.type.casefold() or item.role in {"user", "assistant", "system"}
-
-
-def _tool_name(item: dict[str, object]) -> str | None:
-    for key in ("toolName", "tool_name", "tool", "name", "command"):
-        value = _string(item.get(key))
-        if value:
-            return value
-    item_type = _string(item.get("type")) or ""
-    if "tool" in item_type.casefold():
-        return item_type
-    return None
-
-
-def _file_paths(item: dict[str, object]) -> list[str]:
-    found: list[str] = []
-    _collect_paths(item, found)
-    return sorted(set(found))
-
-
-def _collect_paths(value: object, found: list[str]) -> None:
-    if isinstance(value, dict):
-        for key, child in value.items():
-            if key in {"path", "file", "filePath", "file_path"} and isinstance(child, str):
-                found.append(child)
-            else:
-                _collect_paths(child, found)
-    elif isinstance(value, list):
-        for child in value:
-            _collect_paths(child, found)
 
 
 def _subagent_thread_ids(item: dict[str, object]) -> list[str]:
@@ -330,27 +391,6 @@ def _first_event_at(thread: dict[str, object]) -> str | None:
                     if value:
                         timestamps.append(value)
     return min(timestamps) if timestamps else None
-
-
-def _item_text(item: dict[str, object]) -> str | None:
-    direct = item.get("text")
-    if isinstance(direct, str):
-        return direct
-    content = item.get("content")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for part in content:
-            if isinstance(part, str):
-                parts.append(part)
-            elif isinstance(part, dict):
-                text = part.get("text")
-                if isinstance(text, str):
-                    parts.append(text)
-        if parts:
-            return "\n".join(parts)
-    return None
 
 
 def _string(value: Any) -> str | None:

@@ -1,0 +1,31 @@
+{
+  "thread": {
+    "id": "019f0000-0000-7000-9000-000000000044",
+    "turns": [
+      {
+        "id": "turn-canonical",
+        "status": "completed",
+        "items": [
+          {"id": "i-user", "type": "userMessage", "content": [{"type": "text", "text": "Run the audit"}]},
+          {"id": "i-hook", "type": "hookPrompt", "fragments": [{"hookRunId": "hook-1", "text": "Repository guidance"}]},
+          {"id": "i-agent", "type": "agentMessage", "text": "Audit complete", "phase": "final_answer"},
+          {"id": "i-plan", "type": "plan", "text": "Inspect then verify"},
+          {"id": "i-reason", "type": "reasoning", "summary": ["Checked the contract"], "content": []},
+          {"id": "i-command", "type": "commandExecution", "command": "uv run pytest", "cwd": "/fixture/dispatch", "status": "completed", "commandActions": [], "aggregatedOutput": "18 passed", "exitCode": 0, "durationMs": 120},
+          {"id": "i-file", "type": "fileChange", "status": "completed", "changes": [{"path": "src/example.py", "kind": "update"}]},
+          {"id": "i-mcp", "type": "mcpToolCall", "server": "linear", "tool": "save_issue", "status": "completed", "arguments": {"id": "DIS-44"}, "result": {"content": "updated"}, "error": null, "durationMs": 25},
+          {"id": "i-dynamic", "type": "dynamicToolCall", "namespace": "dispatch", "tool": "query", "status": "completed", "arguments": {"lane": "0Child"}, "contentItems": [{"type": "inputText", "text": "match"}], "success": true, "durationMs": 10},
+          {"id": "i-collab", "type": "collabAgentToolCall", "tool": "spawnAgent", "status": "completed", "senderThreadId": "019f0000-0000-7000-9000-000000000044", "receiverThreadIds": ["019f0000-0000-7000-9000-000000000099"], "agentsStates": {"019f0000-0000-7000-9000-000000000099": {"status": "completed"}}, "prompt": "Review DIS-44", "model": "gpt-5.6-luna", "reasoningEffort": "low"},
+          {"id": "i-subagent", "type": "subAgentActivity", "agentThreadId": "019f0000-0000-7000-9000-000000000099", "agentPath": "reviewer", "kind": "started"},
+          {"id": "i-web", "type": "webSearch", "query": "Codex App Server 0.144", "action": null},
+          {"id": "i-view", "type": "imageView", "path": "/fixture/screenshot.png"},
+          {"id": "i-sleep", "type": "sleep", "durationMs": 1000},
+          {"id": "i-image", "type": "imageGeneration", "status": "completed", "result": "created", "revisedPrompt": null, "savedPath": "/fixture/generated.png"},
+          {"id": "i-review-in", "type": "enteredReviewMode", "review": "Review the patch"},
+          {"id": "i-review-out", "type": "exitedReviewMode", "review": "No findings"},
+          {"id": "i-compact", "type": "contextCompaction"}
+        ]
+      }
+    ]
+  }
+}

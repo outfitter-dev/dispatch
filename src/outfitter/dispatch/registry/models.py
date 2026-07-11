@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, StrictInt, StrictStr, TypeAdapter
+from pydantic import BaseModel, Field, JsonValue, StrictInt, StrictStr, TypeAdapter
 
 from outfitter.dispatch.client.models import (
     ApprovalPolicy,
@@ -171,8 +171,19 @@ class ThreadItem(BaseModel):
     turn_id: str | None = None
     item_type: str
     role: str | None = None
+    phase: str | None = None
+    status: str | None = None
     text: str | None = None
     tool: str | None = None
+    server: str | None = None
+    command: str | None = None
+    cwd: str | None = None
+    error: str | None = None
+    duration_ms: int | None = None
+    arguments: JsonValue = None
+    success: bool | None = None
+    agent_nickname: str | None = None
+    agent_role: str | None = None
     created_at: str | None = None
     position: int | None = None
     inserted_at: str

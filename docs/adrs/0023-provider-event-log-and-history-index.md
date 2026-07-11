@@ -91,6 +91,14 @@ Codex is first:
    `lane_runtime_state`.
 3. Backfill `thread_turns` and `thread_items` from
    `thread/read(includeTurns:true)` for managed threads.
+   Live item notifications and history replay must pass through one canonical
+   item adapter so normalized rows and refs converge regardless of arrival
+   order. Unknown provider item types remain visible rather than being dropped.
+   Provider history reads are additive because Codex can omit transient tool
+   items that were delivered live; absence from replay is not deletion proof.
+   Normalized searchable fields are bounded and credential-redacted separately
+   from raw-payload retention. Retention is monotonic during ingestion; purging
+   retained payloads requires a future explicit retention operation.
 4. Persist Codex thread lifecycle events such as `thread/archived` and
    `thread/unarchived`, and reconcile managed-lane archive state from App
    Server list membership.

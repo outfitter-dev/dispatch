@@ -7,6 +7,7 @@ from outfitter.dispatch.client.events import (
     GoalCleared,
     GoalUpdated,
     ItemCompleted,
+    ItemStarted,
     LaneIdle,
     ServerRequestReceived,
     StatusChanged,
@@ -46,6 +47,16 @@ def test_item_completed_carries_item_id() -> None:
     assert project_notification("item/completed", {"threadId": "L1", "itemId": "I9"}) == [
         ItemCompleted("L1", "I9")
     ]
+
+
+def test_canonical_item_notifications_carry_full_item_and_turn() -> None:
+    item: dict[str, object] = {"id": "I9", "type": "agentMessage", "text": "done"}
+    assert project_notification(
+        "item/started", {"threadId": "L1", "turnId": "T1", "item": item}
+    ) == [ItemStarted("L1", "I9", "T1", item)]
+    assert project_notification(
+        "item/completed", {"threadId": "L1", "turnId": "T1", "item": item}
+    ) == [ItemCompleted("L1", "I9", "T1", item)]
 
 
 def test_goal_and_compaction_notifications_project_to_activity_events() -> None:
