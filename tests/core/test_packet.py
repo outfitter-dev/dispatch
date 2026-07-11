@@ -45,6 +45,15 @@ def test_load_packet_requires_directory(tmp_path: Path) -> None:
         load_packet(missing)
 
 
+def test_load_packet_roundtrips_permission_profile(tmp_path: Path) -> None:
+    pkt = _packet(tmp_path)
+    (pkt / "dispatch.toml").write_text('permission_profile = ":read-only"\n')
+
+    content = load_packet(pkt)
+
+    assert content.settings.permission_profile == ":read-only"
+
+
 def test_load_packet_rejects_non_object_schema(tmp_path: Path) -> None:
     pkt = _packet(tmp_path)
     (pkt / "output.schema.json").write_text(json.dumps([1, 2, 3]))

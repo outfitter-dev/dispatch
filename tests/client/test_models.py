@@ -15,6 +15,8 @@ from outfitter.dispatch.client.models import (
     ModelListParams,
     ModelListResult,
     ModelServiceTier,
+    PermissionProfileListParams,
+    PermissionProfileListResult,
     SandboxPolicy,
     TextInput,
     ThreadCompactStartParams,
@@ -124,6 +126,31 @@ def test_thread_start_includes_rich_session_options() -> None:
     assert dumped["serviceTier"] == "priority"
     assert dumped["model"] == "test-model"
     assert dumped["modelProvider"] == "openai"
+
+
+def test_thread_start_projects_permission_profile_to_permissions() -> None:
+    params = ThreadStartParams(cwd="/work", permissions=":workspace")
+    assert params.model_dump(by_alias=True, exclude_none=True)["permissions"] == ":workspace"
+    with pytest.raises(ValueError, match="cannot be combined"):
+        ThreadStartParams(cwd="/work", permissions=":workspace", sandbox="workspace-write")
+
+
+def test_permission_profile_page_models_use_current_wire_shape() -> None:
+    params = PermissionProfileListParams(cursor="1", cwd="/work", limit=25)
+    assert params.model_dump(by_alias=True, exclude_none=True) == {
+        "cursor": "1",
+        "cwd": "/work",
+        "limit": 25,
+    }
+    page = PermissionProfileListResult.model_validate(
+        {
+            "data": [{"id": ":workspace", "description": "Write files", "allowed": True}],
+            "nextCursor": "2",
+        }
+    )
+    assert page.data[0].id == ":workspace"
+    assert page.data[0].allowed is True
+    assert page.next_cursor == "2"
 
 
 def test_turn_start_sandbox_policy_is_object_and_camelcased() -> None:

@@ -18,6 +18,7 @@ from outfitter.dispatch.registry.models import (
     SERVER_REQUEST_TEXT_LIMIT,
     LaneRuntimeSettings,
     LaneSync,
+    PermissionProfileEntry,
     ProviderThreadObservation,
     QueuedMessage,
     Subscription,
@@ -276,6 +277,69 @@ async def test_model_catalog_and_lane_model_settings_roundtrip(store: Registry) 
     got = await store.get_model_catalog_entry("gpt-5.5")
     assert got == refreshed.model_copy(update={"first_seen_at": now})
     assert await store.list_model_catalog() == [got]
+
+
+async def test_permission_profile_catalog_is_scoped_and_replaced(store: Registry) -> None:
+    first = PermissionProfileEntry(
+        id=":workspace",
+        cwd="/work/a",
+        description="Write files",
+        allowed=True,
+        first_seen_at=store.now_iso(),
+        last_seen_at=store.now_iso(),
+    )
+    await store.replace_permission_profiles("/work/a", [first])
+    await store.replace_permission_profiles(
+        "/work/b", [first.model_copy(update={"cwd": "/work/b", "allowed": False})]
+    )
+    refreshed = first.model_copy(
+        update={"description": "Workspace access", "last_seen_at": "2026-06-03T12:05:00+00:00"}
+    )
+    await store.replace_permission_profiles("/work/a", [refreshed])
+
+    assert await store.list_permission_profiles(cwd="/work/a") == [refreshed]
+    scoped = await store.get_permission_profile(":workspace", cwd="/work/b")
+    assert scoped is not None and scoped.allowed is False
+    await store.replace_permission_profiles("/work/a", [])
+    assert await store.list_permission_profiles(cwd="/work/a") == []
+
+
+async def test_v20_migration_adds_permission_catalog_and_runtime_profile(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "registry-v19.db"
+    conn = await aiosqlite.connect(db)
+    await conn.executescript(
+        """
+        CREATE TABLE lane_runtime_settings (
+            lane TEXT PRIMARY KEY,
+            sandbox TEXT,
+            approval_policy TEXT,
+            approvals_reviewer TEXT,
+            effort TEXT,
+            summary TEXT,
+            model TEXT,
+            service_tier TEXT,
+            output_schema TEXT,
+            personality TEXT,
+            updated_at TEXT NOT NULL
+        );
+        PRAGMA user_version = 19;
+        """
+    )
+    await conn.commit()
+    await conn.close()
+
+    migrated = await Registry.open(db, now=_clock)
+    try:
+        async with migrated._conn.execute("PRAGMA table_info(lane_runtime_settings)") as cur:
+            runtime_columns = {str(row["name"]) for row in await cur.fetchall()}
+        async with migrated._conn.execute("PRAGMA table_info(permission_profiles)") as cur:
+            catalog_columns = {str(row["name"]) for row in await cur.fetchall()}
+        assert "permission_profile" in runtime_columns
+        assert {"id", "cwd", "allowed", "last_seen_at"} <= catalog_columns
+    finally:
+        await migrated.close()
 
 
 async def test_v13_migration_adds_model_capability_columns(tmp_path: Path) -> None:
@@ -1716,7 +1780,7 @@ async def test_v17_migration_adds_replace_in_place_provider_capacity_table(
         async with migrated._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
         assert row is not None
-        assert int(row[0]) == SCHEMA_VERSION == 19
+        assert int(row[0]) == SCHEMA_VERSION == 20
     finally:
         await migrated.close()
 

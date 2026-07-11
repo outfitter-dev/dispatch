@@ -78,6 +78,9 @@ class NewInput(BaseModel):
     send: bool = Field(default=True, description="Send the initial message when text is present.")
     cwd: str | None = Field(default=None, description="Working directory for config discovery.")
     prefix: str | None = Field(default=None, description="Name prefix template.")
+    permission_profile: str | None = Field(
+        default=None, description="Named Codex permission profile for the thread."
+    )
     sandbox: ThreadSandbox | None = Field(default=None, description="Thread sandbox mode.")
     approval_policy: ApprovalPolicy | None = Field(default=None, description="Approval policy.")
     approvals_reviewer: ApprovalsReviewer | None = Field(
@@ -395,6 +398,9 @@ class ForkInput(BaseModel):
     lane: str = Field(description=SOURCE_THREAD_SELECTOR_DESCRIPTION)
     name: str = Field(description="Name for the new forked lane.")
     cwd: str | None = Field(default=None, description="Working directory override for the fork.")
+    permission_profile: str | None = Field(
+        default=None, description="Named Codex permission profile override for the fork."
+    )
     sandbox: ThreadSandbox | None = Field(
         default=None, description="Sandbox override for the fork."
     )
@@ -416,6 +422,18 @@ class ForkInput(BaseModel):
         description="Fork history through this turn id, inclusive.",
     )
     ephemeral: bool = Field(default=False, description="Create an ephemeral fork.")
+
+    @model_validator(mode="after")
+    def _permission_profile_is_exclusive(self) -> ForkInput:
+        if self.permission_profile is not None and any(
+            value is not None
+            for value in (self.sandbox, self.approval_policy, self.approvals_reviewer)
+        ):
+            raise ValueError(
+                "permission_profile cannot be combined with sandbox, approval_policy, "
+                "or approvals_reviewer"
+            )
+        return self
 
 
 class RollbackInput(BaseModel):
@@ -463,6 +481,16 @@ class ModelsInput(BaseModel):
         default=True, description="Refresh from the Codex App Server before returning the catalog."
     )
     include_hidden: bool = Field(default=False, description="Include hidden model catalog rows.")
+
+
+class PermissionProfilesInput(BaseModel):
+    refresh: bool = Field(
+        default=True, description="Refresh from the Codex App Server before returning profiles."
+    )
+    cwd: str = Field(default=".", description="Project directory used to resolve permissions.")
+    include_disallowed: bool = Field(
+        default=False, description="Include profiles blocked by effective requirements."
+    )
 
 
 class UsageInput(BaseModel):
@@ -861,6 +889,7 @@ class LaunchInputSource(BaseModel):
 class LaunchSettingsView(BaseModel):
     """Effective lane settings a launch would use (no secrets, no mutation)."""
 
+    permission_profile: str | None = None
     sandbox: str | None = None
     approval_policy: str | None = None
     approvals_reviewer: str | None = None
@@ -1212,6 +1241,24 @@ class ModelCatalogOutput(BaseModel):
     hint: str | None = None
     configured_default: ModelConfigView
     models: list[ModelCatalogItem]
+
+
+class PermissionProfileItem(BaseModel):
+    id: str
+    description: str | None = None
+    allowed: bool
+    source: str
+    last_seen_at: str
+    freshness_seconds: int | None = None
+
+
+class PermissionProfilesOutput(BaseModel):
+    cwd: str
+    refreshed_at: str | None = None
+    source: Literal["app-server", "registry"]
+    catalog_state: Literal["ready", "empty", "unsupported"]
+    hint: str | None = None
+    profiles: list[PermissionProfileItem]
 
 
 class UsageWindowView(BaseModel):

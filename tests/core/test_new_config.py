@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from outfitter.dispatch.config import config_path
 from outfitter.dispatch.contracts.errors import ValidationError
 from outfitter.dispatch.core.new_config import NewSettings, resolve_new
 
@@ -116,3 +117,50 @@ def test_resolve_new_does_not_double_prefix(tmp_path: Path) -> None:
         cli=NewSettings(cwd=str(tmp_path), prefix="[dispatch]"),
     )
     assert resolved.display_name == "[dispatch] review"
+
+
+def test_resolve_new_merges_global_and_repo_permission_profile_presets(
+    tmp_path: Path,
+) -> None:
+    global_path = config_path()
+    global_path.parent.mkdir(parents=True)
+    global_path.write_text(
+        '[defaults]\nmodel = "global-model"\n[presets.safe]\npermission_profile = ":read-only"\n'
+    )
+    repo = tmp_path / "repo"
+    (repo / ".dispatch").mkdir(parents=True)
+    (repo / ".dispatch" / "config.toml").write_text('[presets.safe]\neffort = "low"\n')
+
+    resolved = resolve_new(name="work", presets=["safe"], cli=NewSettings(cwd=str(repo)))
+
+    assert resolved.settings.model == "global-model"
+    assert resolved.settings.permission_profile == ":read-only"
+    assert resolved.settings.effort == "low"
+
+
+def test_resolve_new_later_profile_clears_inherited_granular_policy(tmp_path: Path) -> None:
+    (tmp_path / ".dispatch").mkdir()
+    (tmp_path / ".dispatch" / "config.toml").write_text(
+        '[defaults]\nsandbox = "read-only"\n[presets.profile]\npermission_profile = ":workspace"\n'
+    )
+
+    resolved = resolve_new(name="work", presets=["profile"], cli=NewSettings(cwd=str(tmp_path)))
+
+    assert resolved.settings.permission_profile == ":workspace"
+    assert resolved.settings.sandbox is None
+
+
+def test_resolve_new_later_sandbox_clears_inherited_profile(tmp_path: Path) -> None:
+    (tmp_path / ".dispatch").mkdir()
+    (tmp_path / ".dispatch" / "config.toml").write_text(
+        '[defaults]\npermission_profile = ":read-only"\n'
+    )
+
+    resolved = resolve_new(
+        name="work",
+        presets=[],
+        cli=NewSettings(cwd=str(tmp_path), sandbox="workspace-write"),
+    )
+
+    assert resolved.settings.permission_profile is None
+    assert resolved.settings.sandbox == "workspace-write"

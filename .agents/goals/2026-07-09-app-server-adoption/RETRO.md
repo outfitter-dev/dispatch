@@ -2,7 +2,7 @@
 
 Date started: 2026-07-09
 Date finalized: pending
-Status: Active - DIS-18 submission
+Status: Active - DIS-46 submission
 Spec: `.agents/goals/2026-07-09-app-server-adoption/SPEC.md`
 Goal: `.agents/goals/2026-07-09-app-server-adoption/GOAL.md`
 Prompt: `.agents/goals/2026-07-09-app-server-adoption/PROMPT.md`
@@ -13,15 +13,14 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 - Objective: land the clear App Server 0.144 adoption work.
 - Completion horizon: merged, tracker-reconciled, dogfooded, clean `main`.
 - Authority used: Linear planning plus a dedicated Graphite packet commit.
-- Outcome: preparation, DIS-42, DIS-44, DIS-45, DIS-35, and DIS-39 are merged;
-  DIS-18 is locally complete and awaiting submission.
-- Tracker/PR/source-control state: PRs #73-#81 merged; DIS-18 is on its dedicated
-  Graphite branch and GitHub currently has no open PRs. Independent release PR
-  #81 merged after this branch started, so DIS-18 must restack onto current main
-  before submission; release/publish work remains outside this goal.
+- Outcome: preparation, DIS-42, DIS-44, DIS-45, DIS-35, DIS-39, and DIS-18 are
+  merged; DIS-46 is locally complete and awaiting submission.
+- Tracker/PR/source-control state: PRs #73-#82 merged; DIS-46 is on its dedicated
+  Graphite branch above current `main`. Release/publish work remains outside
+  this goal.
 - Verification: prompt gate passed at 3,752 characters with no placeholders.
-- Review state: earlier milestones are clean; DIS-18 round 6 is 5/5 with all
-  round 1-5 findings verified fixed and no open P0-P2 findings.
+- Review state: earlier milestones are clean; both DIS-46 round 2 reviews are
+  5/5 with all round 1 findings fixed and no open P0-P2 findings.
 - Remaining risks: partial provider history views,
   live scenario entitlement/capacity, and remaining milestone stack order.
 
@@ -33,7 +32,7 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 - Verification blockers: none known.
 - Tracker blockers: none; issues and Linear adoption plan exist.
 - Authority blockers: release/publish intentionally excluded.
-- Next action: submit DIS-18, reconcile hosted checks and review, then merge the milestone.
+- Next action: submit DIS-46, reconcile hosted checks and review, then merge the milestone.
 
 ## Goal Amendments
 
@@ -226,6 +225,32 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 - Next: commit and submit DIS-18, reconcile hosted checks and review, merge
   through Graphite, update Linear, then continue DIS-46.
 - Blockers: none.
+
+2026-07-11 - DIS-46 permission profiles and preset integration
+- Added typed, cursor-guarded `permissionProfile/list` support and a cwd-scoped
+  durable catalog with source, allowed state, and freshness. The generated
+  manifest now distinguishes stable profile discovery from the experimental
+  `permissions` thread/turn field and normalizes alpha version labels.
+- Added one authored `permissions` read op deriving top-level CLI schema/help
+  and grouped daemon-read MCP behavior. `new`, packets, global/repo defaults,
+  named presets, fork, follow-up sends, queue delivery, and daemon resume share
+  one persisted `permission_profile` setting without storing provider secrets.
+- Precedence is symmetric: a later named profile clears inherited granular
+  sandbox/approval settings, while later granular settings clear an inherited
+  profile. Same-layer conflicts remain invalid. Persisted profiles are
+  cwd-revalidated before resume; unavailable, disallowed, or older unsupported
+  providers fail closed and leave the lane visibly `error`.
+- Review round 1 found two unique P1s and two P2s across the code/surface pair:
+  restart revalidation, layered precedence, filtered freshness, and missing
+  mechanism distinction. Round 2 verified every repair and returned 5/5 clean
+  on both sides with no open P0-P2.
+- Verification: `just check` passed with 575 tests and 16 live tests deselected;
+  strict mypy/Ruff and package gates passed. The isolated App Server test listed
+  and applied `:read-only` without a turn. An isolated public daemon/CLI smoke
+  returned all three current profiles, and schema/help/MCP parity stayed derived.
+- Next: commit/submit DIS-46, reconcile hosted checks and Linear, merge through
+  Graphite, then continue DIS-47.
+- Blockers: none.
 ```
 
 ## Review Log
@@ -255,6 +280,10 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 | DIS-18 r4 | shared SQLite write ownership and evidence | report plus chat-only review | 2/5 | changes requested | 2 | One P1 and one P2; write boundary and evidence fixed |
 | DIS-18 r5 | full prior-finding reconciliation | chat-only review | 2/5 | changes requested | 1 | One P1 dirty-read gap; all public registry access serialized |
 | DIS-18 r6 | full prior-finding reconciliation | coordinator read-only review | 5/5 | clean | 0 | All round 1-5 findings verified fixed; no open P0-P2 |
+| DIS-46 r1 code | protocol/config/storage/restart | `tmp/reviews/dis-46/code-round-1.json` | 3/5 | changes requested | 2 | One P1 and one P2; fixed |
+| DIS-46 r1 surface | precedence/surfaces/docs | `tmp/reviews/dis-46/surface-round-1.json` | 3/5 | changes requested | 3 | Two P1 and one P2; fixed |
+| DIS-46 r2 code | protocol/config/storage/restart | `tmp/reviews/dis-46/code-round-2.json` | 5/5 | clean | 0 | Prior findings verified fixed; 265 focused tests |
+| DIS-46 r2 surface | precedence/surfaces/docs | `tmp/reviews/dis-46/surface-round-2.json` | 5/5 | clean | 0 | All prior findings fixed; no new P0-P2 |
 
 ## Verification Log
 
@@ -282,6 +311,10 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 | `bounded_history_sync.toml` | DIS-18 | passed | Persisted unmanaged Codex thread proved raw-id registration, sync-attributed indexing, public bounds, observation, and stable re-sync |
 | focused backfill/sync/surface review suite | DIS-18 | passed | 285 tests passed after the final review repair |
 | `dispatch schema sync` / `sync --help` / package inspection | DIS-18 | passed | Derived bounds are present; wheel contains backfill and the updated skill |
+| `just check` | DIS-46 | passed | 575 tests passed, 16 live tests deselected; strict mypy/Ruff and package gates passed |
+| targeted App Server permission profile test | DIS-46 | passed | Paginated stable catalog and experimental `permissions` thread start succeeded without a model turn |
+| isolated public daemon/CLI smoke | DIS-46 | passed | `permissions --json` returned current cwd-aware allowed profiles; daemon stopped cleanly |
+| derived schema/help/MCP and manifest | DIS-46 | passed | One authored op covers CLI/MCP; manifest guards stable list and experimental launch fields |
 
 ## Prompt / Goal Alignment
 
@@ -319,7 +352,8 @@ Refs: `.agents/goals/2026-07-09-app-server-adoption/REFS.md`
 | DIS-39 | In Progress | Usage surface queued above DIS-35 |
 | PR #79 / DIS-35 | merged / Done | Capacity substrate; `12da706`; checks and review clean |
 | PR #80 / DIS-39 | merged / Done | Derived usage surface; `dd0f85e`; checks and review clean |
-| DIS-18 | In Progress | Local implementation and 5/5 review complete; submission pending |
+| PR #82 / DIS-18 | merged / Done | Bounded incremental history sync; `18b57cf`; checks and review clean |
+| DIS-46 | In Progress | Local implementation and paired 5/5 review complete; submission pending |
 
 ## Follow-Ups
 

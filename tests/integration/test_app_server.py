@@ -64,6 +64,19 @@ async def test_read_only_turn_returns_pong(client: AppServerClient, work_dir: Pa
     assert "pong" in text.lower()
 
 
+async def test_permission_profiles_list_and_apply_without_a_turn(
+    client: AppServerClient, work_dir: Path
+) -> None:
+    profiles = await client.permission_profile_list(cwd=str(work_dir), limit=1)
+    allowed = {profile.id for profile in profiles if profile.allowed}
+    assert ":read-only" in allowed
+
+    thread = await client.thread_start(
+        cwd=str(work_dir), permission_profile=":read-only", ephemeral=True
+    )
+    assert thread.id
+
+
 async def test_inject_items_then_recall(client: AppServerClient, work_dir: Path) -> None:
     thread = await client.thread_start(cwd=str(work_dir), sandbox="read-only", ephemeral=True)
     await client.inject_items(

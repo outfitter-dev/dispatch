@@ -97,5 +97,17 @@ def test_action_schema_and_annotations_from_op() -> None:
         "status",
         "log",
         "models",
+        "permissions",
         "usage",
+    }
+    permissions_schema = next(
+        schema
+        for schema in daemon_read.inputSchema["oneOf"]
+        if schema["properties"]["op"]["const"] == "permissions"
+    )
+    assert set(permissions_schema["properties"]) == {
+        "op",
+        "refresh",
+        "cwd",
+        "include_disallowed",
     }

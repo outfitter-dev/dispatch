@@ -122,6 +122,9 @@ from .models import (
     NewInput,
     NewLane,
     OpenInput,
+    PermissionProfileItem,
+    PermissionProfilesInput,
+    PermissionProfilesOutput,
     QueryInput,
     QueryMatch,
     QueryOutput,
@@ -165,6 +168,7 @@ from .models import (
     WatchInput,
     WatchOutput,
 )
+from .permission_profiles import refresh_permission_profiles, resolve_permission_profile
 from .selectors import resolve_managed_selector, resolve_thread_selector
 from .server_request_policy import expected_response
 from .server_requests import respond_to_server_request
@@ -590,6 +594,7 @@ async def plan_new_lane(inp: NewInput, ctx: Ctx) -> LaunchPlan:
         workspace=workspace.view,
         packet=_packet_str(launch),
         settings=LaunchSettingsView(
+            permission_profile=s.permission_profile,
             sandbox=s.sandbox,
             approval_policy=s.approval_policy,
             approvals_reviewer=s.approvals_reviewer,
@@ -647,8 +652,12 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         service_tier=settings.service_tier,
     )
     explicit_service_tier = resolved_model.resolved_service_tier if settings.service_tier else None
+    permission_profile = await resolve_permission_profile(
+        ctx, settings.permission_profile, cwd=str(effective_cwd)
+    )
     thread = await ctx.client.thread_start(
         cwd=str(effective_cwd),
+        permission_profile=permission_profile,
         sandbox=settings.sandbox,
         approval_policy=settings.approval_policy,
         approvals_reviewer=settings.approvals_reviewer,
@@ -672,6 +681,7 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         runtime_settings_for_lane(
             lane=lane.id,
             updated_at=ctx.registry.now_iso(),
+            permission_profile=permission_profile,
             sandbox=settings.sandbox,
             approval_policy=settings.approval_policy,
             approvals_reviewer=settings.approvals_reviewer,
@@ -746,6 +756,7 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
                 lane.id,
                 settings.text,
                 cwd=str(effective_cwd),
+                permission_profile=permission_profile,
                 approval_policy=settings.approval_policy,
                 approvals_reviewer=settings.approvals_reviewer,
                 sandbox_policy=(
@@ -1269,6 +1280,7 @@ async def send(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
             lane.id,
             inp.text,
             cwd=lane.cwd or ".",
+            permission_profile=turn_settings.permission_profile,
             approval_policy=turn_settings.approval_policy,
             approvals_reviewer=turn_settings.approvals_reviewer,
             sandbox_policy=turn_settings.sandbox_policy,
@@ -1315,6 +1327,7 @@ async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
                     lane.id,
                     text,
                     cwd=lane.cwd or ".",
+                    permission_profile=turn_settings.permission_profile,
                     approval_policy=turn_settings.approval_policy,
                     approvals_reviewer=turn_settings.approvals_reviewer,
                     sandbox_policy=turn_settings.sandbox_policy,
@@ -2568,9 +2581,14 @@ async def fork(inp: ForkInput, ctx: Ctx) -> LaneRef:
         service_tier=inp.service_tier,
     )
     explicit_service_tier = resolved_model.resolved_service_tier if inp.service_tier else None
+    fork_cwd = inp.cwd or source.cwd or "."
+    permission_profile = await resolve_permission_profile(
+        ctx, inp.permission_profile, cwd=str(Path(fork_cwd).expanduser().resolve())
+    )
     thread = await ctx.client.thread_fork(
         source.id,
         cwd=inp.cwd or source.cwd,
+        permission_profile=permission_profile,
         sandbox=inp.sandbox,
         approval_policy=inp.approval_policy,
         approvals_reviewer=inp.approvals_reviewer,
@@ -2600,8 +2618,9 @@ async def fork(inp: ForkInput, ctx: Ctx) -> LaneRef:
         runtime_settings_for_lane(
             lane=lane.id,
             updated_at=ctx.registry.now_iso(),
-            sandbox=inp.sandbox or "read-only",
-            approval_policy=inp.approval_policy or "never",
+            permission_profile=permission_profile,
+            sandbox=inp.sandbox,
+            approval_policy=inp.approval_policy,
             approvals_reviewer=inp.approvals_reviewer,
             model=inp.model,
             service_tier=explicit_service_tier,
@@ -2798,6 +2817,53 @@ async def models(inp: ModelsInput, ctx: Ctx) -> ModelCatalogOutput:
             model_reasoning_effort=config.model_reasoning_effort,
         ),
         models=[_model_catalog_item(entry) for entry in entries],
+    )
+
+
+async def permission_profiles(inp: PermissionProfilesInput, ctx: Ctx) -> PermissionProfilesOutput:
+    cwd = str(Path(inp.cwd).expanduser().resolve())
+    source: Literal["app-server", "registry"] = "registry"
+    state: Literal["ready", "empty", "unsupported"]
+    hint: str | None = None
+    if inp.refresh:
+        try:
+            snapshot = await refresh_permission_profiles(ctx, cwd=cwd)
+        except ClientAppServerError as exc:
+            if exc.code != -32601:
+                raise
+            entries = await ctx.registry.list_permission_profiles(cwd=cwd)
+            state = "unsupported"
+            hint = "installed Codex App Server does not support permissionProfile/list"
+        else:
+            entries = snapshot.profiles
+            source = "app-server"
+            state = "ready" if entries else "empty"
+    else:
+        entries = await ctx.registry.list_permission_profiles(cwd=cwd)
+        state = "ready" if entries else "empty"
+        if not entries:
+            hint = "run dispatch permissions without --no-refresh to refresh the catalog"
+    refreshed_at = max((entry.last_seen_at for entry in entries), default=None)
+    if not inp.include_disallowed:
+        entries = [entry for entry in entries if entry.allowed]
+    now = datetime.fromisoformat(ctx.registry.now_iso())
+    return PermissionProfilesOutput(
+        cwd=cwd,
+        refreshed_at=refreshed_at,
+        source=source,
+        catalog_state=state,
+        hint=hint,
+        profiles=[
+            PermissionProfileItem(
+                id=entry.id,
+                description=entry.description,
+                allowed=entry.allowed,
+                source=entry.source,
+                last_seen_at=entry.last_seen_at,
+                freshness_seconds=_freshness_seconds(now, entry.last_seen_at),
+            )
+            for entry in entries
+        ],
     )
 
 

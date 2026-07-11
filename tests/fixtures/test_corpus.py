@@ -96,6 +96,17 @@ def test_app_server_protocol_manifest_tracks_v0144_capabilities() -> None:
     assert "thread/deleted" in manifest["server_notifications"]
     assert set(manifest["thread_item_types"]) == CODEX_ITEM_TYPES
     assert "supportsPersonality" in manifest["selected_shapes"]["model_fields"]
+    assert {"cursor", "cwd", "limit"} == set(
+        manifest["selected_shapes"]["permission_profile_list_fields"]
+    )
+    assert {"data", "nextCursor"} == set(
+        manifest["selected_shapes"]["permission_profile_result_fields"]
+    )
+    assert {"allowed", "description", "id"} == set(
+        manifest["selected_shapes"]["permission_profile_summary_fields"]
+    )
+    assert "permissions" in manifest["selected_shapes"]["thread_start_experimental_fields"]
+    assert "permissions" in manifest["selected_shapes"]["turn_start_experimental_fields"]
     assert set(manifest["selected_shapes"]["account_types"]) == {
         "amazonBedrock",
         "apiKey",

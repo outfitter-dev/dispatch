@@ -23,6 +23,7 @@ uv sync
 uv run dispatch --help
 uv run dispatch doctor --no-app-server
 uv run dispatch models --no-refresh
+uv run dispatch permissions --no-refresh
 uv run dispatch usage --no-refresh
 uv run dispatch up --json
 uv run dispatch daemon status
@@ -112,6 +113,11 @@ Use `dispatch models` before pinning model or service-tier presets; Dispatch
 resolves aliases such as `fast` from the live App Server model catalog, accepts
 model-defined reasoning efforts, reports input/personality capabilities, and
 keeps omitted model/tier values on Codex defaults.
+Use `dispatch permissions --cwd /repo` before selecting a named Codex
+permission profile. Profiles are project-aware and may be disallowed by
+effective requirements. `new --permission-profile <id>` validates the live
+catalog before launch; it is mutually exclusive with sandbox, approval-policy,
+and approval-reviewer overrides so one authority source remains unambiguous.
 
 For the operator guide, CLI/MCP examples, triggers, and plugin setup, start at
 [`docs/usage/README.md`](docs/usage/README.md).

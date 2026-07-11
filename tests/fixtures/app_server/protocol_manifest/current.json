@@ -160,6 +160,20 @@
       "upgrade",
       "upgradeInfo"
     ],
+    "permission_profile_list_fields": [
+      "cursor",
+      "cwd",
+      "limit"
+    ],
+    "permission_profile_result_fields": [
+      "data",
+      "nextCursor"
+    ],
+    "permission_profile_summary_fields": [
+      "allowed",
+      "description",
+      "id"
+    ],
     "rate_limit_result_fields": [
       "rateLimitResetCredits",
       "rateLimits",
@@ -290,6 +304,50 @@
       "serviceTier",
       "thread"
     ],
+    "thread_start_experimental_fields": [
+      "allowProviderModelFallback",
+      "approvalPolicy",
+      "approvalsReviewer",
+      "baseInstructions",
+      "config",
+      "cwd",
+      "developerInstructions",
+      "dynamicTools",
+      "environments",
+      "ephemeral",
+      "experimentalRawEvents",
+      "historyMode",
+      "mockExperimentalField",
+      "model",
+      "modelProvider",
+      "multiAgentMode",
+      "permissions",
+      "personality",
+      "runtimeWorkspaceRoots",
+      "sandbox",
+      "selectedCapabilityRoots",
+      "serviceName",
+      "serviceTier",
+      "sessionStartSource",
+      "threadSource"
+    ],
+    "thread_start_fields": [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "baseInstructions",
+      "config",
+      "cwd",
+      "developerInstructions",
+      "ephemeral",
+      "model",
+      "modelProvider",
+      "personality",
+      "sandbox",
+      "serviceName",
+      "serviceTier",
+      "sessionStartSource",
+      "threadSource"
+    ],
     "thread_turns_list_fields": [
       "cursor",
       "itemsView",
@@ -301,6 +359,43 @@
       "backwardsCursor",
       "data",
       "nextCursor"
+    ],
+    "turn_start_experimental_fields": [
+      "additionalContext",
+      "approvalPolicy",
+      "approvalsReviewer",
+      "clientUserMessageId",
+      "collaborationMode",
+      "cwd",
+      "effort",
+      "environments",
+      "input",
+      "model",
+      "multiAgentMode",
+      "outputSchema",
+      "permissions",
+      "personality",
+      "responsesapiClientMetadata",
+      "runtimeWorkspaceRoots",
+      "sandboxPolicy",
+      "serviceTier",
+      "summary",
+      "threadId"
+    ],
+    "turn_start_fields": [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "clientUserMessageId",
+      "cwd",
+      "effort",
+      "input",
+      "model",
+      "outputSchema",
+      "personality",
+      "sandboxPolicy",
+      "serviceTier",
+      "summary",
+      "threadId"
     ],
     "usage_result_fields": [
       "dailyUsageBuckets",

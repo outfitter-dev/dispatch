@@ -82,6 +82,16 @@ class ModelCatalogEntry(BaseModel):
     source: str = "app-server"
 
 
+class PermissionProfileEntry(BaseModel):
+    id: str
+    cwd: str
+    description: str | None = None
+    allowed: bool
+    first_seen_at: str
+    last_seen_at: str
+    source: str = "app-server"
+
+
 class LaneModelSettings(BaseModel):
     lane: str
     model_provider: str | None = None
@@ -96,6 +106,7 @@ class LaneModelSettings(BaseModel):
 
 class LaneRuntimeSettings(BaseModel):
     lane: str
+    permission_profile: str | None = None
     sandbox: ThreadSandbox | None = None
     approval_policy: ApprovalPolicy | None = None
     approvals_reviewer: ApprovalsReviewer | None = None

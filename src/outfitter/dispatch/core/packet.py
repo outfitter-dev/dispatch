@@ -58,6 +58,7 @@ class _PacketConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    permission_profile: str | None = None
     sandbox: ThreadSandbox | None = None
     approval_policy: ApprovalPolicy | None = None
     approvals_reviewer: ApprovalsReviewer | None = None

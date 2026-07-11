@@ -74,6 +74,12 @@ Lifecycle/threads/turns: `thread/start resume fork read list loaded/list archive
   `additionalSpeedTiers`; user-facing labels such as `fast` can map to a
   server-facing tier id such as `priority` when the catalog advertises a tier
   named `Fast`.
+- `permissionProfile/list` is stable and paginated with `{cwd,cursor,limit}`;
+  rows are `{id,description,allowed}` under `result.data`. On the local
+  `0.144.0-alpha.4` binary, `/dispatch` returned `:read-only`, `:workspace`, and
+  `:danger-full-access`. Selecting a profile uses the experimental
+  `permissions` field on thread/turn start and cannot be combined with the
+  corresponding sandbox field.
 - `config/read` reports the current Codex defaults (model/provider,
   reasoning effort, service tier). Dispatch records those defaults for output
   truth but does not send omitted model/tier values just to mirror config.

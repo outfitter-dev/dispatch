@@ -29,6 +29,7 @@ The current canonical operator grammar is:
 - daemon reads: `daemon status`, `daemon log`
 - registry recovery: `registry migrate`
 - model catalog: `models`
+- permission profiles: `permissions`
 - provider capacity: `usage`
 - thread lifecycle/read/search: `new`, `attach`, `list`, `list --unmanaged`,
   `get`, `sync`, `tail`, `history`, `watch`, `search`, `query`
@@ -107,7 +108,7 @@ uv run dispatch new --name my-lane --goal "Loop until green." --text "Start with
 uv run dispatch new --name my-lane --preset reviewer --no-send
 ```
 
-Omit sandbox, approval, model, and service-tier settings when Codex defaults are
+Omit permission-profile, sandbox, approval, model, and service-tier settings when Codex defaults are
 acceptable. `dispatch new` omits unset policy/model fields from `thread/start`
 and initial `turn/start`, allowing Codex/App Server global, profile, and
 project-local configuration to apply. Add explicit values only when the lane
@@ -222,6 +223,20 @@ service tiers before starting the thread. The catalog also reports model-defined
 reasoning efforts, input modalities, personality support, and upgrade targets.
 Do not guess current model ids or effort names from memory; use the catalog
 output and its `aliases` field.
+
+Before selecting a named Codex permission profile, query the cwd-aware catalog:
+
+```bash
+uv run dispatch permissions --cwd /path/to/repo
+uv run dispatch permissions --cwd /path/to/repo --include-disallowed
+uv run dispatch schema permissions
+```
+
+Use `--permission-profile <id>` on `new`, or set `permission_profile` in global
+or repo defaults/presets. Do not combine it with sandbox, approval-policy, or
+approval-reviewer overrides. Omit all of them when Codex defaults should apply.
+This is distinct from Dispatch `[policy]`, which governs how the daemon answers
+inbound interactive requests and does not select a Codex profile.
 
 Use the redacted provider inventory before routing optional work by capacity:
 
@@ -649,6 +664,7 @@ Use `schema` for derived input/output schemas:
 uv run dispatch schema send
 uv run dispatch schema "list --unmanaged"
 uv run dispatch schema models
+uv run dispatch schema permissions
 uv run dispatch schema usage
 uv run dispatch schema "goal set"
 ```
@@ -669,8 +685,8 @@ subcommand. Tools are grouped by workflow and safety boundary, and each call
 selects an `op` inside the tool. In this repo, the workspace-local Codex plugin
 lives at `plugins/dispatch`. It exposes these skills and the same MCP registry.
 Use the daemon-read MCP tool's `models` op before setting explicit model or
-service-tier arguments, and its `usage` op before making capacity-based routing
-decisions.
+service-tier arguments, its `permissions` op before selecting a named profile,
+and its `usage` op before making capacity-based routing decisions.
 The thread-write MCP tool's `fork` op accepts `last_turn_id` to fork through one
 completed turn, inclusive.
 The thread-read MCP tool derives the same topology inputs and outputs used by

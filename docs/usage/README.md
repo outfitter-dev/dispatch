@@ -215,7 +215,8 @@ uv run dispatch new \
   --text "Review the README for missing usage steps."
 ```
 
-`new` reads `.dispatch/config.toml` when present, applies presets left-to-right,
+`new` reads global `~/.dispatch/config.toml` settings first and then the nearest
+repo `.dispatch/config.toml`, applies presets left-to-right,
 decorates the name with the configured prefix, starts the lane, and sends the initial
 message when `--text` is present. Use `--no-send` to create/configure the lane without
 starting a turn:
@@ -260,10 +261,14 @@ developer_file = ".dispatch/instructions/builder.md"
 [presets.fast]
 service_tier = "fast"
 effort = "low"
+
+[presets.safe-profile]
+permission_profile = ":read-only"
 ```
 
-Preset order matters: later presets win, and CLI flags win over presets.
-Omit sandbox, approval, model, and service-tier fields unless you intentionally
+Preset order matters: global settings load first, repo settings override them,
+later presets win, and CLI flags win over presets. Omit permission-profile,
+sandbox, approval, model, and service-tier fields unless you intentionally
 want Dispatch to send explicit overrides. When these fields are omitted, Dispatch
 omits them from `thread/start` and the initial `turn/start` so Codex/App Server can
 apply its global, profile, and project-local configuration. Dispatch still records
@@ -289,6 +294,29 @@ and prints the available choices.
 `--no-refresh` reads the local catalog cache plus current config defaults. On a
 first run, an empty cache reports `catalog_state: "empty"` plus a hint to run
 `dispatch models` without `--no-refresh`.
+
+Discover project-aware Codex permission profiles before pinning one in a preset:
+
+```bash
+uv run dispatch permissions --cwd /path/to/repo
+uv run dispatch permissions --cwd /path/to/repo --include-disallowed
+uv run dispatch permissions --cwd /path/to/repo --no-refresh --json
+uv run dispatch schema permissions
+uv run dispatch new --name review --permission-profile :read-only --no-send
+```
+
+`permissions` reads every `permissionProfile/list` page and stores only profile
+id, description, allowed state, scope, source, and freshness. A named profile is
+mutually exclusive with `sandbox`, `approval_policy`, and `approvals_reviewer`;
+omit all four to inherit Codex defaults. Invalid or disallowed profiles fail
+before thread creation with the currently allowed choices. Older App Servers
+report `catalog_state: "unsupported"` rather than fabricating profiles.
+
+Codex permission profiles and Dispatch interactive-request policy are separate
+mechanisms. A Codex profile selects the provider's effective filesystem and
+execution permissions for a thread or turn. Dispatch `[policy]` settings decide
+how this daemon answers inbound approval, elicitation, and permission requests;
+they do not select or redefine a Codex permission profile.
 
 Inspect provider account and capacity inventory with the authored `usage` read:
 
@@ -336,7 +364,7 @@ at a **launch packet** — a directory of files instead of one-off shell strings
 
 ```text
 packet/
-  dispatch.toml          # safe subset of new settings (sandbox/model/effort/…)
+  dispatch.toml          # safe subset of new settings (permission/model/effort/...)
   goal.md                # native App Server goal (== --goal-file)
   prompt.md              # initial turn text (== --input-file)
   output.schema.json     # JSON Schema for structured turn output
@@ -1064,6 +1092,7 @@ uv run dispatch schema "list --unmanaged"
 uv run dispatch schema sync
 uv run dispatch schema watch
 uv run dispatch schema models
+uv run dispatch schema permissions
 uv run dispatch schema usage
 uv run dispatch schema "goal set"
 ```
@@ -1083,8 +1112,9 @@ uv run dispatch mcp
 MCP is grouped for agent ergonomics rather than one tool per op. Tools are grouped by
 workflow and safety boundary, for example thread read/write/destroy, trigger
 read/write/destroy, and daemon read tools. The daemon read tool includes the
-`models` and `usage` ops so agents can discover valid model/service-tier choices
-and current provider capacity without guessing. Each grouped call chooses an `op` inside the tool, and that op's
+`models`, `permissions`, and `usage` ops so agents can discover valid model,
+permission-profile, service-tier, and provider-capacity choices without
+guessing. Each grouped call chooses an `op` inside the tool, and that op's
 arguments/schema still derive from the same contract registry.
 The thread-write tool's `fork` op accepts `last_turn_id`, which asks App Server
 to fork history through that completed turn, inclusive.
