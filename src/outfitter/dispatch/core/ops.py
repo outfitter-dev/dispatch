@@ -74,6 +74,8 @@ from .models import (
     TriggerListInput,
     TriggerRemoved,
     TriggerView,
+    UsageInput,
+    UsageOutput,
     WatchInput,
     WatchOutput,
 )
@@ -551,6 +553,27 @@ MODELS = define_op(
     ],
 )
 
+USAGE = define_op(
+    id="usage",
+    summary="Read redacted provider account, capacity, and historical usage observations.",
+    input=UsageInput,
+    output=UsageOutput,
+    intent="read",
+    idempotent=True,
+    handler=handlers.usage,
+    examples=[
+        Example(
+            "empty-cache",
+            input={"refresh": False},
+            output={
+                "refreshed_providers": [],
+                "observations": [],
+                "hint": "run dispatch usage without --no-refresh to refresh local providers",
+            },
+        )
+    ],
+)
+
 INBOX_LIST = define_op(
     id="inbox-list",
     summary="List durable inbox messages for a thread.",
@@ -884,6 +907,7 @@ _ALL = (
     SEARCH,
     QUERY,
     MODELS,
+    USAGE,
     INBOX_LIST,
     INBOX_READ,
     INBOX_ACK,

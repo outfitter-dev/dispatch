@@ -290,6 +290,34 @@ and prints the available choices.
 first run, an empty cache reports `catalog_state: "empty"` plus a hint to run
 `dispatch models` without `--no-refresh`.
 
+Inspect provider account and capacity inventory with the authored `usage` read:
+
+```bash
+uv run dispatch usage
+uv run dispatch usage --no-refresh --json
+uv run dispatch usage --provider codex --host local
+uv run dispatch usage --all-hosts --no-refresh
+uv run dispatch usage --include-daily --stale-after-seconds 300
+uv run dispatch schema usage
+```
+
+`usage` refreshes supported local providers by default, then reads the
+provider-neutral observation store. The default response is compact: account
+type, masked label and fingerprint, plan, capacity windows, reset-credit
+availability, usage summary, source, confidence, and freshness. Daily buckets
+are bounded and opt-in with `--include-daily`. `--no-refresh` makes the command
+a local database read; provider, host, and config-scope filters also work for
+future mesh observations without changing the contract. The default host is
+`local`; use `--all-hosts` to inspect every observed machine.
+
+States are explicit: `ready`, `partial`, `signed_out`, `disabled`,
+`unsupported`, and `unavailable`. `stale` is separate from state and is computed
+from component and per-window timestamps using `--stale-after-seconds`; a
+rate-limit push does not make older account or historical usage facts look
+fresh. JSON never includes raw email, tokens, raw auth responses, credit
+balances, or reset-credit mutation ids. Reset credits are inventory only;
+Dispatch does not redeem them.
+
 Use `--goal` to create a native App Server goal before the initial message is sent.
 Slash commands in `--text` are not interpreted by dispatch; `--text "/goal ..."`
 is rejected so agents do not accidentally create a thread that looks goal-driven but
@@ -999,6 +1027,7 @@ uv run dispatch schema "list --unmanaged"
 uv run dispatch schema sync
 uv run dispatch schema watch
 uv run dispatch schema models
+uv run dispatch schema usage
 uv run dispatch schema "goal set"
 ```
 
@@ -1017,8 +1046,8 @@ uv run dispatch mcp
 MCP is grouped for agent ergonomics rather than one tool per op. Tools are grouped by
 workflow and safety boundary, for example thread read/write/destroy, trigger
 read/write/destroy, and daemon read tools. The daemon read tool includes the
-`models` op so agents can discover valid model/service-tier choices without
-guessing. Each grouped call chooses an `op` inside the tool, and that op's
+`models` and `usage` ops so agents can discover valid model/service-tier choices
+and current provider capacity without guessing. Each grouped call chooses an `op` inside the tool, and that op's
 arguments/schema still derive from the same contract registry.
 The thread-write tool's `fork` op accepts `last_turn_id`, which asks App Server
 to fork history through that completed turn, inclusive.

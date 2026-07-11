@@ -97,4 +97,5 @@ def test_action_schema_and_annotations_from_op() -> None:
         "status",
         "log",
         "models",
+        "usage",
     }

@@ -23,6 +23,7 @@ uv sync
 uv run dispatch --help
 uv run dispatch doctor --no-app-server
 uv run dispatch models --no-refresh
+uv run dispatch usage --no-refresh
 uv run dispatch up --json
 uv run dispatch daemon status
 ```

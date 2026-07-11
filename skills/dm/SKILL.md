@@ -29,12 +29,15 @@ If the environment is new, run `uv run dispatch doctor` once before messaging.
 Fix PATH, Codex auth, stale daemon files, registry, or plugin asset warnings
 before assuming a DM failure is about the target lane.
 
-The target should be an owned dispatch lane selected by dispatch ref when possible. Attached lanes are not
-turn-writable in v0, so dispatch will reject DM/send verbs against them.
+The target should be an owned dispatch lane selected by dispatch ref when
+possible. Attached lanes are turn-write locked by default. Dispatch permits
+DM/send verbs only when local config explicitly enables
+`[policy] allow_attached_writes = true`; check the lane's `writable`,
+`capabilities`, and `write_locked_reason` fields before sending.
 
 If the user wants to message an existing desktop Codex thread, attach/sync it
-only for observation unless they explicitly choose a different authority model
-after reading ADR-0005.
+only for observation unless they explicitly enable attached writes after
+reading ADR-0005 and ADR-0018.
 
 ## Handles And URIs
 
