@@ -74,6 +74,7 @@ from outfitter.dispatch.core.reactor import Reactor
 from outfitter.dispatch.core.triggers import TriggerRunner
 from outfitter.dispatch.registry.store import Registry
 from tests.fakes import FakeLaneClient, make_ctx
+from tests.fixtures import load_json
 from tests.fixtures.registry.builders import thread_item, thread_item_ref, thread_turn
 
 
@@ -1269,7 +1270,7 @@ async def test_history_indexed_views_do_not_truncate_before_filtering(
     assert sum(file.count for file in files.files) == item_count
 
 
-async def test_history_refresh_prunes_stale_indexed_items(store: Registry) -> None:
+async def test_history_refresh_preserves_live_items_omitted_from_replay(store: Registry) -> None:
     client = FakeLaneClient()
     client.read_result = {
         "thread": {
@@ -1304,10 +1305,126 @@ async def test_history_refresh_prunes_stale_indexed_items(store: Registry) -> No
     normal = await handlers.history(HistoryInput(lane="@alpha", view="items"), ctx)
     raw = await handlers.history(HistoryInput(lane="@alpha", view="items", raw=True), ctx)
 
-    assert [item.item_id for item in normal.items] == ["keep"]
+    assert [item.item_id for item in normal.items] == ["keep", "old"]
     assert [item.item_id for item in raw.items] == ["keep"]
     indexed_items = await store.list_thread_items(lane="lane-1", limit=None)
-    assert [item.item_id for item in indexed_items] == ["keep"]
+    assert [item.item_id for item in indexed_items] == ["old", "keep"]
+
+
+async def test_history_summary_and_items_share_additive_canonical_index(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.read_result = {
+        "thread": {
+            "id": "lane-1",
+            "turns": [
+                {
+                    "id": "t1",
+                    "status": "completed",
+                    "items": [{"id": "msg-1", "type": "agentMessage", "text": "done"}],
+                }
+            ],
+        }
+    }
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+    await store.upsert_thread_item(
+        thread_item(
+            lane="lane-1",
+            provider_thread_id="lane-1",
+            turn_id="t1",
+            item_id="cmd-live",
+        ).model_copy(
+            update={
+                "item_type": "commandExecution",
+                "tool": "shell",
+                "command": "pwd",
+                "status": "completed",
+                "success": True,
+            }
+        )
+    )
+
+    summary = await handlers.history(HistoryInput(lane="@alpha"), ctx)
+    items = await handlers.history(HistoryInput(lane="@alpha", view="items"), ctx)
+
+    assert summary.thread is not None
+    assert (summary.thread.items, summary.thread.tool_calls, summary.thread.unique_tools) == (
+        2,
+        1,
+        ["shell"],
+    )
+    assert {item.item_id for item in items.items} == {"cmd-live", "msg-1"}
+
+
+async def test_history_filters_and_projects_canonical_metadata(store: Registry) -> None:
+    client = FakeLaneClient()
+    payload = load_json("app_server", "thread_read", "canonical_items_v0144.json")
+    thread = payload["thread"]
+    assert isinstance(thread, dict)
+    thread["id"] = "lane-1"
+    client.read_result = payload
+    ctx = make_ctx(store, client)
+    await handlers.open_lane(OpenInput(name="alpha"), ctx)
+
+    tools = await handlers.history(
+        HistoryInput(
+            lane="@alpha",
+            view="items",
+            tool_server="linear",
+            tool_status="completed",
+            arg_key="id",
+        ),
+        ctx,
+    )
+    children = await handlers.history(
+        HistoryInput(
+            lane="@alpha",
+            view="items",
+            mentions_thread="019f0000-0000-7000-9000-000000000099",
+        ),
+        ctx,
+    )
+    summary = await handlers.history(HistoryInput(lane="@alpha"), ctx)
+
+    assert [item.item_id for item in tools.items] == ["i-mcp"]
+    tool = tools.items[0]
+    assert (tool.tool, tool.tool_server, tool.tool_status, tool.arguments) == (
+        "save_issue",
+        "linear",
+        "completed",
+        {"id": "DIS-44"},
+    )
+    assert {item.item_id for item in children.items} == {"i-collab", "i-subagent"}
+    assert all(item.child_thread_ids for item in children.items)
+    assert summary.thread is not None
+    assert summary.thread.subagents_count == 1
+    assert summary.thread.subagent_thread_ids == ["019f0000-0000-7000-9000-000000000099"]
+
+    sender = await handlers.history(
+        HistoryInput(
+            lane="@alpha",
+            view="items",
+            mentions_thread="019f0000-0000-7000-9000-000000000044",
+        ),
+        ctx,
+    )
+    assert [item.item_id for item in sender.items] == ["i-collab"]
+
+    large = load_json("app_server", "thread_read", "canonical_items_v0144.json")
+    large_thread = large["thread"]
+    assert isinstance(large_thread, dict)
+    large_thread["id"] = "lane-1"
+    turns = large_thread["turns"]
+    assert isinstance(turns, list) and isinstance(turns[0], dict)
+    items = turns[0]["items"]
+    assert isinstance(items, list)
+    mcp = next(item for item in items if isinstance(item, dict) and item.get("id") == "i-mcp")
+    assert isinstance(mcp, dict)
+    mcp["arguments"] = {"id": "DIS-44", "blob": "x" * 100_000}
+    client.read_result = large
+    bounded = await handlers.history(HistoryInput(lane="@alpha", view="items", arg_key="id"), ctx)
+    assert [item.item_id for item in bounded.items] == ["i-mcp"]
+    assert bounded.items[0].argument_keys == ["blob", "id"]
 
 
 async def test_watch_collects_bounded_raw_events(store: Registry) -> None:
@@ -2380,6 +2497,11 @@ async def test_query_filters_structural_refs_and_concrete_tool_metadata(
             update={
                 "item_type": "mcpToolCall",
                 "tool": "linear.save_issue",
+                "server": "codex_apps",
+                "status": "completed",
+                "arguments": {"id": "DIS-31"},
+                "duration_ms": 123,
+                "success": True,
                 "payload": payload,
                 "raw_retained": True,
             }
@@ -2415,6 +2537,12 @@ async def test_query_filters_structural_refs_and_concrete_tool_metadata(
                 ref_type="file",
                 ref_value="src/app.py",
             ),
+            thread_item_ref(
+                provider_thread_id=lane.id,
+                item_id="tool-1",
+                ref_type="thread",
+                ref_value="019f0000-0000-7000-9000-000000000099",
+            ),
         ],
     )
 
@@ -2437,8 +2565,15 @@ async def test_query_filters_structural_refs_and_concrete_tool_metadata(
     assert match.tool_server == "codex_apps"
     assert match.tool_status == "completed"
     assert match.duration_ms == 123
+    assert match.arguments == {"id": "DIS-31"}
+    assert match.success is True
     assert match.files == ["src/app.py"]
     assert {ref.type for ref in match.refs} >= {"tool", "tool_server", "tool_status", "file"}
+
+    child_out = await handlers.query(
+        QueryInput(mentions_thread="019f0000-0000-7000-9000-000000000099"), ctx
+    )
+    assert [match.item_id for match in child_out.matches] == ["tool-1"]
 
     await store.upsert_thread_item(
         thread_item(
@@ -2446,7 +2581,14 @@ async def test_query_filters_structural_refs_and_concrete_tool_metadata(
             provider_thread_id=lane.id,
             turn_id="turn-1",
             item_id="tool-2",
-        ).model_copy(update={"item_type": "mcpToolCall", "tool": "linear.save_issue"}),
+        ).model_copy(
+            update={
+                "item_type": "mcpToolCall",
+                "tool": "linear.save_issue",
+                "server": None,
+                "status": None,
+            }
+        ),
         refs=[
             thread_item_ref(
                 provider_thread_id=lane.id,
@@ -2468,6 +2610,28 @@ async def test_query_filters_structural_refs_and_concrete_tool_metadata(
     assert [match.item_id for match in ref_only_out.matches] == ["tool-2"]
     assert ref_only_out.matches[0].tool_server == "codex_apps"
     assert ref_only_out.matches[0].tool_status == "completed"
+
+
+async def test_query_reports_unsuccessful_command_as_errored(store: Registry) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    lane = await store.add_lane(id="L1", handle="@local", source="own")
+    await store.upsert_thread_item(
+        thread_item(lane=lane.id, provider_thread_id=lane.id, item_id="failed-command").model_copy(
+            update={
+                "item_type": "commandExecution",
+                "tool": "shell",
+                "status": "completed",
+                "success": False,
+                "error": None,
+            }
+        )
+    )
+
+    out = await handlers.query(QueryInput(errored=True), ctx)
+
+    assert [match.item_id for match in out.matches] == ["failed-command"]
+    assert out.matches[0].errored is True
 
 
 async def test_lane_search_reads_one_thread_transcript(store: Registry) -> None:

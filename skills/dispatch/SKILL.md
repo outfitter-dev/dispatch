@@ -284,9 +284,17 @@ reconciliation, or event indexing.
 
 Dispatch captures normalized history into its local SQLite registry. Default
 `standard` capture keeps operational facts and bounded searchable history facts.
-Live App Server events are stored as compact summaries; transcript reads index
-bounded turns, item text, tool names, and file/thread refs. Raw provider payloads
-stay gated by retention policy. Minimal capture keeps turn-level state but skips
+Live App Server item events and transcript replay share one canonical normalizer.
+Codex 0.144 message, reasoning, command, file, MCP/dynamic/collaboration tool,
+subagent, web, image, review, sleep, and compaction items become the same local
+rows and refs in either path. Unknown future item types stay visible. Concrete
+tool/server/status, arguments, errors, durations, files, and child-thread ids
+stay queryable without raw retention. Raw provider payloads stay gated by
+retention policy. Transcript replay is additive because provider history can
+omit richer tool items already observed live, and lower-retention replay cannot
+silently erase a payload retained earlier at a higher capture level. Normalized
+text and command/tool metadata are bounded and redact common credential forms
+and sensitive argument keys. Minimal capture keeps turn-level state but skips
 item-level transcript rows. Bare `history` overview renders from the local
 index. Selector-scoped `history` item/tool/file views render from the normalized
 index after refreshing one thread; `--raw` keeps its live App Server raw-payload
@@ -361,8 +369,12 @@ uv run dispatch query --tool linear.save_issue --tool-status completed --arg-key
 uv run dispatch query --file convex/support/lineage.ts
 uv run dispatch query --repo . --since 2026-06-01 --until 2026-06-05
 uv run dispatch query --type mcpToolCall --errored
+uv run dispatch query --mentions-thread 019f
 uv run dispatch schema query
 ```
+
+Query output includes normalized command/tool metadata and explicit child-thread
+refs, so prefer those fields over parsing retained raw payloads with `jq`.
 
 Use `history` after you already know the thread and want summary/items/tools/files
 inspection. Sync is separate for managed lanes: it refreshes dispatch's local
@@ -507,6 +519,8 @@ uv run dispatch history <dispatch-ref>
 uv run dispatch history <dispatch-ref> --view tools
 uv run dispatch history <dispatch-ref> --view files
 uv run dispatch history <dispatch-ref> --view items --tool bash --grep "git status" --raw
+uv run dispatch history <dispatch-ref> --view items --tool-server linear --tool-status completed --arg-key id
+uv run dispatch history <dispatch-ref> --view items --mentions-thread 019f
 uv run dispatch history --has-tool bash --changed --min-bytes 100000
 ```
 
@@ -514,7 +528,9 @@ Bare `history` includes transcript size, estimated tokens, active dates, deduped
 tools, worktree identity, and dirty changed-file
 names from each lane cwd. Overview filters include `--cwd`, `--source`,
 `--status`, `--has-tool`, `--changed/--clean`, and `--min-bytes`. Item views use
-`--type`, `--tool`, `--grep`, and optional `--raw`. Bare overview reads the
+`--type`, `--role`, `--phase`, `--tool`, `--tool-server`, `--tool-status`,
+`--errored/--not-errored`, `--mentions-thread`, `--arg-key`, `--grep`, and
+optional `--raw`. Bare overview reads the
 local index only. Selector-scoped history reads refresh one thread and backfill
 the normalized local history index. Normal item/tool/file views render from that
 index after refresh; `--raw` intentionally reads the live App Server raw item

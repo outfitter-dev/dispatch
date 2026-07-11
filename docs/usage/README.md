@@ -644,8 +644,10 @@ Use `history` when you want transcript inspection and rollups rather than only r
 items. Bare `history` summarizes managed lanes; passing a selector drills into one
 thread and can show summary, items, tools, or files. Overview rows include indexed
 transcript size, estimated tokens, active dates, deduped tool names, best-effort git
-worktree identity, and dirty changed-file names from the lane cwd. `--type`, `--tool`,
-and `--grep` filter item views; `--cwd`, `--source`,
+worktree identity, and dirty changed-file names from the lane cwd. Item views
+filter by `--type`, `--role`, `--phase`, `--tool`, `--tool-server`,
+`--tool-status`, `--errored/--not-errored`, `--mentions-thread`, `--arg-key`,
+and `--grep`; `--cwd`, `--source`,
 `--status`, `--has-tool`, `--changed/--clean`, and `--min-bytes` filter overview
 rows; `--raw` includes raw App Server item payloads for jq-heavy inspection.
 Bare `history` reads the local normalized index only, so overview scans stay
@@ -664,6 +666,8 @@ uv run dispatch history <dispatch-ref>
 uv run dispatch history <dispatch-ref> --view tools
 uv run dispatch history <dispatch-ref> --view files
 uv run dispatch history <dispatch-ref> --view items --tool bash --grep "git status" --raw
+uv run dispatch history <dispatch-ref> --view items --tool-server linear --tool-status completed --arg-key id
+uv run dispatch history <dispatch-ref> --view items --mentions-thread 019f
 uv run dispatch history --has-tool bash --changed --min-bytes 100000
 ```
 
@@ -739,10 +743,11 @@ uv run dispatch query --mentions-thread 019e
 uv run dispatch schema query
 ```
 
-`query` returns item-level JSON that is meant for `jq`: thread ref/id/handle, item id,
-turn id, item type, role, concrete tool name, snippet, file refs, other refs, timestamps,
-and safe tool-call metadata such as server, status, error state, and duration when
-available.
+`query` returns item-level JSON that is meant for `jq`: thread ref/id/handle,
+item id, turn id, item type, role, concrete tool name, snippet, file and
+child-thread refs, and timestamps. Server, status, phase, command, command cwd,
+arguments, success, error, duration, and agent identity remain available without
+enabling raw-payload retention.
 
 ## Discover Sessions
 
@@ -810,9 +815,18 @@ the desktop app still cannot be gated by Dispatch's advisory lock.
 Dispatch keeps a local SQLite registry and normalized history index. The default
 history capture mode is `standard`: capture operational state and bounded
 searchable facts by default, but do not retain raw provider payloads unless the
-raw retention policy allows it. Live App Server events are stored as compact
-summaries; transcript reads index bounded turns, item text, tool names, and
-file/thread refs. Use `minimal` for a smaller footprint that keeps turn-level
+raw retention policy allows it. Live `item/started` and `item/completed`
+notifications and transcript reads use the same canonical item normalizer. It
+covers the App Server 0.144 message, reasoning, command, file,
+MCP/dynamic/collaboration tool, subagent, web, image, review, sleep, and
+compaction variants; unknown future variants remain visible. Concrete status,
+arguments, errors, durations, files, and child-thread refs remain normalized
+even when raw payload retention is off. Transcript replay is additive: a
+persisted read cannot erase richer live items merely because the provider omits
+them, and lower-retention replay does not silently purge an already retained
+bounded payload. Normalized text, command, cwd, error, and argument values are
+bounded; common credential forms and sensitive argument keys are redacted.
+Use `minimal` for a smaller footprint that keeps turn-level
 state but skips item-level transcript rows. Bare `history` overview renders from
 the local index. Selector-scoped `history` item/tool/file views render from the
 normalized index after refreshing one thread from the App Server; `history --raw`

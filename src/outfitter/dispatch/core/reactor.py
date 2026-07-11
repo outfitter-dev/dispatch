@@ -9,6 +9,7 @@ from outfitter.dispatch.client.events import (
     GoalCleared,
     GoalUpdated,
     ItemCompleted,
+    ItemStarted,
     LaneEvent,
     LaneIdle,
     ThreadArchived,
@@ -90,7 +91,13 @@ class Reactor:
             await registry.mark_lane_idle(lane.id)
             await registry.touch_lane_event(lane.id)
         elif isinstance(
-            event, ItemCompleted | GoalUpdated | GoalCleared | ThreadCompacted | ApprovalRequested
+            event,
+            ItemStarted
+            | ItemCompleted
+            | GoalUpdated
+            | GoalCleared
+            | ThreadCompacted
+            | ApprovalRequested,
         ):
             await registry.touch_lane_event(lane.id)
 

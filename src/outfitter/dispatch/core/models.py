@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, JsonValue
 
 from outfitter.dispatch.client.models import (
     ApprovalPolicy,
@@ -314,7 +314,16 @@ class HistoryInput(BaseModel):
         description="History view: auto, overview, summary, items, tools, or files.",
     )
     item_type: str | None = Field(default=None, description="Only include matching item types.")
+    role: str | None = Field(default=None, description="Only include matching item roles.")
+    phase: str | None = Field(default=None, description="Only include matching message phases.")
     tool: str | None = Field(default=None, description="Only include matching tool names.")
+    tool_server: str | None = Field(default=None, description="Only include matching tool servers.")
+    tool_status: str | None = Field(default=None, description="Only include matching tool status.")
+    errored: bool | None = Field(default=None, description="Only include errored or clean items.")
+    mentions_thread: str | None = Field(
+        default=None, description="Only include refs to matching thread ids."
+    )
+    arg_key: str | None = Field(default=None, description="Only include tool calls with arg key.")
     grep: str | None = Field(default=None, description="Only include items containing text.")
     cwd: str | None = Field(
         default=None, description="Only include threads whose cwd contains text."
@@ -871,7 +880,22 @@ class HistoryFileStat(BaseModel):
 
 class HistoryItem(TranscriptItem):
     role: str | None = None
+    phase: str | None = None
     tool: str | None = None
+    tool_server: str | None = None
+    tool_status: str | None = None
+    command: str | None = None
+    command_cwd: str | None = None
+    arguments: JsonValue = None
+    success: bool | None = None
+    error: str | None = None
+    errored: bool = False
+    duration_ms: int | None = None
+    agent_nickname: str | None = None
+    agent_role: str | None = None
+    thread_ids: list[str] = Field(default_factory=list)
+    child_thread_ids: list[str] = Field(default_factory=list)
+    argument_keys: list[str] = Field(default_factory=list)
     files: list[str] = Field(default_factory=list)
     raw: dict[str, object] | None = None
 
@@ -1012,6 +1036,14 @@ class QueryMatch(BaseModel):
     type: str
     role: str | None = None
     tool: str | None = None
+    phase: str | None = None
+    command: str | None = None
+    command_cwd: str | None = None
+    arguments: JsonValue = None
+    success: bool | None = None
+    error: str | None = None
+    agent_nickname: str | None = None
+    agent_role: str | None = None
     snippet: str
     files: list[str] = Field(default_factory=list)
     refs: list[QueryRef] = Field(default_factory=list)

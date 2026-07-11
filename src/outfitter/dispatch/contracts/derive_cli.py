@@ -744,8 +744,30 @@ def _history_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[...,
         item_type: Annotated[
             str | None, typer.Option("--type", help="Only include matching item types.")
         ] = None,
+        role: Annotated[
+            str | None, typer.Option("--role", help="Only include matching item roles.")
+        ] = None,
+        phase: Annotated[
+            str | None, typer.Option("--phase", help="Only include matching message phases.")
+        ] = None,
         tool: Annotated[
             str | None, typer.Option("--tool", help="Only include matching tool names.")
+        ] = None,
+        tool_server: Annotated[
+            str | None, typer.Option("--tool-server", help="Only include matching tool servers.")
+        ] = None,
+        tool_status: Annotated[
+            str | None, typer.Option("--tool-status", help="Only include matching tool status.")
+        ] = None,
+        errored: Annotated[
+            bool | None,
+            typer.Option("--errored/--not-errored", help="Only include errored or clean items."),
+        ] = None,
+        mentions_thread: Annotated[
+            str | None, typer.Option("--mentions-thread", help="Only include thread refs.")
+        ] = None,
+        arg_key: Annotated[
+            str | None, typer.Option("--arg-key", help="Only include tool calls with arg key.")
         ] = None,
         grep: Annotated[
             str | None, typer.Option("--grep", help="Only include items containing text.")
@@ -785,7 +807,14 @@ def _history_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[...,
                 "lane": lane,
                 "view": view,
                 "item_type": item_type,
+                "role": role,
+                "phase": phase,
                 "tool": tool,
+                "tool_server": tool_server,
+                "tool_status": tool_status,
+                "errored": errored,
+                "mentions_thread": mentions_thread,
+                "arg_key": arg_key,
                 "grep": grep,
                 "cwd": cwd,
                 "source": source,

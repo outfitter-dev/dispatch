@@ -1,0 +1,19 @@
+name = "canonical_item_ingestion"
+description = "Prove a real App Server tool item is indexed and queryable through Dispatch."
+timeout_seconds = 180
+poll_seconds = 1
+preferred_model = "gpt-5.3-codex-spark"
+allow_model_fallback = true
+effort = "low"
+parallel = false
+
+[[lanes]]
+alias = "canonical"
+name = "scenario-canonical-item"
+prompt = "Use the shell tool to run printf CANONICAL_OK > canonical-proof.txt, then reply exactly CANONICAL_OK."
+expect_contains = "CANONICAL_OK"
+expect_tool = "shell"
+sandbox = "workspace-write"
+approval_policy = "never"
+expect_file = "canonical-proof.txt"
+expect_file_contains = "CANONICAL_OK"

@@ -438,6 +438,165 @@ async def test_provider_event_history_index_roundtrips_and_dedupes(store: Regist
     assert await store.get_lane_runtime_state("L1") == runtime
 
 
+async def test_thread_item_canonical_fields_roundtrip_query_and_upsert(store: Registry) -> None:
+    await store.add_lane(id="L1", handle="@lane", source="own", status="idle")
+    payload = {"type": "mcpToolCall", "raw": {"retained": True}}
+    original = thread_item(
+        phase="analysis",
+        status="failed",
+        server="linear",
+        command="fetch DIS-44",
+        cwd="/work/dispatch",
+        error="request failed",
+        duration_ms=321,
+        arguments={"id": "DIS-44", "flags": [True, False], "limit": 5},
+        success=False,
+        agent_nickname="review-agent",
+        agent_role="reviewer",
+    ).model_copy(update={"payload": payload})
+
+    saved = await store.upsert_thread_item(original)
+
+    assert saved == original
+    matches, scanned = await store.query_thread_items(
+        lanes={"L1"},
+        tool_server="linear",
+        tool_status="failed",
+        errored=True,
+        arg_key="flags",
+    )
+    assert scanned == 1
+    assert matches == [original]
+
+    replacement = original.model_copy(
+        update={
+            "phase": "final",
+            "status": "completed",
+            "error": None,
+            "duration_ms": 654,
+            "arguments": ["DIS-44", {"dry_run": False}],
+            "success": True,
+            "agent_nickname": None,
+            "agent_role": None,
+            "inserted_at": "2026-06-11T12:05:00+00:00",
+        }
+    )
+    updated = await store.upsert_thread_item(replacement)
+
+    expected = replacement.model_copy(
+        update={
+            "error": original.error,
+            "agent_nickname": original.agent_nickname,
+            "agent_role": original.agent_role,
+            "inserted_at": original.inserted_at,
+        }
+    )
+    assert updated == expected
+    assert updated.payload == payload
+    assert updated.success is True
+
+    sparse = replacement.model_copy(
+        update={
+            "role": None,
+            "phase": None,
+            "status": "inProgress",
+            "text": None,
+            "tool": None,
+            "server": None,
+            "command": None,
+            "cwd": None,
+            "error": None,
+            "duration_ms": None,
+            "arguments": None,
+            "success": None,
+            "agent_nickname": None,
+            "agent_role": None,
+            "created_at": None,
+            "position": None,
+            "inserted_at": "2026-06-11T12:10:00+00:00",
+            "payload": None,
+            "raw_retained": False,
+        }
+    )
+    assert await store.upsert_thread_item(sparse) == expected
+
+
+async def test_v14_registry_migration_adds_canonical_thread_item_columns(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "registry-v14.db"
+    async with aiosqlite.connect(db) as conn:
+        await conn.executescript(
+            """
+            CREATE TABLE thread_items (
+                provider TEXT NOT NULL,
+                provider_thread_id TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                lane TEXT,
+                turn_id TEXT,
+                item_type TEXT NOT NULL,
+                role TEXT,
+                text TEXT,
+                tool TEXT,
+                created_at TEXT,
+                position INTEGER,
+                inserted_at TEXT NOT NULL,
+                payload TEXT,
+                raw_retained INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(provider, provider_thread_id, item_id)
+            );
+            INSERT INTO thread_items (
+                provider, provider_thread_id, item_id, item_type, text, inserted_at,
+                payload, raw_retained
+            ) VALUES (
+                'codex', 'thread-legacy', 'item-legacy', 'toolCall', 'legacy item',
+                '2026-07-10T12:00:00+00:00', '{"type":"toolCall"}', 1
+            );
+            PRAGMA user_version = 14;
+            """
+        )
+        await conn.commit()
+
+    migrated = await Registry.open(db, now=_clock)
+    try:
+        item = await migrated.get_thread_item("codex", "thread-legacy", "item-legacy")
+        assert item.phase is None
+        assert item.status is None
+        assert item.arguments is None
+        assert item.success is None
+        assert item.payload == {"type": "toolCall"}
+        assert item.raw_retained is True
+        async with migrated._conn.execute("PRAGMA table_info(thread_items)") as cur:
+            columns = {str(row["name"]) for row in await cur.fetchall()}
+        assert {
+            "phase",
+            "status",
+            "server",
+            "command",
+            "cwd",
+            "error",
+            "duration_ms",
+            "arguments",
+            "success",
+            "agent_nickname",
+            "agent_role",
+        } <= columns
+    finally:
+        await migrated.close()
+
+    reopened = await Registry.open(db, now=_clock)
+    try:
+        item = await reopened.get_thread_item("codex", "thread-legacy", "item-legacy")
+        assert item.payload == {"type": "toolCall"}
+        assert item.arguments is None
+        async with reopened._conn.execute("PRAGMA user_version") as cur:
+            row = await cur.fetchone()
+        assert row is not None
+        assert int(row[0]) == SCHEMA_VERSION
+    finally:
+        await reopened.close()
+
+
 async def test_server_requests_roundtrip_dedupe_and_preserve_int_string_ids(
     store: Registry,
 ) -> None:
@@ -653,13 +812,36 @@ async def test_thread_history_snapshot_batches_rows_prunes_and_summarizes(
         turn_ids={"turn-1"},
         item_ids={"item-1"},
     )
+    await store.upsert_thread_history_snapshot(
+        turns=[turn],
+        items=[
+            (
+                item.model_copy(update={"inserted_at": "2026-06-11T12:05:00+00:00"}),
+                [
+                    thread_item_ref(item_id="item-1", ref_type="tool", ref_value="bash"),
+                    thread_item_ref(item_id="item-1", ref_type="file", ref_value="README.md"),
+                ],
+            )
+        ],
+        provider="codex",
+        provider_thread_id="thread-1",
+        turn_ids={"turn-1"},
+        item_ids={"item-1"},
+    )
 
     with pytest.raises(NotFoundError):
         await store.get_thread_item(stale.provider, stale.provider_thread_id, stale.item_id)
+    assert (
+        await store.find_thread_item(stale.provider, stale.provider_thread_id, stale.item_id)
+        is None
+    )
     assert [found.turn_id for found in await store.list_thread_turns(lane="L1")] == ["turn-1"]
-    assert [found.item_id for found in await store.list_thread_items(lane="L1")] == ["item-1"]
+    listed_items = await store.list_thread_items(lane="L1")
+    assert [found.item_id for found in listed_items] == ["item-1"]
+    assert listed_items[0].inserted_at == item.inserted_at
     refs_by_item = await store.list_thread_item_refs_many([item])
-    assert [(ref.ref_type, ref.ref_value) for ref in refs_by_item["item-1"]] == [
+    key = (item.provider, item.provider_thread_id, item.item_id)
+    assert [(ref.ref_type, ref.ref_value) for ref in refs_by_item[key]] == [
         ("file", "README.md"),
         ("tool", "bash"),
     ]
@@ -669,6 +851,41 @@ async def test_thread_history_snapshot_batches_rows_prunes_and_summarizes(
     assert stats.tool_calls == 1
     assert [tool.tool for tool in stats.tools] == ["bash"]
     assert [(file.path, file.count) for file in stats.files] == [("README.md", 1)]
+
+
+async def test_list_thread_item_refs_many_keeps_same_item_ids_separate(
+    store: Registry,
+) -> None:
+    await store.add_lane(id="L1", handle="@lane", source="own", status="idle")
+    first = await store.upsert_thread_item(
+        thread_item(provider_thread_id="thread-1", item_id="shared"),
+        refs=[
+            thread_item_ref(
+                provider_thread_id="thread-1",
+                item_id="shared",
+                ref_value="bash",
+            )
+        ],
+    )
+    second = await store.upsert_thread_item(
+        thread_item(provider_thread_id="thread-2", item_id="shared"),
+        refs=[
+            thread_item_ref(
+                provider_thread_id="thread-2",
+                item_id="shared",
+                ref_value="linear",
+            )
+        ],
+    )
+
+    refs = await store.list_thread_item_refs_many([first, second])
+
+    assert set(refs) == {
+        ("codex", "thread-1", "shared"),
+        ("codex", "thread-2", "shared"),
+    }
+    assert [ref.ref_value for ref in refs[("codex", "thread-1", "shared")]] == ["bash"]
+    assert [ref.ref_value for ref in refs[("codex", "thread-2", "shared")]] == ["linear"]
 
 
 async def test_concurrent_lane_sync_writes_are_serialized(store: Registry) -> None:

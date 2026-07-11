@@ -47,6 +47,23 @@ def _properties(path: Path, definition: str | None = None) -> list[str]:
     return sorted(str(name) for name in properties)
 
 
+def _variant_discriminants(path: Path, definition: str, field: str) -> list[str]:
+    schema = _json(path)
+    definitions = schema.get("definitions")
+    shape = definitions.get(definition, {}) if isinstance(definitions, dict) else {}
+    variants = shape.get("oneOf") if isinstance(shape, dict) else None
+    if not isinstance(variants, list):
+        raise TypeError(f"expected oneOf variants for {definition} in {path}")
+    values: list[str] = []
+    for variant in variants:
+        properties = variant.get("properties") if isinstance(variant, dict) else None
+        discriminator = properties.get(field) if isinstance(properties, dict) else None
+        enum = discriminator.get("enum") if isinstance(discriminator, dict) else None
+        if isinstance(enum, list):
+            values.extend(value for value in enum if isinstance(value, str))
+    return sorted(set(values))
+
+
 def _run(command: list[str], *args: str) -> str:
     completed = subprocess.run(
         [*command, *args],
@@ -87,6 +104,9 @@ def build_manifest(command: list[str]) -> dict[str, object]:
             },
             "server_requests": _methods(stable / "ServerRequest.json"),
             "server_notifications": _methods(stable / "ServerNotification.json"),
+            "thread_item_types": _variant_discriminants(
+                stable / "ServerNotification.json", "ThreadItem", "type"
+            ),
             "selected_shapes": {
                 "model_fields": _properties(
                     stable / "v2" / "ModelListResponse.json", definition="Model"

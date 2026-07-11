@@ -7,6 +7,7 @@ requiring one top-level command per op.
 
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 
@@ -128,6 +129,26 @@ def test_cli_registered_commands_are_declared_in_projection_manifest() -> None:
     declared = {route.path for route in cli_public_routes()} | set(CLI_PROJECTION_CONTROL_PATHS)
 
     assert registered == declared
+
+
+def test_single_route_cli_adapters_cover_every_authored_input_field() -> None:
+    app = derive_cli(REGISTRY, _stub_invoke)
+    callbacks = {
+        command.name: command.callback
+        for command in app.registered_commands
+        if command.name is not None and command.callback is not None
+    }
+
+    for route, op_id in cli_schema_routes().items():
+        if " " in route or route not in callbacks:
+            continue
+        authored = {
+            name
+            for name, field in REGISTRY.get(op_id).input.model_fields.items()
+            if not is_internal_field(field)
+        }
+        projected = set(inspect.signature(callbacks[route]).parameters) - {"json"}
+        assert authored <= projected, f"{route} missing CLI fields: {sorted(authored - projected)}"
 
 
 def test_full_cli_commands_are_declared_projection_or_control_paths() -> None:

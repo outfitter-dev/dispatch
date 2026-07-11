@@ -37,6 +37,23 @@ def test_registry_sql_exercise_sets_schema_version_and_rolls_back(tmp_path: Path
         ).fetchone()
         assert server_requests is not None
 
+        thread_item_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(thread_items)").fetchall()
+        }
+        assert {
+            "phase",
+            "status",
+            "server",
+            "command",
+            "cwd",
+            "error",
+            "duration_ms",
+            "arguments",
+            "success",
+            "agent_nickname",
+            "agent_role",
+        } <= thread_item_columns
+
         rolled_back = conn.execute(
             "SELECT COUNT(*) FROM actions_log WHERE op = ?",
             ("probe",),

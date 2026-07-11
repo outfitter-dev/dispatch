@@ -8,6 +8,7 @@ from outfitter.dispatch.client.events import (
     GoalCleared,
     GoalUpdated,
     ItemCompleted,
+    ItemStarted,
     LaneEvent,
     LaneIdle,
     StatusChanged,
@@ -21,6 +22,7 @@ from outfitter.dispatch.client.events import (
 )
 from outfitter.dispatch.config import CapturePolicy
 from outfitter.dispatch.core.capture import bound_payload, bound_text
+from outfitter.dispatch.core.codex_items import normalize_codex_item
 from outfitter.dispatch.registry.models import (
     Lane,
     LaneRuntimeState,
@@ -59,6 +61,27 @@ async def index_codex_lane_event(
     )
     await registry.record_provider_event(provider_event)
 
+    if isinstance(event, ItemStarted | ItemCompleted) and event.item is not None:
+        item, refs = normalize_codex_item(
+            event.item,
+            provider_thread_id=lane.id,
+            lane=lane.id,
+            turn_id=event.turn_id,
+            inserted_at=received_at,
+            position=None,
+            capture=policy,
+        )
+        existing = await registry.find_thread_item(
+            item.provider, item.provider_thread_id, item.item_id
+        )
+        stale_start = (
+            isinstance(event, ItemStarted)
+            and existing is not None
+            and (existing.status == "completed" or existing.success is not None)
+        )
+        if not stale_start:
+            await registry.upsert_thread_item(item, refs=refs)
+
     turn = _thread_turn(lane, event, received_at, policy)
     if turn is not None:
         await registry.upsert_thread_turn(turn)
@@ -81,6 +104,8 @@ def _event_type(event: LaneEvent) -> str:
         return "lane/idle"
     if isinstance(event, ApprovalRequested):
         return f"approval/{event.kind}/requested"
+    if isinstance(event, ItemStarted):
+        return "item/started"
     if isinstance(event, ItemCompleted):
         return "item/completed"
     if isinstance(event, StatusChanged):
@@ -103,8 +128,8 @@ def _event_type(event: LaneEvent) -> str:
 def _provider_event_id(event: LaneEvent) -> str | None:
     if isinstance(event, TurnStarted | TurnCompleted | TurnFailed):
         return _dedupe_id(event, _event_type(event), event.turn_id)
-    if isinstance(event, ItemCompleted):
-        return _dedupe_id(event, "item/completed", event.item_id)
+    if isinstance(event, ItemStarted | ItemCompleted):
+        return _dedupe_id(event, _event_type(event), event.item_id)
     if isinstance(event, ApprovalRequested):
         return _dedupe_id(event, f"approval/{event.kind}/requested", str(event.request_id))
     return None
@@ -117,14 +142,20 @@ def _dedupe_id(event: LaneEvent, event_type: str, suffix: str | None) -> str:
 def _turn_id(event: LaneEvent) -> str | None:
     if isinstance(
         event,
-        TurnStarted | TurnCompleted | TurnFailed | ApprovalRequested | DiffUpdated,
+        TurnStarted
+        | TurnCompleted
+        | TurnFailed
+        | ApprovalRequested
+        | DiffUpdated
+        | ItemStarted
+        | ItemCompleted,
     ):
         return event.turn_id
     return None
 
 
 def _item_id(event: LaneEvent) -> str | None:
-    if isinstance(event, ItemCompleted | ApprovalRequested):
+    if isinstance(event, ItemStarted | ItemCompleted | ApprovalRequested):
         return event.item_id
     return None
 
@@ -165,6 +196,8 @@ def _summary(event: LaneEvent, capture: CapturePolicy) -> dict[str, object]:
         if event.item_id is not None:
             summary["item_id"] = event.item_id
         return summary
+    if isinstance(event, ItemStarted):
+        return _status_summary("started", item_id=event.item_id)
     if isinstance(event, ItemCompleted):
         return _status_summary("completed", item_id=event.item_id)
     if isinstance(event, StatusChanged):
