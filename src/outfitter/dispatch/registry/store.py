@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import aiosqlite
 
@@ -35,6 +36,10 @@ from .models import (
     MessageReceipt,
     ModelCatalogEntry,
     ProviderEvent,
+    ProviderThread,
+    ProviderThreadLifecycleState,
+    ProviderThreadNode,
+    ProviderThreadObservation,
     QueuedMessage,
     ServerRequest,
     ServerRequestOutcome,
@@ -50,7 +55,7 @@ from .models import (
 from .refs import BASE58BTC_ALPHABET, CODEX_REF_SOURCE, codex_ref_payload, make_ref
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 
 @dataclass(frozen=True)
@@ -85,6 +90,25 @@ class ThreadHistorySummaryStats:
 class ServerRequestObservation:
     request: ServerRequest
     inserted: bool
+
+
+@dataclass(frozen=True)
+class ProviderThreadTopology:
+    """Bounded parent/fork topology around one or more provider threads."""
+
+    provider: str
+    requested_thread_ids: list[str]
+    nodes: list[ProviderThreadNode]
+    roots: dict[str, ProviderThreadNode | None]
+    parent_ancestry: dict[str, list[ProviderThreadNode]]
+    children: dict[str, list[ProviderThreadNode]]
+    descendants: dict[str, list[ProviderThreadNode]]
+    fork_origins: dict[str, ProviderThreadNode | None]
+    forks: dict[str, list[ProviderThreadNode]]
+    missing_thread_ids: list[str]
+    cycle_detected: bool
+    complete: bool
+    truncated: bool
 
 
 ThreadItemIdentity = tuple[str, str, str]
@@ -146,6 +170,34 @@ CREATE TABLE IF NOT EXISTS queued_messages (
     error TEXT,
     FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
 );
+"""
+
+_PROVIDER_THREADS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS provider_threads (
+    provider TEXT NOT NULL,
+    provider_thread_id TEXT NOT NULL,
+    session_id TEXT,
+    parent_thread_id TEXT,
+    forked_from_id TEXT,
+    source_kind TEXT,
+    thread_source TEXT,
+    agent_nickname TEXT,
+    agent_role TEXT,
+    agent_depth INTEGER,
+    lifecycle_state TEXT NOT NULL DEFAULT 'unknown'
+        CHECK(lifecycle_state IN ('active', 'archived', 'deleted', 'unknown')),
+    relationship_source TEXT,
+    confidence REAL,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    archived_at TEXT,
+    deleted_at TEXT,
+    PRIMARY KEY(provider, provider_thread_id)
+);
+CREATE INDEX IF NOT EXISTS idx_provider_threads_parent
+ON provider_threads(provider, parent_thread_id);
+CREATE INDEX IF NOT EXISTS idx_provider_threads_fork
+ON provider_threads(provider, forked_from_id);
 """
 
 _PROVIDER_HISTORY_SCHEMA = """
@@ -357,6 +409,7 @@ CREATE TABLE IF NOT EXISTS actions_log (
     outcome TEXT NOT NULL DEFAULT 'ok'
 );
 {_QUEUED_MESSAGES_SCHEMA}
+{_PROVIDER_THREADS_SCHEMA}
 CREATE TABLE IF NOT EXISTS lane_sync_sources (
     lane TEXT PRIMARY KEY,
     state TEXT NOT NULL,
@@ -574,6 +627,8 @@ class Registry:
             await self._ensure_server_requests_table()
         if user_version < 15:
             await self._ensure_thread_item_canonical_columns()
+        if user_version < 16:
+            await self._ensure_provider_threads_table()
 
     async def _ensure_ref_columns(self) -> None:
         async with self._conn.execute("PRAGMA table_info(lanes)") as cur:
@@ -768,6 +823,9 @@ class Registry:
 
     async def _ensure_provider_history_tables(self) -> None:
         await self._conn.executescript(_PROVIDER_HISTORY_SCHEMA)
+
+    async def _ensure_provider_threads_table(self) -> None:
+        await self._conn.executescript(_PROVIDER_THREADS_SCHEMA)
 
     async def _ensure_thread_item_position_column(self) -> None:
         async with self._conn.execute("PRAGMA table_info(thread_items)") as cur:
@@ -1630,6 +1688,348 @@ class Registry:
         ) as cur:
             row = await cur.fetchone()
         return _row_to_lane_runtime_settings(row) if row is not None else None
+
+    # --- provider threads / topology -----------------------------------------
+
+    async def upsert_provider_thread(
+        self, observation: ProviderThreadObservation
+    ) -> ProviderThread:
+        """Persist non-null metadata without implicitly changing lifecycle state."""
+
+        return (await self.upsert_provider_threads([observation]))[0]
+
+    async def upsert_provider_threads(
+        self, observations: list[ProviderThreadObservation]
+    ) -> list[ProviderThread]:
+        """Persist a discovery page in one serialized transaction."""
+
+        if not observations:
+            return []
+        async with self._write_lock:
+            try:
+                for observation in observations:
+                    await self._upsert_provider_thread_row(observation)
+                await self._conn.commit()
+            except Exception:
+                await self._conn.rollback()
+                raise
+        saved: list[ProviderThread] = []
+        for observation in observations:
+            thread = await self.get_provider_thread(
+                observation.provider, observation.provider_thread_id
+            )
+            if thread is None:
+                raise RuntimeError("provider thread upsert did not return a row")
+            saved.append(thread)
+        return saved
+
+    async def _upsert_provider_thread_row(self, observation: ProviderThreadObservation) -> None:
+
+        observed_at = observation.observed_at or self.now_iso()
+        lifecycle_state = observation.lifecycle_state or "unknown"
+        lifecycle_explicit = observation.lifecycle_state is not None
+        archived_at = observed_at if lifecycle_state == "archived" else None
+        deleted_at = observed_at if lifecycle_state == "deleted" else None
+        await self._conn.execute(
+            "INSERT INTO provider_threads (provider, provider_thread_id, session_id, "
+            "parent_thread_id, forked_from_id, source_kind, thread_source, agent_nickname, "
+            "agent_role, agent_depth, lifecycle_state, relationship_source, confidence, "
+            "first_seen_at, last_seen_at, archived_at, deleted_at) VALUES ("
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(provider, provider_thread_id) DO UPDATE SET "
+            "session_id = COALESCE(excluded.session_id, provider_threads.session_id), "
+            "parent_thread_id = COALESCE(excluded.parent_thread_id, "
+            "provider_threads.parent_thread_id), "
+            "forked_from_id = COALESCE(excluded.forked_from_id, provider_threads.forked_from_id), "
+            "source_kind = COALESCE(excluded.source_kind, provider_threads.source_kind), "
+            "thread_source = COALESCE(excluded.thread_source, provider_threads.thread_source), "
+            "agent_nickname = COALESCE(excluded.agent_nickname, "
+            "provider_threads.agent_nickname), "
+            "agent_role = COALESCE(excluded.agent_role, provider_threads.agent_role), "
+            "agent_depth = COALESCE(excluded.agent_depth, provider_threads.agent_depth), "
+            "lifecycle_state = CASE WHEN ? THEN excluded.lifecycle_state "
+            "ELSE provider_threads.lifecycle_state END, "
+            "relationship_source = COALESCE(excluded.relationship_source, "
+            "provider_threads.relationship_source), "
+            "confidence = COALESCE(excluded.confidence, provider_threads.confidence), "
+            "last_seen_at = excluded.last_seen_at, "
+            "archived_at = CASE WHEN ? AND excluded.lifecycle_state = 'archived' "
+            "THEN COALESCE(provider_threads.archived_at, excluded.archived_at) "
+            "ELSE provider_threads.archived_at END, "
+            "deleted_at = CASE WHEN ? AND excluded.lifecycle_state = 'deleted' "
+            "THEN COALESCE(provider_threads.deleted_at, excluded.deleted_at) "
+            "ELSE provider_threads.deleted_at END",
+            (
+                observation.provider,
+                observation.provider_thread_id,
+                observation.session_id,
+                observation.parent_thread_id,
+                observation.forked_from_id,
+                observation.source_kind,
+                observation.thread_source,
+                observation.agent_nickname,
+                observation.agent_role,
+                observation.agent_depth,
+                lifecycle_state,
+                observation.relationship_source,
+                observation.confidence,
+                observed_at,
+                observed_at,
+                archived_at,
+                deleted_at,
+                lifecycle_explicit,
+                lifecycle_explicit,
+                lifecycle_explicit,
+            ),
+        )
+
+    async def get_provider_thread(
+        self, provider: str, provider_thread_id: str
+    ) -> ProviderThread | None:
+        async with self._conn.execute(
+            "SELECT * FROM provider_threads WHERE provider = ? AND provider_thread_id = ?",
+            (provider, provider_thread_id),
+        ) as cur:
+            row = await cur.fetchone()
+        return _row_to_provider_thread(row) if row is not None else None
+
+    async def list_provider_threads(
+        self,
+        *,
+        provider: str | None = None,
+        lifecycle_state: ProviderThreadLifecycleState | None = None,
+    ) -> list[ProviderThread]:
+        clauses: list[str] = []
+        params: list[str] = []
+        if provider is not None:
+            clauses.append("provider = ?")
+            params.append(provider)
+        if lifecycle_state is not None:
+            clauses.append("lifecycle_state = ?")
+            params.append(lifecycle_state)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        async with self._conn.execute(
+            "SELECT * FROM provider_threads"
+            f"{where} ORDER BY provider, first_seen_at, provider_thread_id",
+            tuple(params),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_provider_thread(row) for row in rows]
+
+    async def mark_provider_thread_state(
+        self,
+        provider: str,
+        provider_thread_id: str,
+        lifecycle_state: ProviderThreadLifecycleState,
+        *,
+        observed_at: str | None = None,
+    ) -> ProviderThread:
+        return await self.upsert_provider_thread(
+            ProviderThreadObservation(
+                provider=provider,
+                provider_thread_id=provider_thread_id,
+                lifecycle_state=lifecycle_state,
+                observed_at=observed_at,
+            )
+        )
+
+    async def get_provider_thread_topology(
+        self,
+        provider: str,
+        provider_thread_ids: str | list[str],
+        *,
+        max_nodes: int = 200,
+        max_depth: int = 16,
+    ) -> ProviderThreadTopology:
+        """Return bounded parent and fork relationships without repairing bad edges."""
+
+        if max_nodes < 1:
+            raise ValueError("max_nodes must be at least 1")
+        if max_depth < 0:
+            raise ValueError("max_depth must be non-negative")
+        requested = (
+            [provider_thread_ids] if isinstance(provider_thread_ids, str) else provider_thread_ids
+        )
+        requested = sorted(set(requested))
+        if not requested:
+            raise ValueError("at least one provider thread id is required")
+
+        nodes: dict[str, ProviderThreadNode] = {}
+        missing: set[str] = set()
+        cycle_detected = False
+        truncated = False
+
+        async def load(thread_ids: list[str]) -> None:
+            nonlocal truncated
+            candidates = sorted({thread_id for thread_id in thread_ids if thread_id not in nodes})
+            candidates = [thread_id for thread_id in candidates if thread_id not in missing]
+            remaining = max_nodes - len(nodes)
+            if len(candidates) > remaining:
+                candidates = candidates[:remaining]
+                truncated = True
+            if not candidates:
+                return
+            fetched = await self._get_provider_thread_nodes(provider, candidates)
+            nodes.update(fetched)
+            missing.update(set(candidates) - set(fetched))
+
+        async def related_ids(column: str, thread_id: str) -> list[str]:
+            if column not in {"parent_thread_id", "forked_from_id"}:
+                raise ValueError(f"unsupported provider thread relation {column!r}")
+            async with self._conn.execute(
+                "SELECT provider_thread_id FROM provider_threads "
+                f"WHERE provider = ? AND {column} = ? ORDER BY provider_thread_id",
+                (provider, thread_id),
+            ) as cur:
+                rows = await cur.fetchall()
+            return [str(row["provider_thread_id"]) for row in rows]
+
+        await load(requested)
+        roots: dict[str, ProviderThreadNode | None] = {}
+        parent_ancestry: dict[str, list[ProviderThreadNode]] = {}
+        for thread_id in requested:
+            node = nodes.get(thread_id)
+            ancestry: list[ProviderThreadNode] = []
+            parent_ancestry[thread_id] = ancestry
+            if node is None:
+                roots[thread_id] = None
+                continue
+            current = node
+            visited = {thread_id}
+            for depth in range(max_depth + 1):
+                parent_id = current.thread.parent_thread_id
+                if parent_id is None:
+                    roots[thread_id] = current
+                    break
+                if depth >= max_depth:
+                    truncated = True
+                    roots[thread_id] = None
+                    break
+                if parent_id in visited:
+                    cycle_detected = True
+                    roots[thread_id] = None
+                    break
+                await load([parent_id])
+                parent = nodes.get(parent_id)
+                if parent is None:
+                    roots[thread_id] = None
+                    break
+                ancestry.append(parent)
+                visited.add(parent_id)
+                current = parent
+            else:
+                truncated = True
+                roots[thread_id] = None
+
+        children: dict[str, list[ProviderThreadNode]] = {}
+        descendants: dict[str, list[ProviderThreadNode]] = {}
+        for thread_id in requested:
+            direct_ids = await related_ids("parent_thread_id", thread_id)
+            direct: list[ProviderThreadNode] = []
+            children[thread_id] = direct
+            descendant_nodes: list[ProviderThreadNode] = []
+            descendants[thread_id] = descendant_nodes
+            if max_depth < 1:
+                if direct_ids:
+                    truncated = True
+                continue
+            await load(direct_ids)
+            direct.extend(nodes[child_id] for child_id in direct_ids if child_id in nodes)
+            visited = {thread_id}
+            queue: list[tuple[str, int]] = []
+            for child_id in direct_ids:
+                if child_id == thread_id:
+                    cycle_detected = True
+                    continue
+                child = nodes.get(child_id)
+                if child is not None and child_id not in visited:
+                    visited.add(child_id)
+                    descendant_nodes.append(child)
+                    queue.append((child_id, 1))
+            while queue:
+                current_id, depth = queue.pop(0)
+                child_ids = await related_ids("parent_thread_id", current_id)
+                if depth >= max_depth:
+                    if child_ids:
+                        truncated = True
+                    continue
+                await load(child_ids)
+                for child_id in child_ids:
+                    if child_id in visited:
+                        cycle_detected = True
+                        continue
+                    child = nodes.get(child_id)
+                    if child is not None:
+                        visited.add(child_id)
+                        descendant_nodes.append(child)
+                        queue.append((child_id, depth + 1))
+
+        fork_origins: dict[str, ProviderThreadNode | None] = {}
+        forks: dict[str, list[ProviderThreadNode]] = {}
+        for thread_id in requested:
+            node = nodes.get(thread_id)
+            origin: ProviderThreadNode | None = None
+            if node is not None and node.thread.forked_from_id is not None:
+                if max_depth < 1:
+                    truncated = True
+                else:
+                    origin_id = node.thread.forked_from_id
+                    await load([origin_id])
+                    origin = nodes.get(origin_id)
+                    if origin_id == thread_id or (
+                        origin is not None and origin.thread.forked_from_id == thread_id
+                    ):
+                        cycle_detected = True
+            fork_origins[thread_id] = origin
+            fork_ids = await related_ids("forked_from_id", thread_id)
+            if max_depth < 1:
+                if fork_ids:
+                    truncated = True
+                forks[thread_id] = []
+                continue
+            await load(fork_ids)
+            forks[thread_id] = [nodes[fork_id] for fork_id in fork_ids if fork_id in nodes]
+            if thread_id in fork_ids:
+                cycle_detected = True
+
+        complete = not (missing or cycle_detected or truncated)
+        return ProviderThreadTopology(
+            provider=provider,
+            requested_thread_ids=requested,
+            nodes=sorted(nodes.values(), key=lambda node: node.thread.provider_thread_id),
+            roots=roots,
+            parent_ancestry=parent_ancestry,
+            children=children,
+            descendants=descendants,
+            fork_origins=fork_origins,
+            forks=forks,
+            missing_thread_ids=sorted(missing),
+            cycle_detected=cycle_detected,
+            complete=complete,
+            truncated=truncated,
+        )
+
+    async def _get_provider_thread_nodes(
+        self, provider: str, provider_thread_ids: list[str]
+    ) -> dict[str, ProviderThreadNode]:
+        if not provider_thread_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in provider_thread_ids)
+        async with self._conn.execute(
+            "SELECT provider_threads.*, lanes.id AS lane_id, lanes.ref, lanes.handle, "
+            "lanes.status AS lane_status FROM provider_threads "
+            "LEFT JOIN lanes ON lanes.id = provider_threads.provider_thread_id "
+            "WHERE provider_threads.provider = ? "
+            f"AND provider_threads.provider_thread_id IN ({placeholders}) "
+            "ORDER BY provider_threads.provider_thread_id",
+            (provider, *provider_thread_ids),
+        ) as cur:
+            rows = await cur.fetchall()
+        result: dict[str, ProviderThreadNode] = {}
+        for row in rows:
+            node = _row_to_provider_thread_node(row)
+            result[node.thread.provider_thread_id] = node
+        return result
 
     # --- provider events / normalized history ---------------------------------
 
@@ -2875,6 +3275,25 @@ def _row_to_provider_event(row: aiosqlite.Row) -> ProviderEvent:
     data["payload"] = json.loads(str(payload)) if payload else None
     data["raw_retained"] = bool(data["raw_retained"])
     return ProviderEvent.model_validate(data)
+
+
+def _row_to_provider_thread(row: aiosqlite.Row) -> ProviderThread:
+    return ProviderThread.model_validate(_row_dict(row))
+
+
+def _row_to_provider_thread_node(row: aiosqlite.Row) -> ProviderThreadNode:
+    data = _row_dict(row)
+    lane_id = data.pop("lane_id")
+    ref = data.pop("ref")
+    handle = data.pop("handle")
+    lane_status = data.pop("lane_status")
+    return ProviderThreadNode(
+        thread=ProviderThread.model_validate(data),
+        managed=lane_id is not None,
+        ref=str(ref) if ref is not None else None,
+        handle=str(handle) if handle is not None else None,
+        lane_status=cast(LaneStatus, str(lane_status)) if lane_status is not None else None,
+    )
 
 
 def _row_to_server_request(row: aiosqlite.Row) -> ServerRequest:

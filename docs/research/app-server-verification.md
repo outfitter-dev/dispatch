@@ -96,6 +96,21 @@ Lifecycle/threads/turns: `thread/start resume fork read list loaded/list archive
   its derived MCP schema.
 - `thread/list` responses now include `backwardsCursor`; thread rows include
   `recencyAt`, `cliVersion`, and subagent nickname/role metadata.
+- Experimental `thread/list` accepts mutually exclusive `parentThreadId` and
+  `ancestorThreadId` filters when the client initializes with
+  `experimentalApi:true`. The parent filter returns direct spawned children;
+  the ancestor filter returns all spawned descendants and excludes the
+  ancestor itself.
+- `parentThreadId` is the direct subagent-parent relation. The richer tagged
+  `source.subAgent.thread_spawn` shape also carries depth, parent id, nickname,
+  role, and path metadata. `forkedFromId` is a separate history-fork relation:
+  ordinary `thread/fork` does not create a parent/descendant edge, and no
+  `rootThreadId` field exists. `sessionId` is not a reliable tree identity for
+  ordinary forks.
+- Thread lifecycle notifications are asymmetric: `thread/started` carries the
+  full nested thread object, while archived, unarchived, and deleted carry a
+  `threadId`. Forking emits `thread/started`; there is no separate
+  `thread/forked` notification.
 - Stable account usage/workspace-message methods and permanent `thread/delete`
   exist, but Dispatch does not yet expose them. Credits and permanent deletion
   need explicit product/policy decisions rather than implicit pass-throughs.

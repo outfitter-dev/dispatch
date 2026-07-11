@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, JsonValue
+from pydantic import BaseModel, Field, JsonValue, model_validator
 
 from outfitter.dispatch.client.models import (
     ApprovalPolicy,
@@ -286,6 +286,8 @@ class ShowInput(BaseModel):
         default=False, description="Include a compact transcript from thread/read."
     )
     max_items: int = Field(default=20, ge=1, description="Max transcript items to return.")
+    topology: bool = Field(default=False, description="Refresh and include provider topology.")
+    topology_limit: int = Field(default=50, ge=1, le=500, description="Max topology nodes.")
 
 
 class WatchInput(BaseModel):
@@ -404,6 +406,16 @@ class CompactInput(BaseModel):
 
 class RosterInput(BaseModel):
     include_archived: bool = Field(default=False, description="Include archived lanes.")
+    parent: str | None = Field(default=None, description="Only direct children of this thread.")
+    ancestor: str | None = Field(default=None, description="Only descendants of this thread.")
+    root: str | None = Field(default=None, description="Only threads in this cached rooted tree.")
+    topology_limit: int = Field(default=50, ge=1, le=500, description="Max topology nodes.")
+
+    @model_validator(mode="after")
+    def _one_topology_filter(self) -> RosterInput:
+        if sum(value is not None for value in (self.parent, self.ancestor, self.root)) > 1:
+            raise ValueError("parent, ancestor, and root filters are mutually exclusive")
+        return self
 
 
 class DiscoverInput(BaseModel):
@@ -411,6 +423,16 @@ class DiscoverInput(BaseModel):
     archived: bool = Field(
         default=False, description="List archived sessions instead of active ones."
     )
+    parent: str | None = Field(default=None, description="Only direct children of this thread.")
+    ancestor: str | None = Field(default=None, description="Only descendants of this thread.")
+    root: str | None = Field(default=None, description="Only descendants of this root thread.")
+    topology_limit: int = Field(default=50, ge=1, le=500, description="Max topology nodes.")
+
+    @model_validator(mode="after")
+    def _one_topology_filter(self) -> DiscoverInput:
+        if sum(value is not None for value in (self.parent, self.ancestor, self.root)) > 1:
+            raise ValueError("parent, ancestor, and root filters are mutually exclusive")
+        return self
 
 
 class ModelsInput(BaseModel):
@@ -584,6 +606,34 @@ class LaneSyncView(BaseModel):
     error: str | None = None
 
 
+class ThreadTopologyNode(BaseModel):
+    id: str
+    managed: bool = False
+    ref: str | None = None
+    handle: str | None = None
+    lifecycle_state: str = "unknown"
+    relation: str | None = None
+    source_kind: str | None = None
+    thread_source: str | None = None
+    agent_nickname: str | None = None
+    agent_role: str | None = None
+    agent_depth: int | None = None
+
+
+class ThreadTopologyView(BaseModel):
+    observed: bool = False
+    parent: ThreadTopologyNode | None = None
+    root: ThreadTopologyNode | None = None
+    forked_from: ThreadTopologyNode | None = None
+    children: list[ThreadTopologyNode] = Field(default_factory=list)
+    descendants: list[ThreadTopologyNode] = Field(default_factory=list)
+    forks: list[ThreadTopologyNode] = Field(default_factory=list)
+    complete: bool = False
+    cycle_detected: bool = False
+    truncated: bool = False
+    observed_at: str | None = None
+
+
 class LatestTurnView(BaseModel):
     id: str | None = Field(default=None, description="Latest observed App Server turn id.")
     status: TurnRuntimeStatus | None = Field(
@@ -611,6 +661,7 @@ class LaneListItem(LaneRef):
     sync: LaneSyncView = Field(default_factory=LaneSyncView)
     latest_turn: LatestTurnView = Field(default_factory=LatestTurnView)
     model: ThreadModelView = Field(default_factory=ThreadModelView)
+    topology: ThreadTopologyView = Field(default_factory=ThreadTopologyView)
 
 
 class InboxMessageView(BaseModel):
@@ -846,6 +897,7 @@ class LaneDetail(LaneRef):
     sync: LaneSyncView = Field(default_factory=LaneSyncView)
     model: ThreadModelView = Field(default_factory=ThreadModelView)
     transcript: list[TranscriptItem] = Field(default_factory=list)
+    topology: ThreadTopologyView = Field(default_factory=ThreadTopologyView)
 
 
 class TranscriptItem(BaseModel):
@@ -990,6 +1042,7 @@ class DiscoveredSession(BaseModel):
     archived: bool = False
     ephemeral: bool | None = None
     model: ThreadModelView = Field(default_factory=ThreadModelView)
+    topology: ThreadTopologyView = Field(default_factory=ThreadTopologyView)
 
 
 class Discovery(BaseModel):

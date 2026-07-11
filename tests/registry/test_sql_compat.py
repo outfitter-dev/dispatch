@@ -37,6 +37,36 @@ def test_registry_sql_exercise_sets_schema_version_and_rolls_back(tmp_path: Path
         ).fetchone()
         assert server_requests is not None
 
+        provider_thread_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(provider_threads)").fetchall()
+        }
+        assert {
+            "provider",
+            "provider_thread_id",
+            "parent_thread_id",
+            "forked_from_id",
+            "lifecycle_state",
+            "first_seen_at",
+            "last_seen_at",
+        } <= provider_thread_columns
+        assert conn.execute("PRAGMA foreign_key_list(provider_threads)").fetchall() == []
+        conn.execute(
+            "INSERT INTO provider_threads (provider, provider_thread_id, parent_thread_id, "
+            "lifecycle_state, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(provider, provider_thread_id) DO UPDATE SET "
+            "parent_thread_id = COALESCE(excluded.parent_thread_id, "
+            "provider_threads.parent_thread_id), last_seen_at = excluded.last_seen_at",
+            (
+                "codex",
+                "thread-topology",
+                "parent-topology",
+                "active",
+                "2026-07-02T12:00:00+00:00",
+                "2026-07-02T12:00:01+00:00",
+            ),
+        )
+        conn.commit()
+
         thread_item_columns = {
             str(row[1]) for row in conn.execute("PRAGMA table_info(thread_items)").fetchall()
         }

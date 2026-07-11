@@ -495,10 +495,38 @@ def test_flat_thread_routes_core_commands() -> None:
     assert watched.exit_code == 0
     assert synced.exit_code == 0
     assert calls == [
-        ("roster", {"include_archived": False}),
-        ("discover", {"limit": 5, "archived": False}),
+        (
+            "roster",
+            {
+                "include_archived": False,
+                "parent": None,
+                "ancestor": None,
+                "root": None,
+                "topology_limit": 50,
+            },
+        ),
+        (
+            "discover",
+            {
+                "limit": 5,
+                "archived": False,
+                "parent": None,
+                "ancestor": None,
+                "root": None,
+                "topology_limit": 50,
+            },
+        ),
         ("attach", {"thread": "thread-1", "sync": False}),
-        ("show", {"lane": "@old", "include_transcript": False, "max_items": 20}),
+        (
+            "show",
+            {
+                "lane": "@old",
+                "include_transcript": False,
+                "max_items": 20,
+                "topology": False,
+                "topology_limit": 50,
+            },
+        ),
         ("transcript", {"lane": "@old", "limit": 50}),
         ("watch", {"lane": "@old", "limit": 2, "timeout": 1.0}),
         ("sync", {"lane": "@old", "full": False}),

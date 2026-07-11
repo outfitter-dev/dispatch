@@ -36,6 +36,9 @@ def test_app_server_protocol_fixtures_validate_against_wire_models() -> None:
     thread_list = ThreadListResult.model_validate(
         load_json("app_server", "thread_list", "basic.json")
     )
+    descendants = ThreadListResult.model_validate(
+        load_json("app_server", "thread_list", "descendants_v0144.json")
+    )
     thread_payload = load_json("app_server", "thread_read", "with_turns.json")["thread"]
     thread = ThreadInfo.model_validate(thread_payload)
 
@@ -49,6 +52,9 @@ def test_app_server_protocol_fixtures_validate_against_wire_models() -> None:
     assert legacy_catalog.data[0].additional_speed_tiers == ["fast"]
     assert thread_list.data[0].model == "gpt-5.5"
     assert thread_list.next_cursor == "cursor-1"
+    assert descendants.data[0].source_kind == "subAgentThreadSpawn"
+    assert descendants.data[1].source_kind == "subAgentReview"
+    assert descendants.data[1].parent_thread_id == descendants.data[0].id
     assert thread.turns[0]["id"] == "turn-1"
 
 
@@ -65,6 +71,10 @@ def test_app_server_protocol_manifest_tracks_v0144_capabilities() -> None:
     assert "supportsPersonality" in manifest["selected_shapes"]["model_fields"]
     assert "lastTurnId" in manifest["selected_shapes"]["thread_fork_fields"]
     assert "backwardsCursor" in manifest["selected_shapes"]["thread_list_result_fields"]
+    assert {
+        "parentThreadId",
+        "ancestorThreadId",
+    } <= set(manifest["selected_shapes"]["thread_list_experimental_fields"])
 
 
 def test_history_v2_fixture_summarizes_tools_files_and_subagents() -> None:

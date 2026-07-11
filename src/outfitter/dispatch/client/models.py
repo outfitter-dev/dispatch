@@ -14,9 +14,9 @@ Encodes the verified gotchas (``docs/research/app-server-verification.md``):
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypeGuard
+from typing import Any, Literal, TypeGuard, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 ThreadSandbox = Literal["read-only", "workspace-write", "danger-full-access"]
@@ -39,7 +39,7 @@ type ServerRequestCategory = Literal[
     "unknown",
 ]
 SortDirection = Literal["asc", "desc"]
-ThreadSortKey = Literal["created_at", "updated_at"]
+ThreadSortKey = Literal["created_at", "updated_at", "recency_at"]
 ThreadListCwdFilter = str | list[str]
 ThreadSourceKind = Literal[
     "cli",
@@ -212,7 +212,7 @@ class ThreadInfo(WireModel):
     name: str | None = None
     path: str | None = None
     preview: str | None = None
-    source: str | None = None
+    source: JsonValue = None
     thread_source: str | None = None
     model_provider: str | None = None
     model: str | None = None
@@ -222,6 +222,37 @@ class ThreadInfo(WireModel):
     updated_at: int | None = None
     recency_at: int | None = None
     turns: list[dict[str, object]] = Field(default_factory=list)
+
+    @property
+    def source_kind(self) -> str | None:
+        """Return the App Server sourceKinds-compatible classification."""
+
+        if isinstance(self.source, str):
+            return self.source
+        if not isinstance(self.source, dict):
+            return None
+        if "custom" in self.source:
+            return "unknown"
+        subagent = self.source.get("subAgent")
+        if subagent == "review":
+            return "subAgentReview"
+        if isinstance(subagent, str) and subagent in {"compact", "memory_consolidation"}:
+            return "subAgentCompact"
+        if isinstance(subagent, dict) and "thread_spawn" in subagent:
+            return "subAgentThreadSpawn"
+        if subagent is not None:
+            return "subAgentOther"
+        return "unknown"
+
+    @property
+    def spawned_source(self) -> dict[str, object] | None:
+        if not isinstance(self.source, dict):
+            return None
+        subagent = self.source.get("subAgent")
+        if not isinstance(subagent, dict):
+            return None
+        spawned = subagent.get("thread_spawn")
+        return cast(dict[str, object], spawned) if isinstance(spawned, dict) else None
 
 
 # --- thread/* params + results ------------------------------------------------
@@ -276,7 +307,15 @@ class ThreadListParams(WireModel):
     sort_direction: SortDirection | None = None
     sort_key: ThreadSortKey | None = None
     source_kinds: list[ThreadSourceKind] | None = None
+    parent_thread_id: str | None = None
+    ancestor_thread_id: str | None = None
     use_state_db_only: bool | None = None
+
+    @model_validator(mode="after")
+    def _exclusive_topology_filters(self) -> ThreadListParams:
+        if self.parent_thread_id is not None and self.ancestor_thread_id is not None:
+            raise ValueError("parent_thread_id and ancestor_thread_id are mutually exclusive")
+        return self
 
 
 class ThreadReadParams(WireModel):

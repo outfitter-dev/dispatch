@@ -17,6 +17,8 @@ from outfitter.dispatch.registry.models import (
     MessageReceipt,
     ModelCatalogEntry,
     ProviderEvent,
+    ProviderThreadLifecycleState,
+    ProviderThreadObservation,
     ServerRequest,
     ServiceTierEntry,
     ThreadItem,
@@ -128,6 +130,33 @@ def provider_event(
         summary={"status": "started"},
         payload={"method": event_type, "params": {"turnId": provider_turn_id}},
         raw_retained=True,
+    )
+
+
+def provider_thread_observation(
+    *,
+    provider: str = "codex",
+    provider_thread_id: str = "thread-1",
+    parent_thread_id: str | None = None,
+    forked_from_id: str | None = None,
+    lifecycle_state: ProviderThreadLifecycleState | None = None,
+    observed_at: str | None = None,
+) -> ProviderThreadObservation:
+    return ProviderThreadObservation(
+        provider=provider,
+        provider_thread_id=provider_thread_id,
+        session_id="session-1",
+        parent_thread_id=parent_thread_id,
+        forked_from_id=forked_from_id,
+        source_kind="rollout",
+        thread_source="app-server",
+        agent_nickname="worker",
+        agent_role="implementer",
+        agent_depth=1,
+        lifecycle_state=lifecycle_state,
+        relationship_source="history",
+        confidence=0.9,
+        observed_at=observed_at or fixed_now_iso(),
     )
 
 

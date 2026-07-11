@@ -116,6 +116,9 @@ def build_manifest(command: list[str]) -> dict[str, object]:
                 ),
                 "thread_fork_fields": _properties(stable / "v2" / "ThreadForkParams.json"),
                 "thread_list_result_fields": _properties(stable / "v2" / "ThreadListResponse.json"),
+                "thread_list_experimental_fields": _properties(
+                    experimental / "v2" / "ThreadListParams.json"
+                ),
             },
         }
 

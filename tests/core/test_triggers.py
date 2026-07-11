@@ -12,12 +12,15 @@ from outfitter.dispatch.client.events import (
     LaneIdle,
     ServerRequestReceived,
     ThreadArchived,
+    ThreadDeleted,
+    ThreadStarted,
     ThreadUnarchived,
     TokenUsageUpdated,
     TurnCompleted,
     TurnFailed,
     TurnStarted,
 )
+from outfitter.dispatch.client.models import ThreadInfo
 from outfitter.dispatch.config import CapturePolicy
 from outfitter.dispatch.core.reactor import Reactor
 from outfitter.dispatch.core.scheduler import Scheduler
@@ -203,6 +206,32 @@ async def test_reactor_turn_lifecycle_updates_lane_state(store: Registry) -> Non
     assert runtime.status == "idle"
     assert runtime.latest_turn_id == "turn-1"
     assert runtime.latest_turn_status == "completed"
+
+
+async def test_reactor_tracks_unmanaged_thread_lifecycle_without_creating_lane(
+    store: Registry,
+) -> None:
+    ctx = make_ctx(store)
+    reactor = Reactor(ctx, TriggerRunner(ctx, lambda: _T0))
+    thread = ThreadInfo(
+        id="child",
+        parent_thread_id="root",
+        source={"subAgent": {"thread_spawn": {"parent_thread_id": "root", "depth": 1}}},
+    )
+
+    await reactor.handle(ThreadStarted("child", thread))
+    await reactor.handle(ThreadArchived("child"))
+    archived = await store.get_provider_thread("codex", "child")
+    assert archived is not None
+    assert archived.parent_thread_id == "root"
+    assert archived.lifecycle_state == "archived"
+    assert await store.find_lane("child") is None
+
+    await reactor.handle(ThreadDeleted("child"))
+    deleted = await store.get_provider_thread("codex", "child")
+    assert deleted is not None
+    assert deleted.lifecycle_state == "deleted"
+    assert deleted.parent_thread_id == "root"
 
 
 async def test_reactor_indexes_bounded_standard_event_summaries(store: Registry) -> None:
