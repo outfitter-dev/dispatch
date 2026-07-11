@@ -405,6 +405,9 @@ The superseding matrix covers the promised combined scenario behavior without on
 | clean-main isolated dogfood | full goal | passed | Account/capacity, permission profiles, and authored local/HTTPS image delivery: 3 passed in 12.07 seconds; derived schema jq assertions passed |
 | `just check` | full-stack repairs | passed | 613 tests passed, 17 live tests deselected; strict mypy/Ruff and package gates passed |
 | targeted post-repair App Server integrations | full-stack repairs | passed | Account/capacity, permission profiles, and persisted fork/topology: 3 passed in 8.35 seconds |
+| full-stack code review round 2 | full goal | 5/5 | No unresolved P0-P2 findings on the closeout branch |
+| hosted checks for PR #85 | full-stack repairs | passed | CI and all CodeQL jobs completed successfully |
+| hosted review reconciliation | full goal | passed | Six carried P2 threads on PRs #78, #79, #82, and #83 were answered with PR #85 evidence and resolved; those PRs and #85 have zero unresolved current threads |
 
 ## Prompt / Goal Alignment
 
@@ -447,6 +450,7 @@ The superseding matrix covers the promised combined scenario behavior without on
 | DIS-47 | In Progress | Rich image implementation and final local review active |
 | PR #84 / DIS-47 | merged / Done | Rich image inputs; `00f7f32`; hosted checks and local reviews clean |
 | DIS-41 | Done | App Server 0.144 fast-track parent closed after every scoped child merged |
+| PR #85 | draft / green | Full-stack review repairs; hosted checks green and carried review threads reconciled |
 
 ## Follow-Ups
 
@@ -459,7 +463,8 @@ The superseding matrix covers the promised combined scenario behavior without on
   merged and DIS-41/scoped children are Done, but cumulative repairs remain on this branch.
 - Prompt length: 3,752 characters; no unresolved placeholders.
 - Review report summary: milestone reviews converged to 5/5. Full-stack round one reopened
-  five P1 and four P2 findings; final summary is pending repair and re-review.
+  five P1 and four P2 findings; code round two is 5/5 and surface round two verified every
+  repair except hosted-thread reconciliation, which is now complete and pending final re-review.
 - Verification summary: latest `just check` passed 613 tests with 17 opt-in tests deselected,
   strict mypy/Ruff, wheel/sdist, and package contents; targeted post-repair integration passed.
 - Forbidden actions audit: this goal agent performed no release/publish, secret mutation,
