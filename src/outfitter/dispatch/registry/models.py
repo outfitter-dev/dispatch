@@ -35,6 +35,7 @@ ProviderCapacityState = Literal[
     "ready", "partial", "signed_out", "unsupported", "unavailable", "disabled"
 ]
 SyncState = Literal["unknown", "metadata", "partial", "complete", "error"]
+HistoryCapability = Literal["unknown", "supported", "turn-page-fallback", "unsupported"]
 QueuedMessageStatus = Literal["pending", "sending", "sent", "error"]
 MessageReceiptStatus = Literal["created", "sent", "accepted", "completed", "failed", "timed_out"]
 ServiceTierSource = Literal["dispatch", "configured_default", "observed", "unknown"]
@@ -457,6 +458,7 @@ class LaneSync(BaseModel):
     line_count: int | None = None
     first_offset: int | None = None
     tail_offset: int | None = None
+    next_offset: int | None = None
     last_synced_at: str | None = None
     error: str | None = None
     display_name: str | None = None
@@ -471,6 +473,26 @@ class LaneSync(BaseModel):
     latest_event_at: str | None = None
     latest_turn_id: str | None = None
     transcript_partial: bool = True
+    history_source: str | None = None
+    history_cursor: str | None = None
+    history_backwards_cursor: str | None = None
+    history_recent_cursor: str | None = None
+    history_pending_backwards_cursor: str | None = None
+    history_item_turn_id: str | None = None
+    history_item_turn_cursor: str | None = None
+    history_item_turn_direction: Literal["asc", "desc"] | None = None
+    history_item_cursor: str | None = None
+    history_cursor_guard: str | None = None
+    history_complete: bool = False
+    history_capability: HistoryCapability = "unknown"
+    observation_enabled: bool = False
+    pages_scanned: int = 0
+    turns_indexed: int = 0
+    items_indexed: int = 0
+    unchanged_skipped: bool = False
+    scanned_bytes: int = 0
+    duration_ms: int = 0
+    truncated: bool = False
 
 
 # --- triggers -----------------------------------------------------------------

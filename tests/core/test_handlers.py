@@ -24,9 +24,13 @@ from outfitter.dispatch.client.models import (
     SandboxPolicy,
     ThreadGoal,
     ThreadInfo,
+    ThreadItemsPage,
+    ThreadResumeResult,
     ThreadSearchMatch,
     ThreadSearchResult,
     ThreadStatus,
+    ThreadTurn,
+    ThreadTurnsPage,
 )
 from outfitter.dispatch.config import CapturePolicy, RuntimePolicy
 from outfitter.dispatch.contracts.errors import (
@@ -1676,8 +1680,9 @@ async def test_send_to_unmanaged_thread_registers_then_sends_when_policy_allows(
     assert sent.source == "attached"
     assert sent.writable is True
     assert sent.capabilities.send is True
-    assert [name for name, _ in client.calls][:3] == [
+    assert [name for name, _ in client.calls][:4] == [
         "thread_read",
+        "thread_resume",
         "thread_resume",
         "turn_start",
     ]
@@ -2131,7 +2136,12 @@ async def test_attach_with_sync_indexes_jsonl_and_roster_reports_state(
     assert stored.resolved_service_tier == "priority"
     assert stored.service_tier_source == "observed"
     assert sum(1 for name, _ in client.calls if name == "thread_read") == 1
-    assert not any(name == "thread_resume" for name, _ in client.calls)
+    assert any(
+        name == "thread_resume"
+        and kw["exclude_turns"] is True
+        and kw["initial_turns_page"] is not None
+        for name, kw in client.calls
+    )
 
 
 async def test_lane_sync_can_full_scan_existing_lane(store: Registry, tmp_path: Path) -> None:
@@ -2164,6 +2174,120 @@ async def test_lane_sync_can_full_scan_existing_lane(store: Registry, tmp_path: 
     assert any(name == "thread_read" for name, _ in client.calls)
 
 
+async def test_sync_persists_bounded_history_continuation_across_calls(
+    store: Registry,
+) -> None:
+    class PagedClient(FakeLaneClient):
+        async def thread_resume_full(self, thread_id: str, **kwargs: object) -> ThreadResumeResult:
+            self._record("thread_resume_full", thread_id=thread_id, **kwargs)
+            initial = kwargs.get("initial_turns_page")
+            return ThreadResumeResult(
+                thread=ThreadInfo(id=thread_id),
+                initial_turns_page=(
+                    ThreadTurnsPage(
+                        data=[ThreadTurn(id="turn-new", status="completed")],
+                        next_cursor="older",
+                        backwards_cursor="newer",
+                    )
+                    if initial is not None
+                    else None
+                ),
+            )
+
+        async def thread_items_list(self, thread_id: str, **kwargs: object) -> ThreadItemsPage:
+            self._record("thread_items_list", thread_id=thread_id, **kwargs)
+            return ThreadItemsPage()
+
+        async def thread_turns_list(self, thread_id: str, **kwargs: object) -> ThreadTurnsPage:
+            self._record("thread_turns_list", thread_id=thread_id, **kwargs)
+            assert kwargs["cursor"] == "older"
+            return ThreadTurnsPage()
+
+    client = PagedClient()
+    client.read_result = {"thread": {"id": "T9"}}
+    ctx = make_ctx(store, client)
+    await store.add_lane(id="T9", handle="@desktop", source="attached")
+
+    first = await handlers.sync_lane(LaneSyncInput(lane="T9", max_turns=1, max_items=10), ctx)
+    persisted = await store.get_lane_sync("T9")
+    assert first.sync.history_complete is False
+    assert first.sync.truncated is True
+    assert persisted is not None
+    assert persisted.history_cursor == "older"
+    assert persisted.history_item_turn_id == "turn-new"
+
+    second = await handlers.sync_lane(LaneSyncInput(lane="T9", max_turns=1, max_items=10), ctx)
+    persisted = await store.get_lane_sync("T9")
+    assert second.sync.history_complete is True
+    assert second.sync.truncated is False
+    assert persisted is not None
+    assert persisted.history_cursor is None
+    assert persisted.history_item_turn_id is None
+    assert [turn.turn_id for turn in await store.list_thread_turns(lane="T9")] == ["turn-new"]
+
+
+async def test_sync_prioritizes_recent_provider_history_over_large_local_source(
+    store: Registry, tmp_path: Path
+) -> None:
+    path = tmp_path / "large-rollout.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": "T9", "base_instructions": "x" * 2_000},
+            }
+        )
+        + "\n"
+    )
+
+    class RecentClient(FakeLaneClient):
+        async def thread_resume_full(self, thread_id: str, **kwargs: object) -> ThreadResumeResult:
+            self._record("thread_resume_full", thread_id=thread_id, **kwargs)
+            return ThreadResumeResult(
+                thread=ThreadInfo(id=thread_id),
+                initial_turns_page=ThreadTurnsPage(
+                    data=[ThreadTurn(id="turn-recent", status="completed")]
+                ),
+            )
+
+        async def thread_items_list(self, thread_id: str, **kwargs: object) -> ThreadItemsPage:
+            self._record("thread_items_list", thread_id=thread_id, **kwargs)
+            return ThreadItemsPage()
+
+    client = RecentClient()
+    client.read_result = {"thread": {"id": "T9", "path": str(path)}}
+    ctx = make_ctx(store, client)
+    await store.add_lane(id="T9", handle="@desktop", source="attached")
+
+    out = await handlers.sync_lane(
+        LaneSyncInput(lane="T9", max_bytes=256, max_turns=10, max_items=10), ctx
+    )
+
+    assert out.sync.history_complete is True
+    assert [turn.turn_id for turn in await store.list_thread_turns(lane="T9")] == ["turn-recent"]
+    assert out.sync.scanned_bytes <= 256
+    assert out.sync.state == "partial"
+
+
+async def test_sync_max_seconds_bounds_metadata_read(store: Registry) -> None:
+    class SlowReadClient(FakeLaneClient):
+        async def thread_read(
+            self, thread_id: str, include_turns: bool = False
+        ) -> dict[str, object]:
+            await asyncio.sleep(0.05)
+            return await super().thread_read(thread_id, include_turns)
+
+    client = SlowReadClient()
+    ctx = make_ctx(store, client)
+    await store.add_lane(id="T9", handle="@desktop", source="attached")
+
+    with pytest.raises(AppServerError, match=r"sync timed out after 0\.001s"):
+        await handlers.sync_lane(
+            LaneSyncInput(lane="T9", max_seconds=0.001),
+            ctx,
+        )
+
+
 async def test_sync_raw_unmanaged_thread_registers_attached_lane(
     store: Registry, tmp_path: Path
 ) -> None:
@@ -2194,7 +2318,12 @@ async def test_sync_raw_unmanaged_thread_registers_attached_lane(
     assert lane.source == "attached"
     assert lane.status == "idle"
     assert [name for name, _ in client.calls].count("thread_read") == 2
-    assert not any(name == "thread_resume" for name, _ in client.calls)
+    assert any(
+        name == "thread_resume"
+        and kw["exclude_turns"] is True
+        and kw["initial_turns_page"] is not None
+        for name, kw in client.calls
+    )
 
 
 async def test_sync_reconciles_archived_membership(store: Registry) -> None:

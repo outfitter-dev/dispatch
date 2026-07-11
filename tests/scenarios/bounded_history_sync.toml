@@ -1,0 +1,16 @@
+name = "bounded_history_sync"
+description = "Prove public sync establishes live observation and bounded recent history."
+timeout_seconds = 150
+poll_seconds = 1
+preferred_model = "gpt-5.3-codex-spark"
+allow_model_fallback = true
+effort = "low"
+parallel = false
+verify_bounded_sync = true
+unmanaged_sync = true
+
+[[lanes]]
+alias = "bounded"
+name = "scenario-bounded-history"
+prompt = "Reply with exactly one word: bounded"
+expect_contains = "bounded"

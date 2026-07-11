@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time as time_module
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, time
@@ -38,6 +39,7 @@ from outfitter.dispatch.contracts.errors import (
 )
 from outfitter.dispatch.core.capture import bound_text
 from outfitter.dispatch.registry.models import (
+    HistoryCapability,
     InboxMessage,
     Lane,
     LaneModelSettings,
@@ -59,6 +61,7 @@ from outfitter.dispatch.registry.models import (
 )
 
 from . import queue
+from .backfill import backfill_codex_history
 from .capacity import refresh_codex_capacity
 from .history import (
     detect_worktree,
@@ -166,7 +169,7 @@ from .selectors import resolve_managed_selector, resolve_thread_selector
 from .server_request_policy import expected_response
 from .server_requests import respond_to_server_request
 from .staging import StageContent, stage_session
-from .sync import scan_codex_jsonl
+from .sync import SourceIdentity, SyncLimits, scan_codex_jsonl
 from .topology import observe_thread, observe_threads, topology_views
 from .turn_settings import (
     load_turn_start_settings,
@@ -332,6 +335,17 @@ def _sync_view(sync: LaneSync | None) -> LaneSyncView:
         latest_turn_id=sync.latest_turn_id,
         transcript_partial=sync.transcript_partial,
         error=sync.error,
+        history_source=sync.history_source,
+        history_complete=sync.history_complete,
+        history_capability=sync.history_capability,
+        observation_enabled=sync.observation_enabled,
+        pages_scanned=sync.pages_scanned,
+        turns_indexed=sync.turns_indexed,
+        items_indexed=sync.items_indexed,
+        unchanged_skipped=sync.unchanged_skipped,
+        scanned_bytes=sync.scanned_bytes,
+        duration_ms=sync.duration_ms,
+        truncated=sync.truncated,
     )
 
 
@@ -810,11 +824,7 @@ async def _register_attached_thread(
 ) -> Lane:
     await observe_thread(ctx.registry, thread, relationship_source="thread/read")
     handle = thread.name or f"@{thread.id[:8]}"
-    lane_sync = (
-        await _sync_from_thread(thread.id, thread, full=False)
-        if sync
-        else _metadata_sync(thread.id, thread, state="metadata")
-    )
+    lane_sync = _metadata_sync(thread.id, thread, state="metadata")
     lane, _ = await ctx.registry.add_lane_with_sync(
         id=thread.id,
         handle=handle,
@@ -826,6 +836,8 @@ async def _register_attached_thread(
         audit_detail=handle,
     )
     await _record_observed_model(lane, thread, lane_sync, ctx)
+    if sync:
+        await _sync_lane(lane, ctx, full=False, metadata=thread)
     return lane
 
 
@@ -840,11 +852,122 @@ async def _read_thread_metadata(ctx: Ctx, thread_id: str) -> ThreadInfo:
 
 
 async def _sync_lane(
-    lane: Lane, ctx: Ctx, *, full: bool, metadata: ThreadInfo | None = None
+    lane: Lane,
+    ctx: Ctx,
+    *,
+    full: bool,
+    metadata: ThreadInfo | None = None,
+    limits: SyncLimits | None = None,
+    max_turns: int = 50,
+    max_items: int = 500,
+    max_bytes: int = 524_288,
+    max_seconds: float = 5.0,
+) -> LaneSync:
+    started = time_module.monotonic()
+    try:
+        async with asyncio.timeout(max_seconds):
+            return await _sync_lane_body(
+                lane,
+                ctx,
+                full=full,
+                metadata=metadata,
+                limits=limits,
+                max_turns=max_turns,
+                max_items=max_items,
+                max_bytes=max_bytes,
+                max_seconds=max_seconds,
+                started=started,
+            )
+    except TimeoutError as exc:
+        raise AppServerError(
+            f"sync timed out after {max_seconds:g}s while refreshing {lane.id!r}"
+        ) from exc
+
+
+async def _sync_lane_body(
+    lane: Lane,
+    ctx: Ctx,
+    *,
+    full: bool,
+    metadata: ThreadInfo | None,
+    limits: SyncLimits | None,
+    max_turns: int,
+    max_items: int,
+    max_bytes: int,
+    max_seconds: float,
+    started: float,
 ) -> LaneSync:
     thread = metadata or await _read_thread_metadata(ctx, lane.id)
     await observe_thread(ctx.registry, thread, relationship_source="thread/read")
-    sync = await ctx.registry.upsert_lane_sync(await _sync_from_thread(lane.id, thread, full=full))
+    previous = await ctx.registry.get_lane_sync(lane.id)
+    remaining_seconds = max(0.000_001, max_seconds - (time_module.monotonic() - started))
+    history = await backfill_codex_history(
+        client=ctx.client,
+        registry=ctx.registry,
+        lane=lane,
+        cursor=previous.history_cursor if previous is not None else None,
+        backwards_cursor=(previous.history_backwards_cursor if previous is not None else None),
+        recent_cursor=previous.history_recent_cursor if previous is not None else None,
+        pending_backwards_cursor=(
+            previous.history_pending_backwards_cursor if previous is not None else None
+        ),
+        item_turn_id=previous.history_item_turn_id if previous is not None else None,
+        item_turn_cursor=(previous.history_item_turn_cursor if previous is not None else None),
+        item_turn_direction=(
+            previous.history_item_turn_direction if previous is not None else None
+        ),
+        item_cursor=previous.history_item_cursor if previous is not None else None,
+        cursor_guard=previous.history_cursor_guard if previous is not None else None,
+        history_complete=previous.history_complete if previous is not None else False,
+        history_capability=(previous.history_capability if previous is not None else "unknown"),
+        max_turns=max_turns,
+        max_items=max_items,
+        max_seconds=remaining_seconds,
+        max_bytes=max_bytes,
+        capture=ctx.capture,
+    )
+    local_byte_budget = max(0, max_bytes - history.bytes_scanned)
+    requested_limits = limits or SyncLimits()
+    top_bytes = min(requested_limits.top_bytes, local_byte_budget // 2)
+    local_limits = SyncLimits(
+        top_bytes=top_bytes,
+        tail_bytes=min(requested_limits.tail_bytes, local_byte_budget - top_bytes),
+        tail_lines=requested_limits.tail_lines,
+        full_bytes=min(requested_limits.full_bytes, local_byte_budget),
+    )
+    sync = await _sync_from_thread(
+        lane.id,
+        thread,
+        full=full,
+        previous=previous,
+        limits=local_limits,
+    )
+    duration_ms = max(0, round((time_module.monotonic() - started) * 1000))
+    sync = sync.model_copy(
+        update={
+            "history_source": history.source,
+            "history_cursor": history.cursor,
+            "history_backwards_cursor": (history.backwards_cursor),
+            "history_recent_cursor": history.recent_cursor,
+            "history_pending_backwards_cursor": history.pending_backwards_cursor,
+            "history_item_turn_id": history.item_turn_id,
+            "history_item_turn_cursor": history.item_turn_cursor,
+            "history_item_turn_direction": history.item_turn_direction,
+            "history_item_cursor": history.item_cursor,
+            "history_cursor_guard": history.cursor_guard,
+            "history_complete": history.complete,
+            "history_capability": history.capability,
+            "observation_enabled": history.observation_enabled,
+            "pages_scanned": history.pages_scanned,
+            "turns_indexed": history.turns_indexed,
+            "items_indexed": history.items_indexed,
+            "scanned_bytes": sync.scanned_bytes + history.bytes_scanned,
+            "duration_ms": duration_ms,
+            "truncated": sync.truncated or history.truncated,
+            "transcript_partial": not history.complete,
+        }
+    )
+    sync = await ctx.registry.upsert_lane_sync(sync)
     await _record_observed_model(lane, thread, sync, ctx)
     return sync
 
@@ -876,10 +999,60 @@ async def _record_observed_model(
     return observed
 
 
-async def _sync_from_thread(lane_id: str, thread: ThreadInfo, *, full: bool) -> LaneSync:
+async def _sync_from_thread(
+    lane_id: str,
+    thread: ThreadInfo,
+    *,
+    full: bool,
+    previous: LaneSync | None = None,
+    limits: SyncLimits | None = None,
+) -> LaneSync:
     if thread.path is None:
         return _metadata_sync(lane_id, thread, state="metadata")
-    facts = await asyncio.to_thread(scan_codex_jsonl, thread.path, full=full)
+    previous_source = None
+    if (
+        previous is not None
+        and previous.source_path == thread.path
+        and previous.source_device is not None
+        and previous.source_inode is not None
+        and previous.source_size is not None
+        and previous.source_mtime_ns is not None
+    ):
+        previous_source = SourceIdentity(
+            path=previous.source_path,
+            device=previous.source_device,
+            inode=previous.source_inode,
+            size=previous.source_size,
+            mtime_ns=previous.source_mtime_ns,
+        )
+    facts = await asyncio.to_thread(
+        scan_codex_jsonl,
+        thread.path,
+        full=full,
+        limits=limits or SyncLimits(),
+        previous=previous_source,
+        previous_offset=previous.next_offset if previous is not None else None,
+    )
+    if facts.unchanged and previous is not None:
+        return previous.model_copy(
+            update={
+                "display_name": thread.name or previous.display_name,
+                "preview": _short(thread.preview, limit=200) or previous.preview,
+                "cwd": thread.cwd or previous.cwd,
+                "source": thread.source_kind or previous.source,
+                "thread_source": thread.thread_source or previous.thread_source,
+                "model_provider": thread.model_provider or previous.model_provider,
+                "model": thread.model or previous.model,
+                "reasoning_effort": thread.reasoning_effort or previous.reasoning_effort,
+                "session_id": thread.session_id or previous.session_id,
+                "pages_scanned": 0,
+                "turns_indexed": 0,
+                "items_indexed": 0,
+                "unchanged_skipped": True,
+                "scanned_bytes": 0,
+                "duration_ms": 0,
+            }
+        )
     state = facts.state
     return _metadata_sync(
         lane_id,
@@ -893,17 +1066,56 @@ async def _sync_from_thread(lane_id: str, thread: ThreadInfo, *, full: bool) -> 
         line_count=facts.line_count,
         first_offset=facts.first_offset,
         tail_offset=facts.tail_offset,
+        next_offset=facts.next_offset,
         error=facts.error,
-        cwd=facts.cwd,
-        source=facts.source_kind,
-        thread_source=facts.thread_source,
-        model_provider=facts.model_provider,
-        model=facts.model,
-        reasoning_effort=facts.reasoning_effort,
-        session_id=facts.session_id,
-        latest_event_at=facts.latest_event_at,
-        latest_turn_id=facts.latest_turn_id,
+        cwd=facts.cwd or (previous.cwd if previous is not None else None),
+        source=facts.source_kind or (previous.source if previous is not None else None),
+        thread_source=(
+            facts.thread_source or (previous.thread_source if previous is not None else None)
+        ),
+        model_provider=(
+            facts.model_provider or (previous.model_provider if previous is not None else None)
+        ),
+        model=facts.model or (previous.model if previous is not None else None),
+        reasoning_effort=(
+            facts.reasoning_effort or (previous.reasoning_effort if previous is not None else None)
+        ),
+        session_id=facts.session_id or (previous.session_id if previous is not None else None),
+        latest_event_at=(
+            facts.latest_event_at or (previous.latest_event_at if previous is not None else None)
+        ),
+        latest_turn_id=(
+            facts.latest_turn_id or (previous.latest_turn_id if previous is not None else None)
+        ),
         transcript_partial=state != "complete",
+        unchanged_skipped=False,
+        scanned_bytes=facts.bytes_scanned,
+        truncated=(
+            state != "complete"
+            and facts.source is not None
+            and facts.bytes_scanned < facts.source.size
+        ),
+        history_source=previous.history_source if previous is not None else None,
+        history_cursor=previous.history_cursor if previous is not None else None,
+        history_backwards_cursor=(
+            previous.history_backwards_cursor if previous is not None else None
+        ),
+        history_recent_cursor=(previous.history_recent_cursor if previous is not None else None),
+        history_pending_backwards_cursor=(
+            previous.history_pending_backwards_cursor if previous is not None else None
+        ),
+        history_item_turn_id=(previous.history_item_turn_id if previous is not None else None),
+        history_item_turn_cursor=(
+            previous.history_item_turn_cursor if previous is not None else None
+        ),
+        history_item_turn_direction=(
+            previous.history_item_turn_direction if previous is not None else None
+        ),
+        history_item_cursor=(previous.history_item_cursor if previous is not None else None),
+        history_cursor_guard=(previous.history_cursor_guard if previous is not None else None),
+        history_complete=previous.history_complete if previous is not None else False,
+        history_capability=(previous.history_capability if previous is not None else "unknown"),
+        observation_enabled=(previous.observation_enabled if previous is not None else False),
     )
 
 
@@ -920,6 +1132,7 @@ def _metadata_sync(
     line_count: int | None = None,
     first_offset: int | None = None,
     tail_offset: int | None = None,
+    next_offset: int | None = None,
     error: str | None = None,
     cwd: str | None = None,
     source: str | None = None,
@@ -931,6 +1144,26 @@ def _metadata_sync(
     latest_event_at: str | None = None,
     latest_turn_id: str | None = None,
     transcript_partial: bool = True,
+    history_source: str | None = None,
+    history_cursor: str | None = None,
+    history_backwards_cursor: str | None = None,
+    history_recent_cursor: str | None = None,
+    history_pending_backwards_cursor: str | None = None,
+    history_item_turn_id: str | None = None,
+    history_item_turn_cursor: str | None = None,
+    history_item_turn_direction: Literal["asc", "desc"] | None = None,
+    history_item_cursor: str | None = None,
+    history_cursor_guard: str | None = None,
+    history_complete: bool = False,
+    history_capability: HistoryCapability = "unknown",
+    observation_enabled: bool = False,
+    pages_scanned: int = 0,
+    turns_indexed: int = 0,
+    items_indexed: int = 0,
+    unchanged_skipped: bool = False,
+    scanned_bytes: int = 0,
+    duration_ms: int = 0,
+    truncated: bool = False,
 ) -> LaneSync:
     return LaneSync(
         lane=lane_id,
@@ -943,6 +1176,7 @@ def _metadata_sync(
         line_count=line_count,
         first_offset=first_offset,
         tail_offset=tail_offset,
+        next_offset=next_offset,
         error=error,
         display_name=thread.name,
         preview=_short(thread.preview, limit=200),
@@ -956,6 +1190,26 @@ def _metadata_sync(
         latest_event_at=latest_event_at,
         latest_turn_id=latest_turn_id,
         transcript_partial=transcript_partial,
+        history_source=history_source,
+        history_cursor=history_cursor,
+        history_backwards_cursor=history_backwards_cursor,
+        history_recent_cursor=history_recent_cursor,
+        history_pending_backwards_cursor=history_pending_backwards_cursor,
+        history_item_turn_id=history_item_turn_id,
+        history_item_turn_cursor=history_item_turn_cursor,
+        history_item_turn_direction=history_item_turn_direction,
+        history_item_cursor=history_item_cursor,
+        history_cursor_guard=history_cursor_guard,
+        history_complete=history_complete,
+        history_capability=history_capability,
+        observation_enabled=observation_enabled,
+        pages_scanned=pages_scanned,
+        turns_indexed=turns_indexed,
+        items_indexed=items_indexed,
+        unchanged_skipped=unchanged_skipped,
+        scanned_bytes=scanned_bytes,
+        duration_ms=duration_ms,
+        truncated=truncated,
     )
 
 
@@ -1490,8 +1744,28 @@ async def sync_lane(inp: LaneSyncInput, ctx: Ctx) -> LaneSyncResult:
         lane = await _register_attached_thread(thread, ctx, sync=False, audit_op="attach")
     else:
         lane = resolved.lane
-    sync = await _sync_lane(lane, ctx, full=inp.full)
-    lane = await _reconcile_archive_membership(lane, ctx)
+    jsonl_budget = max(1, inp.max_bytes // 2)
+    try:
+        async with asyncio.timeout(inp.max_seconds):
+            sync = await _sync_lane(
+                lane,
+                ctx,
+                full=inp.full,
+                limits=SyncLimits(
+                    top_bytes=jsonl_budget,
+                    tail_bytes=jsonl_budget,
+                    full_bytes=inp.max_bytes,
+                ),
+                max_turns=inp.max_turns,
+                max_items=inp.max_items,
+                max_bytes=inp.max_bytes,
+                max_seconds=inp.max_seconds,
+            )
+            lane = await _reconcile_archive_membership(lane, ctx)
+    except TimeoutError as exc:
+        raise AppServerError(
+            f"sync timed out after {inp.max_seconds:g}s while refreshing {lane.id!r}"
+        ) from exc
     model_settings = await ctx.registry.get_lane_model_settings(lane.id)
     await ctx.registry.log_action(
         "sync", lane=lane.id, detail=f"state={sync.state}; full={inp.full}"

@@ -223,6 +223,18 @@
       "threadId",
       "threadSource"
     ],
+    "thread_items_list_fields": [
+      "cursor",
+      "limit",
+      "sortDirection",
+      "threadId",
+      "turnId"
+    ],
+    "thread_items_page_fields": [
+      "backwardsCursor",
+      "data",
+      "nextCursor"
+    ],
     "thread_list_experimental_fields": [
       "ancestorThreadId",
       "archived",
@@ -238,6 +250,54 @@
       "useStateDbOnly"
     ],
     "thread_list_result_fields": [
+      "backwardsCursor",
+      "data",
+      "nextCursor"
+    ],
+    "thread_resume_experimental_fields": [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "baseInstructions",
+      "config",
+      "cwd",
+      "developerInstructions",
+      "excludeTurns",
+      "history",
+      "initialTurnsPage",
+      "model",
+      "modelProvider",
+      "path",
+      "permissions",
+      "personality",
+      "runtimeWorkspaceRoots",
+      "sandbox",
+      "serviceTier",
+      "threadId"
+    ],
+    "thread_resume_result_experimental_fields": [
+      "activePermissionProfile",
+      "approvalPolicy",
+      "approvalsReviewer",
+      "cwd",
+      "initialTurnsPage",
+      "instructionSources",
+      "model",
+      "modelProvider",
+      "multiAgentMode",
+      "reasoningEffort",
+      "runtimeWorkspaceRoots",
+      "sandbox",
+      "serviceTier",
+      "thread"
+    ],
+    "thread_turns_list_fields": [
+      "cursor",
+      "itemsView",
+      "limit",
+      "sortDirection",
+      "threadId"
+    ],
+    "thread_turns_page_fields": [
       "backwardsCursor",
       "data",
       "nextCursor"

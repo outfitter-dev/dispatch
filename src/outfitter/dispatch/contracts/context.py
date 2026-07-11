@@ -44,11 +44,16 @@ from outfitter.dispatch.client.models import (
     ThreadGoal,
     ThreadGoalStatus,
     ThreadInfo,
+    ThreadItemsPage,
     ThreadListCwdFilter,
+    ThreadResumeInitialTurnsPageParams,
+    ThreadResumeResult,
     ThreadSandbox,
     ThreadSearchResult,
     ThreadSortKey,
     ThreadSourceKind,
+    ThreadTurnsPage,
+    TurnItemsView,
 )
 from outfitter.dispatch.config import CapturePolicy, RuntimePolicy
 
@@ -91,7 +96,36 @@ class LaneClient(Protocol):
         thread_id: str,
         *,
         exclude_turns: bool | None = None,
+        initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None,
     ) -> ThreadInfo: ...
+
+    async def thread_resume_full(
+        self,
+        thread_id: str,
+        *,
+        exclude_turns: bool | None = None,
+        initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None,
+    ) -> ThreadResumeResult: ...
+
+    async def thread_turns_list(
+        self,
+        thread_id: str,
+        *,
+        cursor: str | None = None,
+        limit: int | None = None,
+        sort_direction: SortDirection | None = None,
+        items_view: TurnItemsView | None = None,
+    ) -> ThreadTurnsPage: ...
+
+    async def thread_items_list(
+        self,
+        thread_id: str,
+        *,
+        cursor: str | None = None,
+        limit: int | None = None,
+        sort_direction: SortDirection | None = None,
+        turn_id: str | None = None,
+    ) -> ThreadItemsPage: ...
 
     async def thread_fork(
         self,

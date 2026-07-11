@@ -20,6 +20,7 @@ class SyncLimits:
     top_bytes: int = 262_144
     tail_bytes: int = 262_144
     tail_lines: int = 200
+    full_bytes: int = 16_777_216
 
 
 DEFAULT_SYNC_LIMITS = SyncLimits()
@@ -41,6 +42,7 @@ class JsonlSyncFacts:
     line_count: int | None = None
     first_offset: int | None = None
     tail_offset: int | None = None
+    next_offset: int | None = None
     latest_event_at: str | None = None
     latest_turn_id: str | None = None
     session_id: str | None = None
@@ -52,16 +54,25 @@ class JsonlSyncFacts:
     reasoning_effort: str | None = None
     error: str | None = None
     stable_during_read: bool = True
+    bytes_scanned: int = 0
+    unchanged: bool = False
 
 
 def scan_codex_jsonl(
-    path: str, *, full: bool = False, limits: SyncLimits = DEFAULT_SYNC_LIMITS
+    path: str,
+    *,
+    full: bool = False,
+    limits: SyncLimits = DEFAULT_SYNC_LIMITS,
+    previous: SourceIdentity | None = None,
+    previous_offset: int | None = None,
 ) -> JsonlSyncFacts:
     source_path = Path(path).expanduser()
     records: list[dict[str, Any]]
     line_count: int | None
     first_offset: int | None
     tail_offset: int | None
+    state: SyncScanState
+    next_offset: int | None
     try:
         before = source_path.stat()
     except OSError as exc:
@@ -74,20 +85,60 @@ def scan_codex_jsonl(
         size=before.st_size,
         mtime_ns=before.st_mtime_ns,
     )
+    fully_consumed = source.size == 0 or (
+        previous_offset is not None and previous_offset >= source.size
+    )
+    if previous == source and fully_consumed:
+        return JsonlSyncFacts(
+            state="partial",
+            source=source,
+            stable_during_read=True,
+            bytes_scanned=0,
+            unchanged=True,
+            next_offset=previous_offset,
+        )
     try:
-        if full:
-            records, line_count, first_offset, tail_offset = _read_all_records(source_path)
-            state: SyncScanState = "complete"
+        same_growing_source = (
+            previous is not None
+            and previous.path == source.path
+            and previous.device == source.device
+            and previous.inode == source.inode
+            and previous.size <= source.size
+            and previous_offset is not None
+            and previous_offset < source.size
+        )
+        if same_growing_source and previous_offset is not None:
+            records, tail_offset, next_offset, bytes_scanned, blocked_record = _read_records_from(
+                source_path, previous_offset, limits.tail_bytes
+            )
+            line_count = None
+            first_offset = previous_offset
+            state = "partial"
+            scan_error = (
+                f"complete JSONL record at offset {previous_offset} exceeds the "
+                f"{limits.tail_bytes}-byte local scan budget; rerun with larger --max-bytes"
+                if blocked_record
+                else None
+            )
+        elif full:
+            records, line_count, first_offset, tail_offset, bytes_scanned = _read_all_records(
+                source_path, limits.full_bytes
+            )
+            state = "complete" if bytes_scanned >= source.size else "partial"
+            next_offset = bytes_scanned
+            scan_error = None
         else:
-            records, line_count, first_offset, tail_offset = _read_quick_records(
+            records, line_count, first_offset, tail_offset, next_offset = _read_quick_records(
                 source_path, limits
             )
             state = "partial"
+            bytes_scanned = min(source.size, limits.top_bytes) + min(source.size, limits.tail_bytes)
+            scan_error = None
     except OSError as exc:
         return JsonlSyncFacts(state="error", source=source, error=f"read failed: {exc}")
 
     summary = _summarize_records(records)
-    error: str | None = None
+    error: str | None = scan_error
     try:
         after = source_path.stat()
         stable_during_read = (
@@ -103,6 +154,7 @@ def scan_codex_jsonl(
         line_count=line_count,
         first_offset=first_offset,
         tail_offset=tail_offset,
+        next_offset=next_offset,
         latest_event_at=summary.latest_event_at,
         latest_turn_id=summary.latest_turn_id,
         session_id=summary.session_id,
@@ -114,10 +166,13 @@ def scan_codex_jsonl(
         reasoning_effort=summary.reasoning_effort,
         error=error,
         stable_during_read=stable_during_read,
+        bytes_scanned=min(bytes_scanned, source.size),
     )
 
 
-def _read_all_records(path: Path) -> tuple[list[dict[str, Any]], int, int | None, int | None]:
+def _read_all_records(
+    path: Path, max_bytes: int
+) -> tuple[list[dict[str, Any]], int, int | None, int | None, int]:
     records: list[dict[str, Any]] = []
     first_offset: int | None = None
     tail_offset: int | None = None
@@ -125,6 +180,8 @@ def _read_all_records(path: Path) -> tuple[list[dict[str, Any]], int, int | None
     line_count = 0
     with path.open("rb") as handle:
         for raw in handle:
+            if offset + len(raw) > max_bytes:
+                break
             line_count += 1
             if first_offset is None:
                 first_offset = offset
@@ -133,14 +190,16 @@ def _read_all_records(path: Path) -> tuple[list[dict[str, Any]], int, int | None
                 records.append(parsed)
                 tail_offset = offset
             offset += len(raw)
-    return records, line_count, first_offset, tail_offset
+    return records, line_count, first_offset, tail_offset, offset
 
 
 def _read_quick_records(
     path: Path, limits: SyncLimits
-) -> tuple[list[dict[str, Any]], None, int | None, int | None]:
+) -> tuple[list[dict[str, Any]], None, int | None, int | None, int | None]:
     top_records, first_offset = _read_top_records(path, limits.top_bytes)
-    tail_records, tail_offset = _read_tail_records(path, limits.tail_bytes, limits.tail_lines)
+    tail_records, tail_offset, next_offset = _read_tail_records(
+        path, limits.tail_bytes, limits.tail_lines
+    )
     seen: set[int] = set()
     records: list[dict[str, Any]] = []
     for offset, record in (*top_records, *tail_records):
@@ -148,7 +207,7 @@ def _read_quick_records(
             continue
         seen.add(offset)
         records.append(record)
-    return records, None, first_offset, tail_offset
+    return records, None, first_offset, tail_offset, next_offset
 
 
 def _read_top_records(
@@ -178,9 +237,9 @@ def _read_top_records(
 
 def _read_tail_records(
     path: Path, max_bytes: int, max_lines: int
-) -> tuple[list[tuple[int, dict[str, Any]]], int | None]:
+) -> tuple[list[tuple[int, dict[str, Any]]], int | None, int | None]:
     if max_bytes <= 0 or max_lines <= 0:
-        return [], None
+        return [], None, None
     size = path.stat().st_size
     read_size = min(size, max_bytes)
     with path.open("rb") as handle:
@@ -199,6 +258,7 @@ def _read_tail_records(
     offset += sum(len(line) for line in lines[: len(lines) - len(selected)])
     records: list[tuple[int, dict[str, Any]]] = []
     first_offset: int | None = None
+    next_offset: int | None = offset
     for raw in selected:
         parsed = _parse_line(raw)
         if parsed is not None:
@@ -206,7 +266,36 @@ def _read_tail_records(
                 first_offset = offset
             records.append((offset, parsed))
         offset += len(raw)
-    return records, first_offset
+        next_offset = offset
+    return records, first_offset, next_offset
+
+
+def _read_records_from(
+    path: Path, offset: int, max_bytes: int
+) -> tuple[list[dict[str, Any]], int | None, int, int, bool]:
+    records: list[dict[str, Any]] = []
+    tail_offset: int | None = None
+    next_offset = offset
+    bytes_scanned = 0
+    blocked_record = False
+    with path.open("rb") as handle:
+        handle.seek(offset)
+        while bytes_scanned < max_bytes:
+            raw = handle.readline(max_bytes - bytes_scanned + 1)
+            if not raw:
+                break
+            if bytes_scanned + len(raw) > max_bytes:
+                blocked_record = True
+                break
+            if not raw.endswith(b"\n"):
+                break
+            parsed = _parse_line(raw)
+            if parsed is not None:
+                records.append(parsed)
+                tail_offset = next_offset
+            bytes_scanned += len(raw)
+            next_offset += len(raw)
+    return records, tail_offset, next_offset, bytes_scanned, blocked_record
 
 
 def _parse_line(raw: bytes) -> dict[str, Any] | None:

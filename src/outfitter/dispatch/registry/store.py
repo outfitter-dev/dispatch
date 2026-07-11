@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import wraps
 from pathlib import Path
-from typing import cast
+from typing import Any, Concatenate, Protocol, cast
 
 import aiosqlite
 
@@ -56,7 +57,63 @@ from .models import (
 from .refs import BASE58BTC_ALPHABET, CODEX_REF_SOURCE, codex_ref_payload, make_ref
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 19
+
+
+class _ReentrantAsyncLock:
+    """Task-reentrant lock for nested registry write APIs."""
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._owner: asyncio.Task[object] | None = None
+        self._depth = 0
+
+    async def __aenter__(self) -> None:
+        task = asyncio.current_task()
+        if task is None:
+            raise RuntimeError("registry writes require an asyncio task")
+        if self._owner is task:
+            self._depth += 1
+            return
+        await self._lock.acquire()
+        self._owner = task
+        self._depth = 1
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object | None,
+    ) -> None:
+        task = asyncio.current_task()
+        if task is None or self._owner is not task:
+            raise RuntimeError("registry write lock released by a non-owner")
+        self._depth -= 1
+        if self._depth == 0:
+            self._owner = None
+            self._lock.release()
+
+
+class _RegistryAccessOwner(Protocol):
+    _write_lock: _ReentrantAsyncLock
+
+
+def _serialized_access[T: _RegistryAccessOwner, **P, R](
+    func: Callable[Concatenate[T, P], Coroutine[Any, Any, R]],
+) -> Callable[Concatenate[T, P], Coroutine[Any, Any, R]]:
+    """Serialize public access to the shared SQLite connection by task."""
+
+    @wraps(func)
+    async def wrapped(self: T, *args: P.args, **kwargs: P.kwargs) -> R:
+        async with self._write_lock:
+            return await func(self, *args, **kwargs)
+
+    wrapped.__dict__["__registry_serialized__"] = True
+
+    return cast(
+        "Callable[Concatenate[T, P], Coroutine[Any, Any, R]]",
+        wrapped,
+    )
 
 
 @dataclass(frozen=True)
@@ -446,8 +503,29 @@ CREATE TABLE IF NOT EXISTS lane_sync_sources (
     line_count INTEGER,
     first_offset INTEGER,
     tail_offset INTEGER,
+    next_offset INTEGER,
     last_synced_at TEXT,
     error TEXT,
+    history_source TEXT,
+    history_cursor TEXT,
+    history_backwards_cursor TEXT,
+    history_recent_cursor TEXT,
+    history_pending_backwards_cursor TEXT,
+    history_item_turn_id TEXT,
+    history_item_turn_cursor TEXT,
+    history_item_turn_direction TEXT,
+    history_item_cursor TEXT,
+    history_cursor_guard TEXT,
+    history_complete INTEGER NOT NULL DEFAULT 0,
+    history_capability TEXT NOT NULL DEFAULT 'unknown',
+    observation_enabled INTEGER NOT NULL DEFAULT 0,
+    pages_scanned INTEGER NOT NULL DEFAULT 0,
+    turns_indexed INTEGER NOT NULL DEFAULT 0,
+    items_indexed INTEGER NOT NULL DEFAULT 0,
+    unchanged_skipped INTEGER NOT NULL DEFAULT 0,
+    scanned_bytes INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    truncated INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS lane_snapshots (
@@ -564,7 +642,7 @@ class Registry:
     def __init__(self, conn: aiosqlite.Connection, now: Clock) -> None:
         self._conn = conn
         self._now = now
-        self._write_lock = asyncio.Lock()
+        self._write_lock = _ReentrantAsyncLock()
 
     @classmethod
     async def open(cls, path: str | Path = ":memory:", now: Clock = _utcnow) -> Registry:
@@ -592,6 +670,7 @@ class Registry:
         await store._conn.commit()
         return store
 
+    @_serialized_access
     async def close(self) -> None:
         await self._conn.close()
 
@@ -656,6 +735,49 @@ class Registry:
             await self._ensure_provider_threads_table()
         if user_version < 17:
             await self._ensure_provider_capacity_table()
+        if user_version < 18:
+            await self._ensure_lane_sync_progress_columns()
+        if user_version < 19:
+            await self._ensure_lane_sync_continuation_columns()
+
+    async def _ensure_lane_sync_progress_columns(self) -> None:
+        async with self._conn.execute("PRAGMA table_info(lane_sync_sources)") as cur:
+            rows = await cur.fetchall()
+        columns = {str(row["name"]) for row in rows}
+        column_defs = {
+            "history_source": "TEXT",
+            "next_offset": "INTEGER",
+            "history_cursor": "TEXT",
+            "history_backwards_cursor": "TEXT",
+            "history_recent_cursor": "TEXT",
+            "history_pending_backwards_cursor": "TEXT",
+            "history_item_turn_id": "TEXT",
+            "history_item_turn_cursor": "TEXT",
+            "history_item_cursor": "TEXT",
+            "history_complete": "INTEGER NOT NULL DEFAULT 0",
+            "history_capability": "TEXT NOT NULL DEFAULT 'unknown'",
+            "observation_enabled": "INTEGER NOT NULL DEFAULT 0",
+            "pages_scanned": "INTEGER NOT NULL DEFAULT 0",
+            "turns_indexed": "INTEGER NOT NULL DEFAULT 0",
+            "items_indexed": "INTEGER NOT NULL DEFAULT 0",
+            "unchanged_skipped": "INTEGER NOT NULL DEFAULT 0",
+            "scanned_bytes": "INTEGER NOT NULL DEFAULT 0",
+            "duration_ms": "INTEGER NOT NULL DEFAULT 0",
+            "truncated": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for name, definition in column_defs.items():
+            if name not in columns:
+                await self._conn.execute(
+                    f"ALTER TABLE lane_sync_sources ADD COLUMN {name} {definition}"
+                )
+
+    async def _ensure_lane_sync_continuation_columns(self) -> None:
+        async with self._conn.execute("PRAGMA table_info(lane_sync_sources)") as cur:
+            rows = await cur.fetchall()
+        columns = {str(row["name"]) for row in rows}
+        for name in ("history_item_turn_direction", "history_cursor_guard"):
+            if name not in columns:
+                await self._conn.execute(f"ALTER TABLE lane_sync_sources ADD COLUMN {name} TEXT")
 
     async def _ensure_ref_columns(self) -> None:
         async with self._conn.execute("PRAGMA table_info(lanes)") as cur:
@@ -949,6 +1071,7 @@ class Registry:
 
     # --- lanes ----------------------------------------------------------------
 
+    @_serialized_access
     async def add_lane(
         self,
         *,
@@ -978,10 +1101,11 @@ class Registry:
             updated_at=now,
             last_event_at=None,
         )
-        await self._insert_lane(lane)
-        await self._conn.commit()
+        async with self._transaction():
+            await self._insert_lane(lane)
         return lane
 
+    @_serialized_access
     async def add_lane_with_sync(
         self,
         *,
@@ -1069,26 +1193,31 @@ class Registry:
             "use the full Codex thread id"
         )
 
+    @_serialized_access
     async def find_lane(self, lane_id: str) -> Lane | None:
         async with self._conn.execute("SELECT * FROM lanes WHERE id = ?", (lane_id,)) as cur:
             row = await cur.fetchone()
         return _row_to_lane(row) if row is not None else None
 
+    @_serialized_access
     async def find_lane_by_ref(self, ref: str) -> Lane | None:
         async with self._conn.execute("SELECT * FROM lanes WHERE ref = ?", (ref,)) as cur:
             row = await cur.fetchone()
         return _row_to_lane(row) if row is not None else None
 
+    @_serialized_access
     async def find_lane_by_handle(self, handle: str) -> Lane | None:
         async with self._conn.execute("SELECT * FROM lanes WHERE handle = ?", (handle,)) as cur:
             row = await cur.fetchone()
         return _row_to_lane(row) if row is not None else None
 
+    @_serialized_access
     async def find_lanes_by_handle(self, handle: str) -> list[Lane]:
         async with self._conn.execute("SELECT * FROM lanes WHERE handle = ?", (handle,)) as cur:
             rows = await cur.fetchall()
         return [_row_to_lane(row) for row in rows]
 
+    @_serialized_access
     async def find_lanes_by_title(self, title: str) -> list[Lane]:
         async with self._conn.execute(
             """
@@ -1102,6 +1231,7 @@ class Registry:
             rows = await cur.fetchall()
         return [_row_to_lane(row) for row in rows]
 
+    @_serialized_access
     async def fuzzy_find_lanes_by_title(self, title: str) -> list[Lane]:
         pattern = f"%{title}%"
         async with self._conn.execute(
@@ -1116,12 +1246,14 @@ class Registry:
             rows = await cur.fetchall()
         return [_row_to_lane(row) for row in rows]
 
+    @_serialized_access
     async def get_lane(self, lane_id: str) -> Lane:
         lane = await self.find_lane(lane_id)
         if lane is None:
             raise NotFoundError(f"no lane {lane_id!r}")
         return lane
 
+    @_serialized_access
     async def list_lanes(self, *, include_archived: bool = False) -> list[Lane]:
         sql = "SELECT * FROM lanes"
         if not include_archived:
@@ -1131,101 +1263,123 @@ class Registry:
             rows = await cur.fetchall()
         return [_row_to_lane(row) for row in rows]
 
+    @_serialized_access
     async def update_lane_status(self, lane_id: str, status: LaneStatus) -> None:
-        await self._conn.execute(
-            "UPDATE lanes SET status = ?, updated_at = ? WHERE id = ?",
-            (status, self._now().isoformat(), lane_id),
-        )
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._conn.execute(
+                "UPDATE lanes SET status = ?, updated_at = ? WHERE id = ?",
+                (status, self._now().isoformat(), lane_id),
+            )
+            await self._conn.commit()
 
+    @_serialized_access
     async def update_lane_handle(self, lane_id: str, handle: str) -> None:
-        await self._conn.execute(
-            "UPDATE lanes SET handle = ?, updated_at = ? WHERE id = ?",
-            (handle, self._now().isoformat(), lane_id),
-        )
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._conn.execute(
+                "UPDATE lanes SET handle = ?, updated_at = ? WHERE id = ?",
+                (handle, self._now().isoformat(), lane_id),
+            )
+            await self._conn.commit()
 
+    @_serialized_access
     async def set_active_turn(self, lane_id: str, turn_id: str | None) -> None:
-        await self._conn.execute(
-            "UPDATE lanes SET active_turn_id = ?, updated_at = ? WHERE id = ?",
-            (turn_id, self._now().isoformat(), lane_id),
-        )
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._conn.execute(
+                "UPDATE lanes SET active_turn_id = ?, updated_at = ? WHERE id = ?",
+                (turn_id, self._now().isoformat(), lane_id),
+            )
+            await self._conn.commit()
 
+    @_serialized_access
     async def record_turn_started(self, lane_id: str, turn_id: str | None) -> None:
-        await self._conn.execute(
-            "UPDATE lanes SET active_turn_id = ?, latest_turn_id = ?, "
-            "latest_turn_status = 'started', latest_error = NULL, latest_error_at = NULL, "
-            "status = 'busy', updated_at = ? WHERE id = ?",
-            (turn_id, turn_id, self._now().isoformat(), lane_id),
-        )
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._conn.execute(
+                "UPDATE lanes SET active_turn_id = ?, latest_turn_id = ?, "
+                "latest_turn_status = 'started', latest_error = NULL, latest_error_at = NULL, "
+                "status = 'busy', updated_at = ? WHERE id = ?",
+                (turn_id, turn_id, self._now().isoformat(), lane_id),
+            )
+            await self._conn.commit()
 
+    @_serialized_access
     async def record_turn_completed(self, lane_id: str, turn_id: str | None) -> None:
-        await self._conn.execute(
-            "UPDATE lanes SET active_turn_id = NULL, latest_turn_id = COALESCE(?, latest_turn_id), "
-            "latest_turn_status = 'completed', latest_error = NULL, latest_error_at = NULL, "
-            "status = 'idle', updated_at = ? WHERE id = ?",
-            (turn_id, self._now().isoformat(), lane_id),
-        )
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._conn.execute(
+                "UPDATE lanes SET active_turn_id = NULL, "
+                "latest_turn_id = COALESCE(?, latest_turn_id), "
+                "latest_turn_status = 'completed', latest_error = NULL, latest_error_at = NULL, "
+                "status = 'idle', updated_at = ? WHERE id = ?",
+                (turn_id, self._now().isoformat(), lane_id),
+            )
+            await self._conn.commit()
 
+    @_serialized_access
     async def record_turn_failed(
         self, lane_id: str, turn_id: str | None, message: str | None
     ) -> None:
         now = self._now().isoformat()
-        await self._conn.execute(
-            "UPDATE lanes SET active_turn_id = NULL, latest_turn_id = COALESCE(?, latest_turn_id), "
-            "latest_turn_status = 'failed', latest_error = ?, latest_error_at = ?, "
-            "status = 'error', updated_at = ? WHERE id = ?",
-            (turn_id, message, now if message is not None else None, now, lane_id),
-        )
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._conn.execute(
+                "UPDATE lanes SET active_turn_id = NULL, "
+                "latest_turn_id = COALESCE(?, latest_turn_id), "
+                "latest_turn_status = 'failed', latest_error = ?, latest_error_at = ?, "
+                "status = 'error', updated_at = ? WHERE id = ?",
+                (turn_id, message, now if message is not None else None, now, lane_id),
+            )
+            await self._conn.commit()
 
+    @_serialized_access
     async def record_turn_request_failed(self, lane_id: str, message: str | None) -> None:
         now = self._now().isoformat()
-        await self._conn.execute(
-            "UPDATE lanes SET active_turn_id = NULL, latest_turn_id = NULL, "
-            "latest_turn_status = 'failed', latest_error = ?, latest_error_at = ?, "
-            "status = 'error', updated_at = ? WHERE id = ?",
-            (message, now if message is not None else None, now, lane_id),
-        )
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._conn.execute(
+                "UPDATE lanes SET active_turn_id = NULL, latest_turn_id = NULL, "
+                "latest_turn_status = 'failed', latest_error = ?, latest_error_at = ?, "
+                "status = 'error', updated_at = ? WHERE id = ?",
+                (message, now if message is not None else None, now, lane_id),
+            )
+            await self._conn.commit()
 
+    @_serialized_access
     async def mark_lane_idle(self, lane_id: str) -> None:
         lane = await self.find_lane(lane_id)
         status: LaneStatus = (
             "error" if lane is not None and lane.latest_turn_status == "failed" else "idle"
         )
-        await self._conn.execute(
-            "UPDATE lanes SET active_turn_id = NULL, status = ?, updated_at = ? WHERE id = ?",
-            (status, self._now().isoformat(), lane_id),
-        )
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._conn.execute(
+                "UPDATE lanes SET active_turn_id = NULL, status = ?, updated_at = ? WHERE id = ?",
+                (status, self._now().isoformat(), lane_id),
+            )
+            await self._conn.commit()
 
+    @_serialized_access
     async def touch_lane_event(self, lane_id: str, when: datetime | None = None) -> None:
         stamp = (when or self._now()).isoformat()
-        await self._conn.execute(
-            "UPDATE lanes SET last_event_at = ?, updated_at = ? WHERE id = ?",
-            (stamp, self._now().isoformat(), lane_id),
-        )
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._conn.execute(
+                "UPDATE lanes SET last_event_at = ?, updated_at = ? WHERE id = ?",
+                (stamp, self._now().isoformat(), lane_id),
+            )
+            await self._conn.commit()
 
     # --- queued messages ------------------------------------------------------
 
+    @_serialized_access
     async def enqueue_message(self, *, lane: str, text: str) -> QueuedMessage:
         now = self._now().isoformat()
-        cur = await self._conn.execute(
-            "INSERT INTO queued_messages (lane, text, status, created_at, updated_at) "
-            "VALUES (?, ?, 'pending', ?, ?)",
-            (lane, text, now, now),
-        )
-        await self._conn.commit()
-        message_id = cur.lastrowid
+        async with self._transaction():
+            cur = await self._conn.execute(
+                "INSERT INTO queued_messages (lane, text, status, created_at, updated_at) "
+                "VALUES (?, ?, 'pending', ?, ?)",
+                (lane, text, now, now),
+            )
+            message_id = cur.lastrowid
         if message_id is None:
             raise RuntimeError("queued message insert did not return an id")
         return await self.get_queued_message(message_id)
 
+    @_serialized_access
     async def get_queued_message(self, message_id: int) -> QueuedMessage:
         async with self._conn.execute(
             "SELECT * FROM queued_messages WHERE id = ?", (message_id,)
@@ -1235,6 +1389,7 @@ class Registry:
             raise NotFoundError(f"no queued message {message_id!r}")
         return QueuedMessage.model_validate(_row_dict(row))
 
+    @_serialized_access
     async def next_pending_message(self, lane: str) -> QueuedMessage | None:
         async with self._conn.execute(
             "SELECT * FROM queued_messages WHERE lane = ? AND status = 'pending' "
@@ -1244,6 +1399,7 @@ class Registry:
             row = await cur.fetchone()
         return QueuedMessage.model_validate(_row_dict(row)) if row is not None else None
 
+    @_serialized_access
     async def pending_message_count(self, lane: str) -> int:
         async with self._conn.execute(
             "SELECT COUNT(*) AS count FROM queued_messages WHERE lane = ? AND status = 'pending'",
@@ -1252,40 +1408,47 @@ class Registry:
             row = await cur.fetchone()
         return int(row["count"]) if row is not None else 0
 
+    @_serialized_access
     async def claim_queued_message(self, message_id: int) -> bool:
-        cur = await self._conn.execute(
-            "UPDATE queued_messages SET status = 'sending', updated_at = ? "
-            "WHERE id = ? AND status = 'pending'",
-            (self._now().isoformat(), message_id),
-        )
-        await self._conn.commit()
+        async with self._transaction():
+            cur = await self._conn.execute(
+                "UPDATE queued_messages SET status = 'sending', updated_at = ? "
+                "WHERE id = ? AND status = 'pending'",
+                (self._now().isoformat(), message_id),
+            )
         return cur.rowcount == 1
 
+    @_serialized_access
     async def complete_queued_message(self, message_id: int) -> None:
-        await self._conn.execute(
-            "UPDATE queued_messages SET status = 'sent', updated_at = ?, error = NULL WHERE id = ?",
-            (self._now().isoformat(), message_id),
-        )
-        await self._conn.commit()
+        async with self._transaction():
+            await self._conn.execute(
+                "UPDATE queued_messages SET status = 'sent', updated_at = ?, "
+                "error = NULL WHERE id = ?",
+                (self._now().isoformat(), message_id),
+            )
 
+    @_serialized_access
     async def fail_queued_message(self, message_id: int, error: str) -> None:
-        await self._conn.execute(
-            "UPDATE queued_messages SET status = 'error', updated_at = ?, error = ? WHERE id = ?",
-            (self._now().isoformat(), error, message_id),
-        )
-        await self._conn.commit()
+        async with self._transaction():
+            await self._conn.execute(
+                "UPDATE queued_messages SET status = 'error', updated_at = ?, "
+                "error = ? WHERE id = ?",
+                (self._now().isoformat(), error, message_id),
+            )
 
+    @_serialized_access
     async def reset_sending_messages(self) -> int:
-        cur = await self._conn.execute(
-            "UPDATE queued_messages SET status = 'pending', updated_at = ? "
-            "WHERE status = 'sending'",
-            (self._now().isoformat(),),
-        )
-        await self._conn.commit()
+        async with self._transaction():
+            cur = await self._conn.execute(
+                "UPDATE queued_messages SET status = 'pending', updated_at = ? "
+                "WHERE status = 'sending'",
+                (self._now().isoformat(),),
+            )
         return cur.rowcount
 
     # --- inbox messages -------------------------------------------------------
 
+    @_serialized_access
     async def add_inbox_message(
         self,
         *,
@@ -1299,28 +1462,29 @@ class Registry:
         delivery: str = "inbox",
     ) -> InboxMessage:
         now = self._now().isoformat()
-        cur = await self._conn.execute(
-            "INSERT INTO inbox_messages (recipient_lane, source_lane, subscription_id, kind, "
-            "subject, body, payload, state, delivery, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
-            (
-                recipient_lane,
-                source_lane,
-                subscription_id,
-                kind,
-                subject,
-                body,
-                json.dumps(payload or {}, separators=(",", ":")),
-                delivery,
-                now,
-            ),
-        )
-        await self._conn.commit()
-        message_id = cur.lastrowid
+        async with self._transaction():
+            cur = await self._conn.execute(
+                "INSERT INTO inbox_messages (recipient_lane, source_lane, subscription_id, kind, "
+                "subject, body, payload, state, delivery, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+                (
+                    recipient_lane,
+                    source_lane,
+                    subscription_id,
+                    kind,
+                    subject,
+                    body,
+                    json.dumps(payload or {}, separators=(",", ":")),
+                    delivery,
+                    now,
+                ),
+            )
+            message_id = cur.lastrowid
         if message_id is None:
             raise RuntimeError("inbox message insert did not return an id")
         return await self.get_inbox_message(message_id)
 
+    @_serialized_access
     async def get_inbox_message(self, message_id: int) -> InboxMessage:
         async with self._conn.execute(
             "SELECT * FROM inbox_messages WHERE id = ?", (message_id,)
@@ -1330,6 +1494,7 @@ class Registry:
             raise NotFoundError(f"no inbox message {message_id!r}")
         return _row_to_inbox_message(row)
 
+    @_serialized_access
     async def list_inbox_messages(
         self,
         *,
@@ -1358,86 +1523,92 @@ class Registry:
             rows = await cur.fetchall()
         return [_row_to_inbox_message(row) for row in rows]
 
+    @_serialized_access
     async def ack_inbox_message(self, message_id: int) -> InboxMessage:
         now = self._now().isoformat()
-        cur = await self._conn.execute(
-            "UPDATE inbox_messages SET state = 'acked', acked_at = ?, delivered_at = "
-            "COALESCE(delivered_at, ?)"
-            " WHERE id = ? AND state != 'acked'",
-            (now, now, message_id),
-        )
-        await self._conn.commit()
+        async with self._transaction():
+            cur = await self._conn.execute(
+                "UPDATE inbox_messages SET state = 'acked', acked_at = ?, delivered_at = "
+                "COALESCE(delivered_at, ?)"
+                " WHERE id = ? AND state != 'acked'",
+                (now, now, message_id),
+            )
         if cur.rowcount == 0:
             return await self.get_inbox_message(message_id)
         return await self.get_inbox_message(message_id)
 
+    @_serialized_access
     async def ack_inbox_messages_for_lane(self, lane: str) -> int:
-        cur = await self._conn.execute(
-            "UPDATE inbox_messages SET state = 'acked', acked_at = ?, delivered_at = "
-            "COALESCE(delivered_at, ?) WHERE recipient_lane = ? AND state = 'pending'",
-            (self._now().isoformat(), self._now().isoformat(), lane),
-        )
-        await self._conn.commit()
+        async with self._transaction():
+            cur = await self._conn.execute(
+                "UPDATE inbox_messages SET state = 'acked', acked_at = ?, delivered_at = "
+                "COALESCE(delivered_at, ?) WHERE recipient_lane = ? AND state = 'pending'",
+                (self._now().isoformat(), self._now().isoformat(), lane),
+            )
         return cur.rowcount
 
+    @_serialized_access
     async def mark_inbox_delivered(
         self, message_id: int, *, queued_message_id: int | None = None, ack: bool = False
     ) -> InboxMessage:
         now = self._now().isoformat()
         state = "acked" if ack else "pending"
-        await self._conn.execute(
-            "UPDATE inbox_messages SET delivered_at = ?, queued_message_id = ?, state = ?, "
-            "acked_at = CASE WHEN ? THEN ? ELSE acked_at END WHERE id = ?",
-            (now, queued_message_id, state, int(ack), now, message_id),
-        )
-        await self._conn.commit()
+        async with self._transaction():
+            await self._conn.execute(
+                "UPDATE inbox_messages SET delivered_at = ?, queued_message_id = ?, state = ?, "
+                "acked_at = CASE WHEN ? THEN ? ELSE acked_at END WHERE id = ?",
+                (now, queued_message_id, state, int(ack), now, message_id),
+            )
         return await self.get_inbox_message(message_id)
 
+    @_serialized_access
     async def mark_inbox_delivered_for_queue(
         self, queued_message_id: int, *, ack: bool = False
     ) -> int:
         now = self._now().isoformat()
         state = "acked" if ack else "pending"
-        cur = await self._conn.execute(
-            "UPDATE inbox_messages SET delivered_at = ?, state = ?, "
-            "acked_at = CASE WHEN ? THEN ? ELSE acked_at END "
-            "WHERE queued_message_id = ?",
-            (now, state, int(ack), now, queued_message_id),
-        )
-        await self._conn.commit()
+        async with self._transaction():
+            cur = await self._conn.execute(
+                "UPDATE inbox_messages SET delivered_at = ?, state = ?, "
+                "acked_at = CASE WHEN ? THEN ? ELSE acked_at END "
+                "WHERE queued_message_id = ?",
+                (now, state, int(ack), now, queued_message_id),
+            )
         return cur.rowcount
 
     # --- subscriptions --------------------------------------------------------
 
+    @_serialized_access
     async def add_subscription(self, subscription: Subscription) -> Subscription:
-        await self._conn.execute(
-            "INSERT INTO subscriptions (id, target_lane, subscriber_lane, when_spec, delivery, "
-            "deliver_policy, tail, once, ack_policy, attribution, state, created_at, updated_at, "
-            "last_matched_at, last_inbox_message_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                subscription.id,
-                subscription.target_lane,
-                subscription.subscriber_lane,
-                subscription.when,
-                subscription.delivery,
-                subscription.deliver,
-                subscription.tail,
-                int(subscription.once),
-                subscription.ack,
-                int(subscription.attribution),
-                subscription.state,
-                subscription.created_at.isoformat(),
-                subscription.updated_at.isoformat(),
-                subscription.last_matched_at.isoformat()
-                if subscription.last_matched_at is not None
-                else None,
-                subscription.last_inbox_message_id,
-            ),
-        )
-        await self._conn.commit()
+        async with self._transaction():
+            await self._conn.execute(
+                "INSERT INTO subscriptions (id, target_lane, subscriber_lane, when_spec, "
+                "delivery, deliver_policy, tail, once, ack_policy, attribution, state, "
+                "created_at, updated_at, last_matched_at, last_inbox_message_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    subscription.id,
+                    subscription.target_lane,
+                    subscription.subscriber_lane,
+                    subscription.when,
+                    subscription.delivery,
+                    subscription.deliver,
+                    subscription.tail,
+                    int(subscription.once),
+                    subscription.ack,
+                    int(subscription.attribution),
+                    subscription.state,
+                    subscription.created_at.isoformat(),
+                    subscription.updated_at.isoformat(),
+                    subscription.last_matched_at.isoformat()
+                    if subscription.last_matched_at is not None
+                    else None,
+                    subscription.last_inbox_message_id,
+                ),
+            )
         return await self.get_subscription(subscription.id)
 
+    @_serialized_access
     async def get_subscription(self, subscription_id: str) -> Subscription:
         async with self._conn.execute(
             "SELECT * FROM subscriptions WHERE id = ?", (subscription_id,)
@@ -1447,6 +1618,7 @@ class Registry:
             raise NotFoundError(f"no subscription {subscription_id!r}")
         return _row_to_subscription(row)
 
+    @_serialized_access
     async def list_subscriptions(
         self,
         *,
@@ -1473,25 +1645,31 @@ class Registry:
             rows = await cur.fetchall()
         return [_row_to_subscription(row) for row in rows]
 
+    @_serialized_access
     async def remove_subscription(self, subscription_id: str) -> bool:
-        cur = await self._conn.execute("DELETE FROM subscriptions WHERE id = ?", (subscription_id,))
-        await self._conn.commit()
+        async with self._transaction():
+            cur = await self._conn.execute(
+                "DELETE FROM subscriptions WHERE id = ?", (subscription_id,)
+            )
         return cur.rowcount > 0
 
+    @_serialized_access
     async def mark_subscription_matched(
         self, subscription_id: str, *, inbox_message_id: int
     ) -> Subscription:
         now = self._now().isoformat()
-        await self._conn.execute(
-            "UPDATE subscriptions SET last_matched_at = ?, last_inbox_message_id = ?, "
-            "state = CASE WHEN once = 1 THEN 'done' ELSE state END, updated_at = ? WHERE id = ?",
-            (now, inbox_message_id, now, subscription_id),
-        )
-        await self._conn.commit()
+        async with self._transaction():
+            await self._conn.execute(
+                "UPDATE subscriptions SET last_matched_at = ?, last_inbox_message_id = ?, "
+                "state = CASE WHEN once = 1 THEN 'done' ELSE state END, "
+                "updated_at = ? WHERE id = ?",
+                (now, inbox_message_id, now, subscription_id),
+            )
         return await self.get_subscription(subscription_id)
 
     # --- lane sync -----------------------------------------------------------
 
+    @_serialized_access
     async def upsert_lane_sync(self, sync: LaneSync) -> LaneSync:
         now = sync.last_synced_at or self._now().isoformat()
         async with self._transaction():
@@ -1505,13 +1683,40 @@ class Registry:
         await self._conn.execute(
             "INSERT INTO lane_sync_sources (lane, state, source_path, source_device, "
             "source_inode, source_size, source_mtime_ns, line_count, first_offset, "
-            "tail_offset, last_synced_at, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "tail_offset, next_offset, last_synced_at, error, history_source, history_cursor, "
+            "history_backwards_cursor, history_recent_cursor, "
+            "history_pending_backwards_cursor, history_item_turn_id, history_item_cursor, "
+            "history_item_turn_cursor, history_item_turn_direction, history_cursor_guard, "
+            "history_complete, history_capability, observation_enabled, "
+            "pages_scanned, "
+            "turns_indexed, items_indexed, unchanged_skipped, scanned_bytes, duration_ms, "
+            "truncated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(lane) DO UPDATE SET state = excluded.state, "
             "source_path = excluded.source_path, source_device = excluded.source_device, "
             "source_inode = excluded.source_inode, source_size = excluded.source_size, "
             "source_mtime_ns = excluded.source_mtime_ns, line_count = excluded.line_count, "
             "first_offset = excluded.first_offset, tail_offset = excluded.tail_offset, "
-            "last_synced_at = excluded.last_synced_at, error = excluded.error",
+            "next_offset = excluded.next_offset, "
+            "last_synced_at = excluded.last_synced_at, error = excluded.error, "
+            "history_source = excluded.history_source, "
+            "history_cursor = excluded.history_cursor, "
+            "history_backwards_cursor = excluded.history_backwards_cursor, "
+            "history_recent_cursor = excluded.history_recent_cursor, "
+            "history_pending_backwards_cursor = excluded.history_pending_backwards_cursor, "
+            "history_item_turn_id = excluded.history_item_turn_id, "
+            "history_item_turn_cursor = excluded.history_item_turn_cursor, "
+            "history_item_turn_direction = excluded.history_item_turn_direction, "
+            "history_item_cursor = excluded.history_item_cursor, "
+            "history_cursor_guard = excluded.history_cursor_guard, "
+            "history_complete = excluded.history_complete, "
+            "history_capability = excluded.history_capability, "
+            "observation_enabled = excluded.observation_enabled, "
+            "pages_scanned = excluded.pages_scanned, turns_indexed = excluded.turns_indexed, "
+            "items_indexed = excluded.items_indexed, "
+            "unchanged_skipped = excluded.unchanged_skipped, "
+            "scanned_bytes = excluded.scanned_bytes, duration_ms = excluded.duration_ms, "
+            "truncated = excluded.truncated",
             (
                 sync.lane,
                 sync.state,
@@ -1523,8 +1728,29 @@ class Registry:
                 sync.line_count,
                 sync.first_offset,
                 sync.tail_offset,
+                sync.next_offset,
                 last_synced_at,
                 sync.error,
+                sync.history_source,
+                sync.history_cursor,
+                sync.history_backwards_cursor,
+                sync.history_recent_cursor,
+                sync.history_pending_backwards_cursor,
+                sync.history_item_turn_id,
+                sync.history_item_cursor,
+                sync.history_item_turn_cursor,
+                sync.history_item_turn_direction,
+                sync.history_cursor_guard,
+                int(sync.history_complete),
+                sync.history_capability,
+                int(sync.observation_enabled),
+                sync.pages_scanned,
+                sync.turns_indexed,
+                sync.items_indexed,
+                int(sync.unchanged_skipped),
+                sync.scanned_bytes,
+                sync.duration_ms,
+                int(sync.truncated),
             ),
         )
         await self._conn.execute(
@@ -1556,11 +1782,13 @@ class Registry:
             ),
         )
 
+    @_serialized_access
     async def get_lane_sync(self, lane_id: str) -> LaneSync | None:
         async with self._conn.execute(_LANE_SYNC_SELECT + " WHERE src.lane = ?", (lane_id,)) as cur:
             row = await cur.fetchone()
         return _row_to_lane_sync(row) if row is not None else None
 
+    @_serialized_access
     async def get_lane_sync_many(self, lane_ids: list[str]) -> dict[str, LaneSync]:
         if not lane_ids:
             return {}
@@ -1573,50 +1801,56 @@ class Registry:
 
     # --- model catalog / lane model provenance ---------------------------------
 
+    @_serialized_access
     async def upsert_model_catalog(self, models: list[ModelCatalogEntry]) -> None:
-        for model in models:
-            existing = await self.get_model_catalog_entry(model.id, provider=model.provider)
-            first_seen_at = existing.first_seen_at if existing is not None else model.first_seen_at
-            await self._conn.execute(
-                "INSERT INTO model_catalog (id, provider, display_name, description, "
-                "is_default, hidden, default_reasoning_effort, supported_reasoning_efforts, "
-                "default_service_tier, service_tiers, additional_speed_tiers, first_seen_at, "
-                "input_modalities, supports_personality, upgrade, last_seen_at, source) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(provider, id) DO UPDATE SET display_name = excluded.display_name, "
-                "description = excluded.description, is_default = excluded.is_default, "
-                "hidden = excluded.hidden, "
-                "default_reasoning_effort = excluded.default_reasoning_effort, "
-                "supported_reasoning_efforts = excluded.supported_reasoning_efforts, "
-                "default_service_tier = excluded.default_service_tier, "
-                "service_tiers = excluded.service_tiers, "
-                "additional_speed_tiers = excluded.additional_speed_tiers, "
-                "input_modalities = excluded.input_modalities, "
-                "supports_personality = excluded.supports_personality, "
-                "upgrade = excluded.upgrade, "
-                "last_seen_at = excluded.last_seen_at, source = excluded.source",
-                (
-                    model.id,
-                    model.provider,
-                    model.display_name,
-                    model.description,
-                    _bool_or_none(model.is_default),
-                    _bool_or_none(model.hidden),
-                    model.default_reasoning_effort,
-                    json.dumps(model.supported_reasoning_efforts),
-                    model.default_service_tier,
-                    json.dumps([tier.model_dump(mode="python") for tier in model.service_tiers]),
-                    json.dumps(model.additional_speed_tiers),
-                    first_seen_at,
-                    json.dumps(model.input_modalities),
-                    _bool_or_none(model.supports_personality),
-                    model.upgrade,
-                    model.last_seen_at,
-                    model.source,
-                ),
-            )
-        await self._conn.commit()
+        async with self._transaction():
+            for model in models:
+                existing = await self.get_model_catalog_entry(model.id, provider=model.provider)
+                first_seen_at = (
+                    existing.first_seen_at if existing is not None else model.first_seen_at
+                )
+                await self._conn.execute(
+                    "INSERT INTO model_catalog (id, provider, display_name, description, "
+                    "is_default, hidden, default_reasoning_effort, supported_reasoning_efforts, "
+                    "default_service_tier, service_tiers, additional_speed_tiers, first_seen_at, "
+                    "input_modalities, supports_personality, upgrade, last_seen_at, source) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(provider, id) DO UPDATE SET display_name = excluded.display_name, "
+                    "description = excluded.description, is_default = excluded.is_default, "
+                    "hidden = excluded.hidden, "
+                    "default_reasoning_effort = excluded.default_reasoning_effort, "
+                    "supported_reasoning_efforts = excluded.supported_reasoning_efforts, "
+                    "default_service_tier = excluded.default_service_tier, "
+                    "service_tiers = excluded.service_tiers, "
+                    "additional_speed_tiers = excluded.additional_speed_tiers, "
+                    "input_modalities = excluded.input_modalities, "
+                    "supports_personality = excluded.supports_personality, "
+                    "upgrade = excluded.upgrade, "
+                    "last_seen_at = excluded.last_seen_at, source = excluded.source",
+                    (
+                        model.id,
+                        model.provider,
+                        model.display_name,
+                        model.description,
+                        _bool_or_none(model.is_default),
+                        _bool_or_none(model.hidden),
+                        model.default_reasoning_effort,
+                        json.dumps(model.supported_reasoning_efforts),
+                        model.default_service_tier,
+                        json.dumps(
+                            [tier.model_dump(mode="python") for tier in model.service_tiers]
+                        ),
+                        json.dumps(model.additional_speed_tiers),
+                        first_seen_at,
+                        json.dumps(model.input_modalities),
+                        _bool_or_none(model.supports_personality),
+                        model.upgrade,
+                        model.last_seen_at,
+                        model.source,
+                    ),
+                )
 
+    @_serialized_access
     async def list_model_catalog(self, provider: str | None = None) -> list[ModelCatalogEntry]:
         query = "SELECT * FROM model_catalog"
         params: tuple[str, ...] = ()
@@ -1628,6 +1862,7 @@ class Registry:
             rows = await cur.fetchall()
         return [_row_to_model_catalog_entry(row) for row in rows]
 
+    @_serialized_access
     async def get_model_catalog_entry(
         self, model_id: str, *, provider: str = "openai"
     ) -> ModelCatalogEntry | None:
@@ -1638,31 +1873,34 @@ class Registry:
             row = await cur.fetchone()
         return _row_to_model_catalog_entry(row) if row is not None else None
 
+    @_serialized_access
     async def upsert_lane_model_settings(self, settings: LaneModelSettings) -> None:
-        await self._conn.execute(
-            "INSERT INTO lane_model_settings (lane, model_provider, model, reasoning_effort, "
-            "requested_service_tier, resolved_service_tier, service_tier_name, "
-            "service_tier_source, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(lane) DO UPDATE SET model_provider = excluded.model_provider, "
-            "model = excluded.model, reasoning_effort = excluded.reasoning_effort, "
-            "requested_service_tier = excluded.requested_service_tier, "
-            "resolved_service_tier = excluded.resolved_service_tier, "
-            "service_tier_name = excluded.service_tier_name, "
-            "service_tier_source = excluded.service_tier_source, updated_at = excluded.updated_at",
-            (
-                settings.lane,
-                settings.model_provider,
-                settings.model,
-                settings.reasoning_effort,
-                settings.requested_service_tier,
-                settings.resolved_service_tier,
-                settings.service_tier_name,
-                settings.service_tier_source,
-                settings.updated_at,
-            ),
-        )
-        await self._conn.commit()
+        async with self._transaction():
+            await self._conn.execute(
+                "INSERT INTO lane_model_settings (lane, model_provider, model, reasoning_effort, "
+                "requested_service_tier, resolved_service_tier, service_tier_name, "
+                "service_tier_source, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(lane) DO UPDATE SET model_provider = excluded.model_provider, "
+                "model = excluded.model, reasoning_effort = excluded.reasoning_effort, "
+                "requested_service_tier = excluded.requested_service_tier, "
+                "resolved_service_tier = excluded.resolved_service_tier, "
+                "service_tier_name = excluded.service_tier_name, "
+                "service_tier_source = excluded.service_tier_source, "
+                "updated_at = excluded.updated_at",
+                (
+                    settings.lane,
+                    settings.model_provider,
+                    settings.model,
+                    settings.reasoning_effort,
+                    settings.requested_service_tier,
+                    settings.resolved_service_tier,
+                    settings.service_tier_name,
+                    settings.service_tier_source,
+                    settings.updated_at,
+                ),
+            )
 
+    @_serialized_access
     async def get_lane_model_settings(self, lane_id: str) -> LaneModelSettings | None:
         async with self._conn.execute(
             "SELECT * FROM lane_model_settings WHERE lane = ?", (lane_id,)
@@ -1670,6 +1908,7 @@ class Registry:
             row = await cur.fetchone()
         return _row_to_lane_model_settings(row) if row is not None else None
 
+    @_serialized_access
     async def get_lane_model_settings_many(
         self, lane_ids: list[str]
     ) -> dict[str, LaneModelSettings]:
@@ -1685,33 +1924,37 @@ class Registry:
 
     # --- lane runtime settings -------------------------------------------------
 
+    @_serialized_access
     async def upsert_lane_runtime_settings(self, settings: LaneRuntimeSettings) -> None:
-        await self._conn.execute(
-            "INSERT INTO lane_runtime_settings (lane, sandbox, approval_policy, "
-            "approvals_reviewer, effort, summary, model, service_tier, output_schema, "
-            "personality, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(lane) DO UPDATE SET sandbox = excluded.sandbox, "
-            "approval_policy = excluded.approval_policy, "
-            "approvals_reviewer = excluded.approvals_reviewer, effort = excluded.effort, "
-            "summary = excluded.summary, model = excluded.model, "
-            "service_tier = excluded.service_tier, output_schema = excluded.output_schema, "
-            "personality = excluded.personality, updated_at = excluded.updated_at",
-            (
-                settings.lane,
-                settings.sandbox,
-                settings.approval_policy,
-                settings.approvals_reviewer,
-                settings.effort,
-                settings.summary,
-                settings.model,
-                settings.service_tier,
-                json.dumps(settings.output_schema) if settings.output_schema is not None else None,
-                settings.personality,
-                settings.updated_at,
-            ),
-        )
-        await self._conn.commit()
+        async with self._transaction():
+            await self._conn.execute(
+                "INSERT INTO lane_runtime_settings (lane, sandbox, approval_policy, "
+                "approvals_reviewer, effort, summary, model, service_tier, output_schema, "
+                "personality, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(lane) DO UPDATE SET sandbox = excluded.sandbox, "
+                "approval_policy = excluded.approval_policy, "
+                "approvals_reviewer = excluded.approvals_reviewer, effort = excluded.effort, "
+                "summary = excluded.summary, model = excluded.model, "
+                "service_tier = excluded.service_tier, output_schema = excluded.output_schema, "
+                "personality = excluded.personality, updated_at = excluded.updated_at",
+                (
+                    settings.lane,
+                    settings.sandbox,
+                    settings.approval_policy,
+                    settings.approvals_reviewer,
+                    settings.effort,
+                    settings.summary,
+                    settings.model,
+                    settings.service_tier,
+                    json.dumps(settings.output_schema)
+                    if settings.output_schema is not None
+                    else None,
+                    settings.personality,
+                    settings.updated_at,
+                ),
+            )
 
+    @_serialized_access
     async def get_lane_runtime_settings(self, lane_id: str) -> LaneRuntimeSettings | None:
         async with self._conn.execute(
             "SELECT * FROM lane_runtime_settings WHERE lane = ?", (lane_id,)
@@ -1721,6 +1964,7 @@ class Registry:
 
     # --- provider threads / topology -----------------------------------------
 
+    @_serialized_access
     async def upsert_provider_thread(
         self, observation: ProviderThreadObservation
     ) -> ProviderThread:
@@ -1728,6 +1972,7 @@ class Registry:
 
         return (await self.upsert_provider_threads([observation]))[0]
 
+    @_serialized_access
     async def upsert_provider_threads(
         self, observations: list[ProviderThreadObservation]
     ) -> list[ProviderThread]:
@@ -1813,6 +2058,7 @@ class Registry:
             ),
         )
 
+    @_serialized_access
     async def get_provider_thread(
         self, provider: str, provider_thread_id: str
     ) -> ProviderThread | None:
@@ -1823,6 +2069,7 @@ class Registry:
             row = await cur.fetchone()
         return _row_to_provider_thread(row) if row is not None else None
 
+    @_serialized_access
     async def list_provider_threads(
         self,
         *,
@@ -1846,6 +2093,7 @@ class Registry:
             rows = await cur.fetchall()
         return [_row_to_provider_thread(row) for row in rows]
 
+    @_serialized_access
     async def mark_provider_thread_state(
         self,
         provider: str,
@@ -1863,6 +2111,7 @@ class Registry:
             )
         )
 
+    @_serialized_access
     async def get_provider_thread_topology(
         self,
         provider: str,
@@ -2063,6 +2312,7 @@ class Registry:
 
     # --- provider account / capacity observations ----------------------------
 
+    @_serialized_access
     async def upsert_provider_capacity_observation(
         self, observation: ProviderCapacityObservation
     ) -> ProviderCapacityObservation:
@@ -2110,6 +2360,7 @@ class Registry:
             raise RuntimeError("provider capacity upsert did not return a row")
         return saved
 
+    @_serialized_access
     async def get_provider_capacity_observation(
         self,
         provider: str,
@@ -2127,6 +2378,7 @@ class Registry:
             return None
         return ProviderCapacityObservation.model_validate_json(str(row["payload"]))
 
+    @_serialized_access
     async def list_provider_capacity_observations(
         self,
         *,
@@ -2154,6 +2406,7 @@ class Registry:
 
     # --- provider events / normalized history ---------------------------------
 
+    @_serialized_access
     async def record_provider_event(self, event: ProviderEvent) -> ProviderEvent:
         payload = _json_dump_compact(event.payload) if event.payload is not None else None
         async with self._write_lock:
@@ -2197,6 +2450,7 @@ class Registry:
             return existing
         raise RuntimeError("provider event insert did not return a row")
 
+    @_serialized_access
     async def find_provider_event(
         self, provider: str, *, provider_event_id: str
     ) -> ProviderEvent | None:
@@ -2207,6 +2461,7 @@ class Registry:
             row = await cur.fetchone()
         return _row_to_provider_event(row) if row is not None else None
 
+    @_serialized_access
     async def list_provider_events(
         self,
         *,
@@ -2233,11 +2488,13 @@ class Registry:
 
     # --- server requests ------------------------------------------------------
 
+    @_serialized_access
     async def observe_server_request(self, request: ServerRequest) -> ServerRequest:
         """Persist a pending Codex request without reopening a terminal outcome."""
 
         return (await self.observe_server_request_once(request)).request
 
+    @_serialized_access
     async def observe_server_request_once(self, request: ServerRequest) -> ServerRequestObservation:
         """Persist a request and report whether this call won the insert."""
 
@@ -2281,6 +2538,7 @@ class Registry:
             raise RuntimeError("server request upsert did not return a row")
         return ServerRequestObservation(request=saved, inserted=cur.rowcount == 1)
 
+    @_serialized_access
     async def get_server_request(
         self,
         *,
@@ -2302,6 +2560,7 @@ class Registry:
             row = await cur.fetchone()
         return _row_to_server_request(row) if row is not None else None
 
+    @_serialized_access
     async def get_server_request_by_id(self, request_id: int) -> ServerRequest | None:
         """Return a request by its dispatch-local operator selector."""
 
@@ -2311,6 +2570,7 @@ class Registry:
             row = await cur.fetchone()
         return _row_to_server_request(row) if row is not None else None
 
+    @_serialized_access
     async def list_server_requests(
         self,
         *,
@@ -2335,6 +2595,7 @@ class Registry:
             rows = await cur.fetchall()
         return [_row_to_server_request(row) for row in rows]
 
+    @_serialized_access
     async def list_pending_server_requests(
         self,
         *,
@@ -2359,6 +2620,7 @@ class Registry:
             rows = await cur.fetchall()
         return [_row_to_server_request(row) for row in rows]
 
+    @_serialized_access
     async def claim_server_request(
         self,
         *,
@@ -2388,6 +2650,7 @@ class Registry:
             request_id=request_id,
         )
 
+    @_serialized_access
     async def claim_server_request_by_id(self, request_id: int) -> ServerRequest | None:
         """Atomically reserve a pending request using its local selector."""
 
@@ -2402,6 +2665,7 @@ class Registry:
             return None
         return await self.get_server_request_by_id(request_id)
 
+    @_serialized_access
     async def finalize_server_request(
         self,
         *,
@@ -2444,6 +2708,7 @@ class Registry:
             request_id=request_id,
         )
 
+    @_serialized_access
     async def finalize_server_request_by_id(
         self,
         request_id: int,
@@ -2472,6 +2737,7 @@ class Registry:
             return None
         return await self.get_server_request_by_id(request_id)
 
+    @_serialized_access
     async def fail_open_server_requests_except_session(
         self,
         current_session_id: str,
@@ -2490,6 +2756,7 @@ class Registry:
             await self._conn.commit()
         return cur.rowcount
 
+    @_serialized_access
     async def list_open_server_requests_except_session(
         self, current_session_id: str
     ) -> list[ServerRequest]:
@@ -2503,6 +2770,7 @@ class Registry:
             rows = await cur.fetchall()
         return [_row_to_server_request(row) for row in rows]
 
+    @_serialized_access
     async def upsert_thread_turn(self, turn: ThreadTurn) -> ThreadTurn:
         async with self._transaction():
             await self._upsert_thread_turn_row(turn)
@@ -2539,6 +2807,7 @@ class Registry:
             ),
         )
 
+    @_serialized_access
     async def get_thread_turn(
         self, provider: str, provider_thread_id: str, turn_id: str
     ) -> ThreadTurn:
@@ -2552,6 +2821,7 @@ class Registry:
             raise NotFoundError(f"no thread turn {provider}:{provider_thread_id}:{turn_id}")
         return ThreadTurn.model_validate(_row_dict(row))
 
+    @_serialized_access
     async def list_thread_turns(self, *, lane: str, limit: int = 50) -> list[ThreadTurn]:
         async with self._conn.execute(
             "SELECT * FROM thread_turns WHERE lane = ? ORDER BY updated_at DESC LIMIT ?",
@@ -2560,6 +2830,7 @@ class Registry:
             rows = await cur.fetchall()
         return [ThreadTurn.model_validate(_row_dict(row)) for row in rows]
 
+    @_serialized_access
     async def upsert_thread_item(
         self, item: ThreadItem, *, refs: list[ThreadItemRef] | None = None
     ) -> ThreadItem:
@@ -2569,6 +2840,7 @@ class Registry:
                 await self._replace_thread_item_refs(item, refs)
         return await self.get_thread_item(item.provider, item.provider_thread_id, item.item_id)
 
+    @_serialized_access
     async def upsert_thread_history_snapshot(
         self,
         *,
@@ -2675,6 +2947,7 @@ class Registry:
                 ),
             )
 
+    @_serialized_access
     async def find_thread_item(
         self, provider: str, provider_thread_id: str, item_id: str
     ) -> ThreadItem | None:
@@ -2686,6 +2959,7 @@ class Registry:
             row = await cur.fetchone()
         return _row_to_thread_item(row) if row is not None else None
 
+    @_serialized_access
     async def get_thread_item(
         self, provider: str, provider_thread_id: str, item_id: str
     ) -> ThreadItem:
@@ -2694,6 +2968,7 @@ class Registry:
             raise NotFoundError(f"no thread item {provider}:{provider_thread_id}:{item_id}")
         return item
 
+    @_serialized_access
     async def list_thread_items(
         self, *, lane: str, turn_id: str | None = None, limit: int | None = 50
     ) -> list[ThreadItem]:
@@ -2711,6 +2986,7 @@ class Registry:
             rows = await cur.fetchall()
         return [_row_to_thread_item(row) for row in rows]
 
+    @_serialized_access
     async def search_thread_items(
         self,
         *,
@@ -2735,6 +3011,7 @@ class Registry:
         items = [_row_to_thread_item(row) for row in rows]
         return items[:limit], len(items)
 
+    @_serialized_access
     async def query_thread_items(
         self,
         *,
@@ -2843,6 +3120,7 @@ class Registry:
         items = [_row_to_thread_item(row) for row in rows]
         return items[:limit], len(items)
 
+    @_serialized_access
     async def get_thread_history_summary_stats(self, *, lane: str) -> ThreadHistorySummaryStats:
         async with self._conn.execute(
             """
@@ -2969,6 +3247,7 @@ class Registry:
             child_thread_ids=[str(row["thread_id"]) for row in child_thread_rows],
         )
 
+    @_serialized_access
     async def list_thread_item_refs(self, item: ThreadItem) -> list[ThreadItemRef]:
         async with self._conn.execute(
             "SELECT * FROM thread_item_refs WHERE provider = ? AND provider_thread_id = ? "
@@ -2978,6 +3257,7 @@ class Registry:
             rows = await cur.fetchall()
         return [ThreadItemRef.model_validate(_row_dict(row)) for row in rows]
 
+    @_serialized_access
     async def list_thread_item_refs_many(
         self, items: list[ThreadItem]
     ) -> dict[ThreadItemIdentity, list[ThreadItemRef]]:
@@ -3004,6 +3284,7 @@ class Registry:
                 refs_by_item.setdefault(_thread_item_identity(ref), []).append(ref)
         return refs_by_item
 
+    @_serialized_access
     async def prune_thread_history_snapshot(
         self,
         *,
@@ -3060,6 +3341,7 @@ class Registry:
             params.extend(sorted(keep_ids))
         await self._conn.execute(sql, tuple(params))
 
+    @_serialized_access
     async def upsert_message_receipt(self, receipt: MessageReceipt) -> MessageReceipt:
         async with self._write_lock:
             await self._conn.execute(
@@ -3111,6 +3393,7 @@ class Registry:
             return got
         raise RuntimeError("message receipt upsert did not return a row")
 
+    @_serialized_access
     async def find_message_receipt(
         self, *, provider: str, dispatch_message_id: str
     ) -> MessageReceipt | None:
@@ -3121,6 +3404,7 @@ class Registry:
             row = await cur.fetchone()
         return MessageReceipt.model_validate(_row_dict(row)) if row is not None else None
 
+    @_serialized_access
     async def list_message_receipts(self, *, lane: str, limit: int = 50) -> list[MessageReceipt]:
         async with self._conn.execute(
             "SELECT * FROM message_receipts WHERE lane = ? ORDER BY updated_at DESC LIMIT ?",
@@ -3129,6 +3413,7 @@ class Registry:
             rows = await cur.fetchall()
         return [MessageReceipt.model_validate(_row_dict(row)) for row in rows]
 
+    @_serialized_access
     async def upsert_lane_runtime_state(self, state: LaneRuntimeState) -> LaneRuntimeState:
         async with self._write_lock:
             await self._conn.execute(
@@ -3166,6 +3451,7 @@ class Registry:
             raise RuntimeError("lane runtime state upsert did not return a row")
         return got
 
+    @_serialized_access
     async def get_lane_runtime_state(self, lane_id: str) -> LaneRuntimeState | None:
         async with self._conn.execute(
             "SELECT * FROM lane_runtime_state WHERE lane = ?", (lane_id,)
@@ -3175,61 +3461,71 @@ class Registry:
 
     # --- triggers -------------------------------------------------------------
 
+    @_serialized_access
     async def add_trigger(self, trigger: Trigger) -> Trigger:
         created = trigger.created_at or self._now()  # the scheduling baseline
-        await self._conn.execute(
-            "INSERT INTO triggers (id, name, lane_selector, when_spec, action_spec, "
-            "guard_spec, enabled, created_at, last_fired_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                trigger.id,
-                trigger.name,
-                trigger.lane,
-                WhenAdapter.dump_json(trigger.when).decode(),
-                ActionAdapter.dump_json(trigger.action).decode(),
-                trigger.guard.model_dump_json(),
-                int(trigger.enabled),
-                created.isoformat(),
-                trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
-            ),
-        )
-        await self._conn.commit()
+        async with self._transaction():
+            await self._conn.execute(
+                "INSERT INTO triggers (id, name, lane_selector, when_spec, action_spec, "
+                "guard_spec, enabled, created_at, last_fired_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    trigger.id,
+                    trigger.name,
+                    trigger.lane,
+                    WhenAdapter.dump_json(trigger.when).decode(),
+                    ActionAdapter.dump_json(trigger.action).decode(),
+                    trigger.guard.model_dump_json(),
+                    int(trigger.enabled),
+                    created.isoformat(),
+                    trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
+                ),
+            )
         return trigger.model_copy(update={"created_at": created})
 
+    @_serialized_access
     async def find_trigger(self, trigger_id: str) -> Trigger | None:
         async with self._conn.execute("SELECT * FROM triggers WHERE id = ?", (trigger_id,)) as cur:
             row = await cur.fetchone()
         return _row_to_trigger(row) if row is not None else None
 
+    @_serialized_access
     async def get_trigger(self, trigger_id: str) -> Trigger:
         trigger = await self.find_trigger(trigger_id)
         if trigger is None:
             raise NotFoundError(f"no trigger {trigger_id!r}")
         return trigger
 
+    @_serialized_access
     async def list_triggers(self) -> list[Trigger]:
         async with self._conn.execute("SELECT * FROM triggers ORDER BY id") as cur:
             rows = await cur.fetchall()
         return [_row_to_trigger(row) for row in rows]
 
+    @_serialized_access
     async def set_trigger_enabled(self, trigger_id: str, enabled: bool) -> None:
-        await self._conn.execute(
-            "UPDATE triggers SET enabled = ? WHERE id = ?", (int(enabled), trigger_id)
-        )
-        await self._conn.commit()
+        async with self._transaction():
+            await self._conn.execute(
+                "UPDATE triggers SET enabled = ? WHERE id = ?", (int(enabled), trigger_id)
+            )
 
+    @_serialized_access
     async def set_trigger_fired(self, trigger_id: str, when: datetime) -> None:
-        await self._conn.execute(
-            "UPDATE triggers SET last_fired_at = ? WHERE id = ?", (when.isoformat(), trigger_id)
-        )
-        await self._conn.commit()
+        async with self._transaction():
+            await self._conn.execute(
+                "UPDATE triggers SET last_fired_at = ? WHERE id = ?",
+                (when.isoformat(), trigger_id),
+            )
 
+    @_serialized_access
     async def remove_trigger(self, trigger_id: str) -> bool:
-        cur = await self._conn.execute("DELETE FROM triggers WHERE id = ?", (trigger_id,))
-        await self._conn.commit()
+        async with self._transaction():
+            cur = await self._conn.execute("DELETE FROM triggers WHERE id = ?", (trigger_id,))
         return cur.rowcount > 0
 
     # --- audit log ------------------------------------------------------------
 
+    @_serialized_access
     async def log_action(
         self,
         op: str,
@@ -3239,10 +3535,11 @@ class Registry:
         detail: str | None = None,
         outcome: str = "ok",
     ) -> None:
-        await self._insert_action_log(
-            op, lane=lane, trigger_id=trigger_id, detail=detail, outcome=outcome
-        )
-        await self._conn.commit()
+        async with self._write_lock:
+            await self._insert_action_log(
+                op, lane=lane, trigger_id=trigger_id, detail=detail, outcome=outcome
+            )
+            await self._conn.commit()
 
     async def _insert_action_log(
         self,
@@ -3259,6 +3556,7 @@ class Registry:
             (self._now().isoformat(), op, lane, trigger_id, detail, outcome),
         )
 
+    @_serialized_access
     async def recent_actions(self, limit: int = 50) -> list[ActionRecord]:
         async with self._conn.execute(
             "SELECT * FROM actions_log ORDER BY id DESC LIMIT ?", (limit,)
@@ -3335,8 +3633,29 @@ SELECT
     src.line_count AS line_count,
     src.first_offset AS first_offset,
     src.tail_offset AS tail_offset,
+    src.next_offset AS next_offset,
     src.last_synced_at AS last_synced_at,
     src.error AS error,
+    src.history_source AS history_source,
+    src.history_cursor AS history_cursor,
+    src.history_backwards_cursor AS history_backwards_cursor,
+    src.history_recent_cursor AS history_recent_cursor,
+    src.history_pending_backwards_cursor AS history_pending_backwards_cursor,
+    src.history_item_turn_id AS history_item_turn_id,
+    src.history_item_turn_cursor AS history_item_turn_cursor,
+    src.history_item_turn_direction AS history_item_turn_direction,
+    src.history_item_cursor AS history_item_cursor,
+    src.history_cursor_guard AS history_cursor_guard,
+    src.history_complete AS history_complete,
+    src.history_capability AS history_capability,
+    src.observation_enabled AS observation_enabled,
+    src.pages_scanned AS pages_scanned,
+    src.turns_indexed AS turns_indexed,
+    src.items_indexed AS items_indexed,
+    src.unchanged_skipped AS unchanged_skipped,
+    src.scanned_bytes AS scanned_bytes,
+    src.duration_ms AS duration_ms,
+    src.truncated AS truncated,
     snap.display_name AS display_name,
     snap.preview AS preview,
     snap.cwd AS cwd,
@@ -3361,6 +3680,10 @@ def _row_to_lane(row: aiosqlite.Row) -> Lane:
 def _row_to_lane_sync(row: aiosqlite.Row) -> LaneSync:
     data = _row_dict(row)
     data["transcript_partial"] = bool(data["transcript_partial"])
+    data["history_complete"] = bool(data["history_complete"])
+    data["observation_enabled"] = bool(data["observation_enabled"])
+    data["unchanged_skipped"] = bool(data["unchanged_skipped"])
+    data["truncated"] = bool(data["truncated"])
     return LaneSync.model_validate(data)
 
 

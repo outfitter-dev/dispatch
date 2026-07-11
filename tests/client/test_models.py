@@ -22,12 +22,18 @@ from outfitter.dispatch.client.models import (
     ThreadGoal,
     ThreadGoalSetParams,
     ThreadInfo,
+    ThreadItemsListParams,
+    ThreadItemsPage,
     ThreadListParams,
     ThreadListResult,
     ThreadReadParams,
+    ThreadResumeInitialTurnsPageParams,
     ThreadResumeParams,
+    ThreadResumeResult,
     ThreadRollbackParams,
     ThreadStartParams,
+    ThreadTurnsListParams,
+    ThreadTurnsPage,
     TurnStartParams,
     TurnSteerParams,
     is_json_rpc_id,
@@ -229,11 +235,88 @@ def test_thread_list_topology_filters_are_mutually_exclusive() -> None:
 
 
 def test_thread_resume_can_request_low_hydration_subscription() -> None:
-    params = ThreadResumeParams(thread_id="t1", exclude_turns=True)
+    params = ThreadResumeParams(
+        thread_id="t1",
+        exclude_turns=True,
+        initial_turns_page=ThreadResumeInitialTurnsPageParams(
+            limit=20, sort_direction="desc", items_view="summary"
+        ),
+    )
     assert params.model_dump(by_alias=True, exclude_none=True) == {
         "threadId": "t1",
         "excludeTurns": True,
+        "initialTurnsPage": {
+            "limit": 20,
+            "sortDirection": "desc",
+            "itemsView": "summary",
+        },
     }
+
+
+def test_resume_result_parses_full_response_and_bootstrap_page() -> None:
+    result = ThreadResumeResult.model_validate(
+        {
+            "thread": {"id": "t1"},
+            "cwd": "/repo",
+            "model": "gpt-test",
+            "modelProvider": "openai",
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "user",
+            "sandbox": {"type": "workspaceWrite"},
+            "initialTurnsPage": {
+                "data": [
+                    {
+                        "id": "turn-2",
+                        "status": "completed",
+                        "items": [{"id": "item-2", "type": "agentMessage"}],
+                        "itemsView": "summary",
+                    }
+                ],
+                "nextCursor": "older",
+                "backwardsCursor": "newer",
+            },
+        }
+    )
+
+    assert result.thread.id == "t1"
+    assert result.initial_turns_page is not None
+    assert result.initial_turns_page.data[0].items_view == "summary"
+    assert result.initial_turns_page.next_cursor == "older"
+    assert result.initial_turns_page.backwards_cursor == "newer"
+
+
+def test_turn_and_item_page_models_use_wire_aliases() -> None:
+    turns_params = ThreadTurnsListParams(
+        thread_id="t1", cursor="older", limit=10, sort_direction="desc", items_view="full"
+    )
+    items_params = ThreadItemsListParams(
+        thread_id="t1", cursor="items", limit=25, sort_direction="asc", turn_id="turn-2"
+    )
+    assert turns_params.model_dump(by_alias=True, exclude_none=True) == {
+        "threadId": "t1",
+        "cursor": "older",
+        "limit": 10,
+        "sortDirection": "desc",
+        "itemsView": "full",
+    }
+    assert items_params.model_dump(by_alias=True, exclude_none=True) == {
+        "threadId": "t1",
+        "cursor": "items",
+        "limit": 25,
+        "sortDirection": "asc",
+        "turnId": "turn-2",
+    }
+
+    turns = ThreadTurnsPage.model_validate(
+        {"data": [], "nextCursor": "older", "backwardsCursor": "newer"}
+    )
+    items = ThreadItemsPage.model_validate(
+        {"data": [{"id": "i1", "type": "userMessage"}], "backwardsCursor": "back"}
+    )
+    assert turns.next_cursor == "older"
+    assert turns.backwards_cursor == "newer"
+    assert items.data[0]["id"] == "i1"
+    assert items.backwards_cursor == "back"
 
 
 def test_thread_info_keeps_sync_metadata_fields() -> None:

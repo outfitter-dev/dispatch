@@ -4,7 +4,7 @@ slug: provider-event-log-and-history-index
 title: Provider Event Log and History Index
 status: proposed
 created: 2026-07-01
-updated: 2026-07-02
+updated: 2026-07-11
 owners: ['[galligan](https://github.com/galligan)']
 ---
 
@@ -17,11 +17,12 @@ queued turn-delivery messages, lane sync snapshots, inbox messages,
 subscriptions, model settings, and action audit records live in the local
 registry database.
 
-That database is not yet the main history or observability substrate. Codex
-transcript and history commands still primarily call App Server
-`thread/read(includeTurns:true)` and summarize the returned turns in memory.
-Progressive sync indexes compact facts from Codex JSONL artifacts, but ADR-0017
-explicitly keeps full transcript history outside the local index.
+That database is now the normalized history and observability substrate. Codex
+transcript reads still use App Server `thread/read(includeTurns:true)` as the
+canonical source, but they index normalized turns, items, and references as a
+side effect. Progressive sync also uses bounded App Server turn/item pages plus
+compact JSONL facts to backfill recent and older managed-thread history without
+copying raw transcripts wholesale or retaining raw provider payloads by default.
 
 This is a useful v0 compromise, but it leaves important product goals awkward:
 

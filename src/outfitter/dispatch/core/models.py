@@ -205,7 +205,26 @@ class LaneSyncInput(BaseModel):
             "A raw unmanaged Codex thread id is attached before syncing."
         )
     )
-    full: bool = Field(default=False, description="Scan the full source file instead of top+tail.")
+    full: bool = Field(
+        default=False,
+        description="Scan the local source from byte zero, still bounded by max-bytes.",
+    )
+    max_turns: int = Field(default=50, ge=1, le=500, description="Maximum history turns per sync.")
+    max_items: int = Field(
+        default=500, ge=1, le=5000, description="Maximum history items per sync."
+    )
+    max_bytes: int = Field(
+        default=524_288,
+        ge=1,
+        le=16_777_216,
+        description=(
+            "Target aggregate history-byte budget, checked between provider pages; "
+            "one received page may make observed bytes higher without oversized persistence."
+        ),
+    )
+    max_seconds: float = Field(
+        default=5.0, gt=0, le=60, description="Maximum history sync time in seconds."
+    )
 
 
 class LaneRenameInput(BaseModel):
@@ -630,6 +649,19 @@ class LaneSyncView(BaseModel):
     latest_turn_id: str | None = None
     transcript_partial: bool = True
     error: str | None = None
+    history_source: str | None = None
+    history_complete: bool = False
+    history_capability: Literal["unknown", "supported", "turn-page-fallback", "unsupported"] = (
+        "unknown"
+    )
+    observation_enabled: bool = False
+    pages_scanned: int = 0
+    turns_indexed: int = 0
+    items_indexed: int = 0
+    unchanged_skipped: bool = False
+    scanned_bytes: int = 0
+    duration_ms: int = 0
+    truncated: bool = False
 
 
 class ThreadTopologyNode(BaseModel):

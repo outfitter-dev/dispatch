@@ -4,7 +4,7 @@ slug: progressive-thread-sync-index
 title: Progressive Thread Sync Index
 status: accepted
 created: 2026-06-05
-updated: 2026-06-05
+updated: 2026-07-11
 owners: ['[galligan](https://github.com/galligan)']
 ---
 
@@ -30,32 +30,53 @@ transcript into dispatch up front.
 
 Attach is metadata-only by default:
 
-- `dispatch lane attach <thread-id>` verifies the id with
+- `dispatch attach <thread-id>` verifies the id with
   `thread/read(includeTurns:false)`.
 - It registers a turn-write locked attached lane and stores metadata sync state.
 - It does not call `thread/resume`, load turn history, or grant write authority.
 
 Progressive sync is explicit:
 
-- `dispatch lane attach <thread-id> --sync` runs a quick sync after registration.
-- `dispatch lane sync <lane>` refreshes dispatch's local indexed view.
-- `dispatch lane sync <lane> --full` scans the whole current source file and marks
-  that cache complete for the current file identity.
+- `dispatch attach <thread-id> --sync` runs a quick sync after registration.
+- `dispatch sync <lane>` refreshes dispatch's local indexed view.
+- `dispatch sync <lane> --full` scans the current source from the beginning,
+  still bounded by `--max-bytes`; oversized sources remain explicitly partial.
 
 The sync index is a compact SQLite cache:
 
 - `lane_sync_sources` records sync state, source path, file identity, size/mtime,
-  parsed offsets, line count when known, last sync time, and errors.
+  complete-line continuation offsets, App Server turn/item cursors, capability,
+  completion/truncation state, per-run counts, duration, last sync time, and errors.
 - `lane_snapshots` records display name, preview, cwd, source/model/session facts,
   latest event timestamp, latest turn id, and whether the transcript view is
   partial.
-- Quick sync reads bounded top+tail JSONL records from Codex's local rollout path
-  when App Server exposes one. It captures early metadata plus recent state, then
-  can be backfilled later.
+- Sync resumes the thread with `excludeTurns:true`, bootstraps one recent turn
+  through `initialTurnsPage`, and hydrates that turn through bounded item pages.
+  Repeated calls use an anchor-inclusive ascending cursor to reconcile newer turns
+  first, then continue newest-to-oldest backfill from the durable older cursor.
+  Cursor progress and a bounded cycle guard are written only after additive
+  indexing, so replay after a crash is safe and malformed provider cursor loops
+  fail closed across daemon restarts.
+- Quick sync also reads bounded top+tail JSONL records when App Server exposes a
+  rollout path. Unchanged files read zero bytes; same-inode appends continue from
+  the last complete line; truncation or rotation resets to bounded top+tail.
+- Experimental paging is capability-gated. Older binaries retain metadata and
+  JSONL sync with `history_capability=unsupported` rather than silently issuing an
+  unbounded history read. If turn paging works but item paging is unavailable,
+  `turn-page-fallback` re-fetches the exact pending turn with full items. An atomic
+  turn larger than the configured persistence budget remains pending/truncated
+  until the operator explicitly raises that budget; Dispatch does not overrun the
+  database bound. The same pre-persistence byte check applies to native item pages.
+- The byte budget is aggregate across local and provider history and is checked
+  between provider pages. Observed bytes may exceed it by one received page, but
+  a page that exceeds the remaining persistence budget is not indexed.
+- Daemon restart metadata-resumes owned lanes and attached lanes whose durable
+  sync state proves explicit live observation was established. Plain attached
+  registration remains metadata-read only and never becomes an implicit resume.
 - Partial sync does not promise exact whole-file counts. Exact counts are a
   full-scan property.
 
-`lane tail` remains the explicit history surface and continues to use official
+`dispatch tail` remains the explicit history surface and continues to use official
 App Server `thread/read(includeTurns:true)` persisted history.
 
 ## Consequences
@@ -77,9 +98,9 @@ App Server `thread/read(includeTurns:true)` persisted history.
 
 ## Alternatives considered
 
-- **Eager `thread/resume` on attach** — rejected: slower, heavier, and implies a
-  co-presence model we do not have across desktop and dispatch app-server
-  processes.
+- **Eager `thread/resume` on plain attach** — rejected. Plain attach remains
+  metadata-only; explicit `attach --sync` and `sync` opt into metadata-only live
+  observation plus bounded history continuation.
 - **Copy full transcripts into dispatch by default** — rejected: bad first-run
   latency and unnecessary data duplication.
 - **Only use App Server history reads, no local index** — rejected: keeps attach

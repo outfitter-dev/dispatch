@@ -22,6 +22,7 @@ from outfitter.dispatch.client.events import LaneEvent, TurnCompleted
 from outfitter.dispatch.client.models import SandboxPolicy
 from outfitter.dispatch.config import RuntimePolicy
 from outfitter.dispatch.contracts.context import Ctx
+from outfitter.dispatch.core.backfill import backfill_codex_history
 from outfitter.dispatch.core.capacity import refresh_codex_capacity
 from outfitter.dispatch.core.server_requests import ServerRequestManager, respond_to_server_request
 from outfitter.dispatch.registry.store import Registry
@@ -305,6 +306,35 @@ async def test_persisted_resume_yields_live_events(client: AppServerClient, work
     try:
         assert await asyncio.wait_for(saw_completion, timeout=60)
     finally:
+        await client.thread_archive(thread.id)
+
+
+async def test_bounded_resume_bootstraps_recent_turn_then_items(
+    client: AppServerClient, work_dir: Path
+) -> None:
+    thread = await client.thread_start(cwd=str(work_dir), sandbox="read-only", ephemeral=False)
+    registry = await Registry.open()
+    try:
+        await run_turn(client, thread.id, "Reply with exactly one word: bounded", str(work_dir))
+        lane = await registry.add_lane(
+            id=thread.id, handle="@bounded-resume", source="own", status="idle"
+        )
+        result = await backfill_codex_history(
+            client=client,
+            registry=registry,
+            lane=lane,
+            max_turns=2,
+            max_items=20,
+            max_seconds=10,
+            max_bytes=262_144,
+        )
+        assert result.capability in {"supported", "turn-page-fallback"}
+        assert result.pages_scanned >= 1
+        assert result.turns_indexed >= 1
+        assert result.items_indexed >= 1
+        assert await registry.list_thread_items(lane=thread.id)
+    finally:
+        await registry.close()
         await client.thread_archive(thread.id)
 
 

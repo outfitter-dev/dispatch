@@ -11,6 +11,7 @@ them intentionally:
 just scenario -- tests/scenarios/basic_coordination.toml
 just scenario -- tests/scenarios/interactive_requests.toml
 just scenario -- tests/scenarios/canonical_item_ingestion.toml
+just scenario -- tests/scenarios/bounded_history_sync.toml
 ```
 
 The runner creates temporary `DISPATCH_HOME`, `CODEX_HOME`, and work directories
@@ -24,3 +25,8 @@ Keep scenarios:
 - synthetic, with no private thread content;
 - cheap (`effort = "low"` and a small preferred model when available);
 - focused on user/agent workflows rather than one-off protocol details.
+
+`bounded_history_sync.toml` creates a persisted unmanaged Codex thread first,
+then requires the public `sync <raw-id> --json` path to register it and index its
+turn and message before any transcript read. A second bounded sync verifies the
+indexed result remains stable.

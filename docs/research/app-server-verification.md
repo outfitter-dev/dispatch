@@ -77,8 +77,10 @@ Lifecycle/threads/turns: `thread/start resume fork read list loaded/list archive
 - `config/read` reports the current Codex defaults (model/provider,
   reasoning effort, service tier). Dispatch records those defaults for output
   truth but does not send omitted model/tier values just to mirror config.
-- `thread/resume` accepts `excludeTurns` / `initialTurnsPage`, useful for future
-  live observation without heavy initial history hydration.
+- `thread/resume` accepts experimental `excludeTurns` / `initialTurnsPage`.
+  Dispatch now uses them for metadata-only live observation and a one-turn recent
+  bootstrap, then continues through capability-gated `thread/turns/list` and
+  `thread/items/list` cursors. The compact manifest guards all request/page fields.
 - `ThreadItem` has 18 canonical variants in 0.144: user/hook/agent messages,
   plan, reasoning, command execution, file change, MCP/dynamic/collaboration
   tool calls, subagent activity, web search, image view/generation, sleep,

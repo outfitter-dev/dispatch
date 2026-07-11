@@ -9,7 +9,7 @@ import pytest
 from outfitter.dispatch.client.client import AppServerClient
 from outfitter.dispatch.client.errors import AppServerError, ProtocolError, TransportError
 from outfitter.dispatch.client.events import TurnCompleted
-from outfitter.dispatch.client.models import JsonRpcError
+from outfitter.dispatch.client.models import JsonRpcError, ThreadResumeInitialTurnsPageParams
 from tests.fixtures import load_json
 
 from .conftest import FakeTransport, Responder
@@ -94,6 +94,148 @@ async def test_thread_resume_can_avoid_initial_turn_hydration(
         "method": "thread/resume",
         "params": {"threadId": "L1", "excludeTurns": True},
     }
+
+
+async def test_thread_resume_full_rejects_malformed_response_as_protocol_error(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+    fake.auto = _result_for("thread/resume", {"thread": {}})
+
+    with pytest.raises(ProtocolError, match="malformed thread/resume response"):
+        await c.thread_resume_full("L1", exclude_turns=True)
+
+
+async def test_thread_resume_full_returns_requested_initial_turns_page(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+    fake.auto = _result_for(
+        "thread/resume",
+        {
+            "thread": {"id": "L1"},
+            "cwd": "/repo",
+            "initialTurnsPage": {
+                "data": [{"id": "T2", "status": "completed", "items": []}],
+                "nextCursor": "older",
+                "backwardsCursor": "newer",
+            },
+        },
+    )
+    response = await c.thread_resume_full(
+        "L1",
+        exclude_turns=True,
+        initial_turns_page=ThreadResumeInitialTurnsPageParams(
+            limit=10, sort_direction="desc", items_view="summary"
+        ),
+    )
+    assert response.thread.id == "L1"
+    assert response.initial_turns_page is not None
+    assert response.initial_turns_page.next_cursor == "older"
+    assert fake.sent[-1]["params"] == {
+        "threadId": "L1",
+        "excludeTurns": True,
+        "initialTurnsPage": {
+            "limit": 10,
+            "sortDirection": "desc",
+            "itemsView": "summary",
+        },
+    }
+
+
+async def test_thread_turns_and_items_list_return_bounded_typed_pages(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+    responses = {
+        "thread/turns/list": {
+            "data": [{"id": "T2", "status": "completed", "items": [], "itemsView": "full"}],
+            "nextCursor": "older",
+            "backwardsCursor": "newer",
+        },
+        "thread/items/list": {
+            "data": [{"id": "I2", "type": "agentMessage"}],
+            "backwardsCursor": "newer-items",
+        },
+    }
+
+    def responder(message: dict[str, object]) -> list[dict[str, object]]:
+        method = message.get("method")
+        if isinstance(method, str) and method in responses:
+            return [{"id": message["id"], "result": responses[method]}]
+        return []
+
+    fake.auto = responder
+    turns = await c.thread_turns_list(
+        "L1", cursor="recent", limit=10, sort_direction="desc", items_view="full"
+    )
+    items = await c.thread_items_list(
+        "L1", cursor="item-page", limit=25, sort_direction="asc", turn_id="T2"
+    )
+
+    assert turns.data[0].id == "T2"
+    assert turns.next_cursor == "older"
+    assert turns.backwards_cursor == "newer"
+    assert items.data[0]["id"] == "I2"
+    assert items.backwards_cursor == "newer-items"
+    assert fake.sent[0]["params"] == {
+        "threadId": "L1",
+        "cursor": "recent",
+        "limit": 10,
+        "sortDirection": "desc",
+        "itemsView": "full",
+    }
+    assert fake.sent[1]["params"] == {
+        "threadId": "L1",
+        "cursor": "item-page",
+        "limit": 25,
+        "sortDirection": "asc",
+        "turnId": "T2",
+    }
+
+
+@pytest.mark.parametrize("method", ["thread/turns/list", "thread/items/list"])
+async def test_thread_page_rejects_repeated_cursor(
+    client: tuple[AppServerClient, FakeTransport], method: str
+) -> None:
+    c, fake = client
+    fake.auto = _result_for(method, {"data": [], "nextCursor": "same"})
+
+    with pytest.raises(ProtocolError, match="repeated pagination cursor 'same'"):
+        if method == "thread/turns/list":
+            await c.thread_turns_list("L1", cursor="same", limit=10)
+        else:
+            await c.thread_items_list("L1", cursor="same", limit=10)
+
+
+async def test_thread_turns_list_reports_malformed_page_as_protocol_error(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+    fake.auto = _result_for("thread/turns/list", {"data": "not-a-list"})
+
+    with pytest.raises(ProtocolError, match="malformed thread/turns/list response"):
+        await c.thread_turns_list("L1", limit=10)
+
+
+async def test_older_app_server_method_error_passes_through(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+
+    def responder(message: dict[str, object]) -> list[dict[str, object]]:
+        return [
+            {
+                "id": message["id"],
+                "error": {"code": -32601, "message": "method not found"},
+            }
+        ]
+
+    fake.auto = responder
+    with pytest.raises(AppServerError) as exc:
+        await c.thread_turns_list("L1", limit=10)
+    assert exc.value.code == -32601
+    assert exc.value.message == "method not found"
 
 
 async def test_thread_start_parses_thread_info(

@@ -62,7 +62,11 @@ lifecycle actions (`rename`, `archive`, `restore`) can target managed refs or ra
 unmanaged Codex thread ids. `search` uses App Server search for broad discovery, while
 `query` uses Dispatch's local indexed managed-history substrate. Attach is metadata-only
 by default; use `dispatch sync <selector>` when you want dispatch to refresh its local
-indexed view of an attached thread. If `<selector>` is a raw unmanaged Codex thread id,
+indexed view of an attached thread. Sync establishes metadata-only live observation,
+indexes recent App Server history first within explicit turn/item/time and
+page-checked byte budgets, and persists continuation plus cycle-guard state so
+later calls continue older history without starting over or spinning on malformed
+provider cursors. If `<selector>` is a raw unmanaged Codex thread id,
 `sync` first registers it as an attached read/metadata-managed lane, then refreshes the
 index. `dispatch list --unmanaged --archived` shows archived Codex sessions before you
 decide whether to sync or restore them. Bare `dispatch history` reads Dispatch's local

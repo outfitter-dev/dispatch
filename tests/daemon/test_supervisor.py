@@ -8,10 +8,12 @@ from datetime import UTC, datetime
 
 import pytest_asyncio
 
-from outfitter.dispatch.client.models import ThreadInfo
+from outfitter.dispatch.client.errors import AppServerError
+from outfitter.dispatch.client.models import ThreadInfo, ThreadResumeInitialTurnsPageParams
 from outfitter.dispatch.core.reactor import Reactor
 from outfitter.dispatch.core.triggers import TriggerRunner
 from outfitter.dispatch.daemon.supervisor import Supervisor
+from outfitter.dispatch.registry.models import LaneSync
 from outfitter.dispatch.registry.store import Registry
 from tests.fakes import FakeSupervisedClient, make_ctx
 
@@ -111,10 +113,18 @@ async def test_supervisor_starts_reactor_before_restoring_lanes(store: Registry)
 
     class OrderedClient(FakeSupervisedClient):
         async def thread_resume(
-            self, thread_id: str, *, exclude_turns: bool | None = None
+            self,
+            thread_id: str,
+            *,
+            exclude_turns: bool | None = None,
+            initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None,
         ) -> ThreadInfo:
             resume_observations.append(reactor_started.is_set())
-            return await super().thread_resume(thread_id, exclude_turns=exclude_turns)
+            return await super().thread_resume(
+                thread_id,
+                exclude_turns=exclude_turns,
+                initial_turns_page=initial_turns_page,
+            )
 
     async def make_client() -> OrderedClient:
         return OrderedClient()
@@ -129,6 +139,72 @@ async def test_supervisor_starts_reactor_before_restoring_lanes(store: Registry)
     await asyncio.sleep(0.05)
 
     assert resume_observations == [True]
+    assert any(name == "thread_resume" and kw["exclude_turns"] is True for name, kw in first.calls)
+
+    await supervisor.stop()
+    await asyncio.wait_for(task, timeout=1)
+
+
+async def test_supervisor_falls_back_when_legacy_resume_rejects_exclude_turns(
+    store: Registry,
+) -> None:
+    await store.add_lane(id="O1", handle="@own", source="own", status="idle")
+    ctx = make_ctx(store)
+
+    class LegacyClient(FakeSupervisedClient):
+        async def thread_resume(
+            self, thread_id: str, *, exclude_turns: bool | None = None, **kwargs: object
+        ) -> ThreadInfo:
+            self._record("legacy_thread_resume", thread_id=thread_id, exclude_turns=exclude_turns)
+            if exclude_turns is True:
+                raise AppServerError(-32602, "unknown field excludeTurns")
+            return ThreadInfo(id=thread_id)
+
+    async def make_client() -> LegacyClient:
+        return LegacyClient()
+
+    async def run_reactor() -> None:
+        await asyncio.Event().wait()
+
+    supervisor = Supervisor(ctx, make_client, run_reactor, backoff=0)
+    first = await make_client()
+    task = asyncio.create_task(supervisor.supervise(first))
+    await asyncio.sleep(0.05)
+
+    calls = [kw["exclude_turns"] for name, kw in first.calls if name == "legacy_thread_resume"]
+    assert calls == [True, None]
+
+    await supervisor.stop()
+    await asyncio.wait_for(task, timeout=1)
+
+
+async def test_supervisor_restores_explicitly_synced_attached_observation(
+    store: Registry,
+) -> None:
+    await store.add_lane(id="D1", handle="@desktop", source="attached", status="idle")
+    await store.upsert_lane_sync(
+        LaneSync(
+            lane="D1",
+            state="partial",
+            history_capability="unsupported",
+            observation_enabled=True,
+        )
+    )
+    ctx = make_ctx(store)
+
+    async def make_client() -> FakeSupervisedClient:
+        return FakeSupervisedClient()
+
+    async def run_reactor() -> None:
+        await asyncio.Event().wait()
+
+    supervisor = Supervisor(ctx, make_client, run_reactor, backoff=0)
+    first = await make_client()
+    task = asyncio.create_task(supervisor.supervise(first))
+    await asyncio.sleep(0.05)
+
+    assert first.resumed == ["D1"]
+    assert not any(name == "thread_read" for name, _ in first.calls)
 
     await supervisor.stop()
     await asyncio.wait_for(task, timeout=1)

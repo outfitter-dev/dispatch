@@ -568,7 +568,17 @@ def test_flat_thread_routes_core_commands() -> None:
         ),
         ("transcript", {"lane": "@old", "limit": 50}),
         ("watch", {"lane": "@old", "limit": 2, "timeout": 1.0}),
-        ("sync", {"lane": "@old", "full": False}),
+        (
+            "sync",
+            {
+                "lane": "@old",
+                "full": False,
+                "max_turns": 50,
+                "max_items": 500,
+                "max_bytes": 524288,
+                "max_seconds": 5.0,
+            },
+        ),
     ]
 
 

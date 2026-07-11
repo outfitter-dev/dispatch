@@ -922,14 +922,19 @@ it never leaves a half-attached entry behind.
 Use `sync` to refresh dispatch's local indexed view of an attached lane. Sync reads the
 official metadata and, when Codex exposes a local rollout path, parses bounded top+tail JSONL
 records into a compact cache: source file identity, sync state, latest event timestamp,
-latest turn id, and a preview. It does not copy the full transcript by default. Sync also
+latest turn id, and a preview. It also resumes live observation without hydrating all turns,
+indexes the newest App Server turn first, hydrates bounded item pages, and persists opaque
+cursors so later calls first reconcile newer turns missed during downtime, then continue
+backwards without repeating completed pages. Sync also
 reconciles known App Server archive membership for the target: if Codex lists the thread as
 archived, dispatch marks the managed lane archived locally; if a locally archived lane is
 listed active again, dispatch marks it idle.
 
 ```bash
 uv run dispatch sync <dispatch-ref-or-thread-id>
-uv run dispatch sync <dispatch-ref-or-thread-id> --full
+uv run dispatch sync <dispatch-ref-or-thread-id> --max-turns 20 --max-items 200
+uv run dispatch sync <dispatch-ref-or-thread-id> --max-bytes 1048576 --max-seconds 10
+uv run dispatch sync <dispatch-ref-or-thread-id> --full --max-bytes 16777216
 uv run dispatch get <dispatch-ref-or-thread-id>
 uv run dispatch list
 ```
@@ -939,12 +944,44 @@ it verifies the id with `thread/read(includeTurns:false)`, registers an attached
 then runs the same index refresh. Unresolved `@handles` remain errors; they are not treated
 as raw thread ids.
 
-`sync --full` scans the whole current source file and marks the cache complete for that
-file identity. It is still an index refresh, not a write to the Codex thread. Bare
-`history` stays local-index only. Selector-scoped `history`, `tail`, and
+`sync --full` scans the current source from byte zero, but remains bounded by
+`--max-bytes`; a larger source stays explicitly partial/truncated. Ordinary sync skips an
+unchanged complete file, resumes unread bytes from a bounded prior scan, continues
+same-file appends from the last complete line, and resets safely
+after rotation or truncation. App Server paging is experimental and capability-gated; an
+App Server binary without turn paging reports `history_capability=unsupported` and retains
+metadata/JSONL fallback instead of silently loading an unbounded transcript. When turn
+paging works but item paging does not, `turn-page-fallback` re-fetches one exact turn with
+full items. If that atomic turn exceeds the configured item/byte persistence budget, it
+stays pending and `truncated=true`; rerun with a larger explicit budget to continue. It is
+still an index refresh, not a write to the Codex thread. Bare `history` stays local-index
+only. Selector-scoped `history`, `tail`, and
 transcript-inclusive `get` continue to use official `thread/read(includeTurns:true)`
 when they need transcript turns, and those reads feed the normalized local history
 index for that thread as a side effect.
+
+`--max-bytes` is an aggregate target across local and provider history. Dispatch
+checks it between provider pages; receiving one page can make `scanned_bytes`
+slightly higher, but a page that would exceed the remaining persistence budget is
+not indexed and remains pending/truncated. One `--max-seconds` deadline bounds metadata,
+provider history, local parsing, persistence, and archive reconciliation. Durable
+cursor-cycle detection fails closed rather than spinning across repeated syncs.
+
+If experimental paged resume is unavailable, Dispatch retries stable
+metadata-only resume. The result remains `history_capability=unsupported`, but
+`observation_enabled=true` records that live observation was established. A
+complete JSONL record larger than the remaining local budget stays at its
+current offset and reports an actionable error asking for a larger
+`--max-bytes`; it is never silently skipped.
+
+The JSON result is designed for operational checks:
+
+```bash
+uv run dispatch sync <ref> --json | jq '.sync | {
+  history_capability, history_complete, truncated, pages_scanned,
+  turns_indexed, items_indexed, unchanged_skipped, scanned_bytes, duration_ms
+}'
+```
 
 Archive state is lifecycle metadata, not a cleanup command. Dispatch keeps provider events
 and normalized history evidence unless an explicit future retention command/policy prunes

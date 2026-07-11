@@ -61,3 +61,23 @@ def test_canonical_item_ingestion_scenario_dry_run_validates() -> None:
     assert result.returncode == 0, result.stderr
     assert "scenario=canonical_item_ingestion" in result.stdout
     assert "lane canonical" in result.stdout
+
+
+def test_bounded_history_sync_scenario_dry_run_validates() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/run_scenario.py",
+            "--dry-run",
+            "tests/scenarios/bounded_history_sync.toml",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "scenario=bounded_history_sync" in result.stdout
+    assert "verify_bounded_sync=True" in result.stdout
+    assert "unmanaged_sync=True" in result.stdout
+    assert "lane bounded" in result.stdout
