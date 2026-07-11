@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timedelta
+from typing import cast
 
 import structlog
 
@@ -40,12 +41,20 @@ from outfitter.dispatch.client.models import (
     ThreadGoal,
     ThreadGoalStatus,
     ThreadInfo,
+    ThreadItemsPage,
     ThreadListCwdFilter,
+    ThreadResumeInitialTurnsPageParams,
+    ThreadResumeResult,
     ThreadSandbox,
     ThreadSearchMatch,
     ThreadSearchResult,
     ThreadSortKey,
     ThreadSourceKind,
+    ThreadTurn,
+    ThreadTurnsPage,
+    TurnError,
+    TurnItemsView,
+    TurnStatus,
 )
 from outfitter.dispatch.config import CapturePolicy, RuntimePolicy
 from outfitter.dispatch.contracts.context import Ctx
@@ -55,6 +64,18 @@ from outfitter.dispatch.registry.store import Registry
 async def _aiter[T](items: list[T]) -> AsyncIterator[T]:
     for item in items:
         yield item
+
+
+def _fake_cursor_index(cursor: str | None, prefix: str) -> int:
+    if cursor is None:
+        return 0
+    marker, separator, raw = cursor.partition(":")
+    if marker != prefix or not separator:
+        return 0
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
 
 
 class FakeLaneClient:
@@ -167,13 +188,129 @@ class FakeLaneClient:
         thread_id: str,
         *,
         exclude_turns: bool | None = None,
+        initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None,
     ) -> ThreadInfo:
         self._record(
             "thread_resume",
             thread_id=thread_id,
             exclude_turns=exclude_turns,
+            initial_turns_page=initial_turns_page,
         )
         return self.threads.get(thread_id, ThreadInfo(id=thread_id))
+
+    async def thread_resume_full(
+        self,
+        thread_id: str,
+        *,
+        exclude_turns: bool | None = None,
+        initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None,
+    ) -> ThreadResumeResult:
+        thread = await self.thread_resume(
+            thread_id,
+            exclude_turns=exclude_turns,
+            initial_turns_page=initial_turns_page,
+        )
+        initial_page = (
+            self._fake_turns_page(cursor=None, limit=initial_turns_page.limit or 1)
+            if initial_turns_page is not None
+            else None
+        )
+        return ThreadResumeResult(thread=thread, initial_turns_page=initial_page)
+
+    async def thread_turns_list(
+        self,
+        thread_id: str,
+        *,
+        cursor: str | None = None,
+        limit: int | None = None,
+        sort_direction: SortDirection | None = None,
+        items_view: TurnItemsView | None = None,
+    ) -> ThreadTurnsPage:
+        self._record(
+            "thread_turns_list",
+            thread_id=thread_id,
+            cursor=cursor,
+            limit=limit,
+            sort_direction=sort_direction,
+            items_view=items_view,
+        )
+        return self._fake_turns_page(cursor=cursor, limit=limit or 1)
+
+    async def thread_items_list(
+        self,
+        thread_id: str,
+        *,
+        cursor: str | None = None,
+        limit: int | None = None,
+        sort_direction: SortDirection | None = None,
+        turn_id: str | None = None,
+    ) -> ThreadItemsPage:
+        self._record(
+            "thread_items_list",
+            thread_id=thread_id,
+            cursor=cursor,
+            limit=limit,
+            sort_direction=sort_direction,
+            turn_id=turn_id,
+        )
+        return self._fake_items_page(turn_id=turn_id, cursor=cursor, limit=limit or 50)
+
+    def _fake_turns_page(self, *, cursor: str | None, limit: int) -> ThreadTurnsPage:
+        thread = self.read_result.get("thread")
+        raw_turns = thread.get("turns") if isinstance(thread, dict) else None
+        turns = (
+            [turn for turn in raw_turns if isinstance(turn, dict)]
+            if isinstance(raw_turns, list)
+            else []
+        )
+        turns.reverse()
+        start = _fake_cursor_index(cursor, "fake-turn")
+        selected = turns[start : start + limit]
+        data: list[ThreadTurn] = []
+        for index, raw in enumerate(selected, start=start):
+            turn_id = raw.get("id")
+            if not isinstance(turn_id, str):
+                turn_id = f"fake-turn-{index}"
+            status = raw.get("status")
+            if status not in {"completed", "interrupted", "failed", "inProgress"}:
+                status = "completed"
+            typed_status = cast(TurnStatus, status)
+            error = raw.get("error")
+            data.append(
+                ThreadTurn(
+                    id=turn_id,
+                    status=typed_status,
+                    items_view="notLoaded",
+                    error=TurnError(message=error) if isinstance(error, str) else None,
+                )
+            )
+        next_index = start + len(selected)
+        next_cursor = f"fake-turn:{next_index}" if next_index < len(turns) else None
+        return ThreadTurnsPage(data=data, next_cursor=next_cursor)
+
+    def _fake_items_page(
+        self, *, turn_id: str | None, cursor: str | None, limit: int
+    ) -> ThreadItemsPage:
+        thread = self.read_result.get("thread")
+        raw_turns = thread.get("turns") if isinstance(thread, dict) else None
+        turns = (
+            [turn for turn in raw_turns if isinstance(turn, dict)]
+            if isinstance(raw_turns, list)
+            else []
+        )
+        raw_items: list[dict[str, object]] = []
+        for turn in turns:
+            if turn.get("id") != turn_id:
+                continue
+            items = turn.get("items")
+            if isinstance(items, list):
+                raw_items = [item for item in items if isinstance(item, dict)]
+            break
+        start = _fake_cursor_index(cursor, "fake-item")
+        selected = raw_items[start : start + limit]
+        next_index = start + len(selected)
+        next_cursor = f"fake-item:{next_index}" if next_index < len(raw_items) else None
+        return ThreadItemsPage(data=selected, next_cursor=next_cursor)
 
     async def thread_fork(
         self,
@@ -469,9 +606,14 @@ class FakeSupervisedClient(FakeLaneClient):
         thread_id: str,
         *,
         exclude_turns: bool | None = None,
+        initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None,
     ) -> ThreadInfo:
         self.resumed.append(thread_id)
-        return await super().thread_resume(thread_id, exclude_turns=exclude_turns)
+        return await super().thread_resume(
+            thread_id,
+            exclude_turns=exclude_turns,
+            initial_turns_page=initial_turns_page,
+        )
 
     async def wait_closed(self) -> None:
         await self.closed.wait()

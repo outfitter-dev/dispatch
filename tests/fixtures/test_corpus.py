@@ -112,6 +112,25 @@ def test_app_server_protocol_manifest_tracks_v0144_capabilities() -> None:
         "parentThreadId",
         "ancestorThreadId",
     } <= set(manifest["selected_shapes"]["thread_list_experimental_fields"])
+    assert {"excludeTurns", "initialTurnsPage"} <= set(
+        manifest["selected_shapes"]["thread_resume_experimental_fields"]
+    )
+    assert {"cursor", "itemsView", "sortDirection"} <= set(
+        manifest["selected_shapes"]["thread_turns_list_fields"]
+    )
+    assert {"cursor", "turnId", "sortDirection"} <= set(
+        manifest["selected_shapes"]["thread_items_list_fields"]
+    )
+    assert (
+        "initialTurnsPage"
+        in manifest["selected_shapes"]["thread_resume_result_experimental_fields"]
+    )
+    assert {"data", "nextCursor", "backwardsCursor"} == set(
+        manifest["selected_shapes"]["thread_turns_page_fields"]
+    )
+    assert {"data", "nextCursor", "backwardsCursor"} == set(
+        manifest["selected_shapes"]["thread_items_page_fields"]
+    )
 
 
 def test_history_v2_fixture_summarizes_tools_files_and_subagents() -> None:

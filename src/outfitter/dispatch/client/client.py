@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator, Mapping
 from types import TracebackType
 from typing import Self
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from .errors import ClientError, ProtocolError, TransportError
 from .events import AccountRateLimitsUpdated, LaneEvent, ServerRequestReceived
@@ -51,12 +51,16 @@ from .models import (
     ThreadGoalSetParams,
     ThreadGoalStatus,
     ThreadInfo,
+    ThreadItemsListParams,
+    ThreadItemsPage,
     ThreadListCwdFilter,
     ThreadListParams,
     ThreadListResult,
     ThreadReadParams,
     ThreadResult,
+    ThreadResumeInitialTurnsPageParams,
     ThreadResumeParams,
+    ThreadResumeResult,
     ThreadRollbackParams,
     ThreadSandbox,
     ThreadSearchParams,
@@ -65,8 +69,11 @@ from .models import (
     ThreadSortKey,
     ThreadSourceKind,
     ThreadStartParams,
+    ThreadTurnsListParams,
+    ThreadTurnsPage,
     ThreadUnarchiveParams,
     TurnInterruptParams,
+    TurnItemsView,
     TurnStartParams,
     TurnSteerParams,
 )
@@ -79,6 +86,21 @@ _DEFAULT_CLIENT_INFO = ClientInfo(name="dispatch", version="0")
 def _dump(model: BaseModel) -> dict[str, object]:
     # All params are WireModel/BaseModel; serialize with aliases, drop None.
     return model.model_dump(by_alias=True, exclude_none=True)
+
+
+def _parse_page(
+    method: str,
+    result: dict[str, object],
+    page_type: type[ThreadTurnsPage] | type[ThreadItemsPage],
+    requested_cursor: str | None,
+) -> ThreadTurnsPage | ThreadItemsPage:
+    try:
+        page = page_type.model_validate(result)
+    except ValidationError as exc:
+        raise ProtocolError(f"malformed {method} response: {exc}") from exc
+    if requested_cursor is not None and page.next_cursor == requested_cursor:
+        raise ProtocolError(f"{method} repeated pagination cursor {requested_cursor!r}")
+    return page
 
 
 class AppServerClient:
@@ -252,17 +274,78 @@ class AppServerClient:
         thread_id: str,
         *,
         exclude_turns: bool | None = None,
+        initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None,
     ) -> ThreadInfo:
+        response = await self.thread_resume_full(
+            thread_id,
+            exclude_turns=exclude_turns,
+            initial_turns_page=initial_turns_page,
+        )
+        return response.thread
+
+    async def thread_resume_full(
+        self,
+        thread_id: str,
+        *,
+        exclude_turns: bool | None = None,
+        initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None,
+    ) -> ThreadResumeResult:
         result = await self._request(
             "thread/resume",
             _dump(
                 ThreadResumeParams(
                     thread_id=thread_id,
                     exclude_turns=exclude_turns,
+                    initial_turns_page=initial_turns_page,
                 )
             ),
         )
-        return ThreadResult.model_validate(result).thread
+        try:
+            return ThreadResumeResult.model_validate(result)
+        except ValidationError as exc:
+            raise ProtocolError(f"malformed thread/resume response: {exc}") from exc
+
+    async def thread_turns_list(
+        self,
+        thread_id: str,
+        *,
+        cursor: str | None = None,
+        limit: int | None = None,
+        sort_direction: SortDirection | None = None,
+        items_view: TurnItemsView | None = None,
+    ) -> ThreadTurnsPage:
+        params = ThreadTurnsListParams(
+            thread_id=thread_id,
+            cursor=cursor,
+            limit=limit,
+            sort_direction=sort_direction,
+            items_view=items_view,
+        )
+        result = await self._request("thread/turns/list", _dump(params))
+        page = _parse_page("thread/turns/list", result, ThreadTurnsPage, cursor)
+        assert isinstance(page, ThreadTurnsPage)
+        return page
+
+    async def thread_items_list(
+        self,
+        thread_id: str,
+        *,
+        cursor: str | None = None,
+        limit: int | None = None,
+        sort_direction: SortDirection | None = None,
+        turn_id: str | None = None,
+    ) -> ThreadItemsPage:
+        params = ThreadItemsListParams(
+            thread_id=thread_id,
+            cursor=cursor,
+            limit=limit,
+            sort_direction=sort_direction,
+            turn_id=turn_id,
+        )
+        result = await self._request("thread/items/list", _dump(params))
+        page = _parse_page("thread/items/list", result, ThreadItemsPage, cursor)
+        assert isinstance(page, ThreadItemsPage)
+        return page
 
     async def thread_fork(
         self,

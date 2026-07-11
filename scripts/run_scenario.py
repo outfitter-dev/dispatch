@@ -50,6 +50,8 @@ class Scenario:
     effort: str
     parallel: bool
     owned_interactive_requests: str | None
+    verify_bounded_sync: bool
+    unmanaged_sync: bool
     lanes: list[ScenarioLane]
 
 
@@ -122,6 +124,8 @@ def _load_scenario(path: Path) -> Scenario:
         effort=_string(data, "effort", fallback="low"),
         parallel=bool(data.get("parallel", True)),
         owned_interactive_requests=_optional_string(data, "owned_interactive_requests"),
+        verify_bounded_sync=bool(data.get("verify_bounded_sync", False)),
+        unmanaged_sync=bool(data.get("unmanaged_sync", False)),
         lanes=lanes,
     )
 
@@ -167,6 +171,8 @@ def _print_plan(scenario: Scenario, args: argparse.Namespace) -> None:
     print(f"effort={scenario.effort}")
     print(f"parallel={scenario.parallel}")
     print(f"owned_interactive_requests={scenario.owned_interactive_requests or '<default>'}")
+    print(f"verify_bounded_sync={scenario.verify_bounded_sync}")
+    print(f"unmanaged_sync={scenario.unmanaged_sync}")
     for lane in scenario.lanes:
         print(f"lane {lane.alias}: name={lane.name!r} expect={lane.expect_contains!r}")
 
@@ -192,12 +198,20 @@ class ScenarioRunner:
             self._prepare_codex_home()
             self._prepare_dispatch_home()
             self._prepare_work_dir()
-            self._dispatch_json(["up", "--json"])
-            model = self._resolve_model()
-            lanes = self._start_lanes(model)
-            self._assert_list_contains(lanes)
+            if self.scenario.unmanaged_sync:
+                lanes = self._start_unmanaged_lanes(self.scenario.preferred_model)
+                self._dispatch_json(["up", "--json"])
+            else:
+                self._dispatch_json(["up", "--json"])
+                model = self._resolve_model()
+                lanes = self._start_lanes(model)
+                self._assert_list_contains(lanes)
             for lane in lanes:
-                self._wait_for_completion(lane)
+                if not self.scenario.unmanaged_sync:
+                    self._wait_for_completion(lane)
+                self._assert_bounded_sync(lane)
+                if self.scenario.unmanaged_sync:
+                    self._assert_list_contains([lane])
                 self._assert_tail_contains(lane)
                 self._assert_query_contains(lane)
                 self._assert_expected_file(lane)
@@ -265,6 +279,73 @@ class ScenarioRunner:
             self._wait_for_completion(run)
             runs.append(run)
         return runs
+
+    def _start_unmanaged_lanes(self, model: str | None) -> list[LaneRun]:
+        return [self._start_unmanaged_lane(lane, model) for lane in self.scenario.lanes]
+
+    def _start_unmanaged_lane(self, lane: ScenarioLane, model: str | None) -> LaneRun:
+        base = [
+            "codex",
+            "exec",
+            "--json",
+            "--skip-git-repo-check",
+            "--sandbox",
+            lane.sandbox or "read-only",
+            "--cd",
+            str(self.work_dir),
+            "--config",
+            f'model_reasoning_effort="{self.scenario.effort}"',
+        ]
+        command = [*base]
+        if model is not None:
+            command.extend(["--model", model])
+        command.append(lane.prompt)
+        result = subprocess.run(
+            command,
+            env=self.env,
+            text=True,
+            capture_output=True,
+            timeout=self.scenario.timeout_seconds,
+            check=False,
+        )
+        if result.returncode != 0 and model is not None and self.scenario.allow_model_fallback:
+            command = [*base, lane.prompt]
+            result = subprocess.run(
+                command,
+                env=self.env,
+                text=True,
+                capture_output=True,
+                timeout=self.scenario.timeout_seconds,
+                check=False,
+            )
+        if result.returncode != 0:
+            raise SystemExit(
+                f"codex exec failed for {lane.alias}\nstdout:\n{result.stdout}\n"
+                f"stderr:\n{result.stderr}"
+            )
+        thread_id: str | None = None
+        for raw in result.stdout.splitlines():
+            try:
+                event = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict) and event.get("type") == "thread.started":
+                candidate = event.get("thread_id")
+                if isinstance(candidate, str):
+                    thread_id = candidate
+                    break
+        if thread_id is None:
+            raise SystemExit(f"codex exec returned no thread.started event: {result.stdout}")
+        print(f"started unmanaged {lane.alias}: id={thread_id}")
+        return LaneRun(
+            alias=lane.alias,
+            id=thread_id,
+            handle=None,
+            expect_contains=lane.expect_contains,
+            expect_file=lane.expect_file,
+            expect_file_contains=lane.expect_file_contains,
+            expect_tool=lane.expect_tool,
+        )
 
     def _start_lane(self, lane: ScenarioLane, model: str | None) -> LaneRun:
         args = [
@@ -351,6 +432,67 @@ class ScenarioRunner:
                 raise SystemExit(
                     f"{lane.alias} expected {lane.expect_file_contains!r} in {path}: {contents!r}"
                 )
+
+    def _assert_bounded_sync(self, lane: LaneRun) -> None:
+        if not self.scenario.verify_bounded_sync:
+            return
+        sync_args = [
+            "sync",
+            lane.id,
+            "--max-turns",
+            "2",
+            "--max-items",
+            "20",
+            "--max-bytes",
+            "262144",
+            "--max-seconds",
+            "10",
+            "--json",
+        ]
+        first = self._assert_sync_bounds(lane, self._dispatch_json(sync_args))
+        if first.get("turns_indexed") == 0 or first.get("items_indexed") == 0:
+            raise SystemExit(f"{lane.alias} sync did not index unmanaged history: {first}")
+        matches_before = self._bounded_sync_matches(lane)
+        second = self._assert_sync_bounds(lane, self._dispatch_json(sync_args))
+        matches_after = self._bounded_sync_matches(lane)
+        before_ids = {match.get("item_id") for match in matches_before}
+        after_ids = {match.get("item_id") for match in matches_after}
+        if not before_ids or before_ids != after_ids:
+            raise SystemExit(
+                f"{lane.alias} bounded sync did not preserve indexed content: "
+                f"before={matches_before}, after={matches_after}"
+            )
+        if (
+            first.get("observation_enabled") is not True
+            or second.get("observation_enabled") is not True
+        ):
+            raise SystemExit(f"{lane.alias} sync did not persist live observation")
+
+    def _assert_sync_bounds(self, lane: LaneRun, out: dict[str, object]) -> dict[str, object]:
+        sync = out.get("sync")
+        if not isinstance(sync, dict):
+            raise SystemExit(f"{lane.alias} sync returned no sync state: {out}")
+        capability = sync.get("history_capability")
+        if capability not in {"supported", "turn-page-fallback"}:
+            raise SystemExit(f"{lane.alias} sync did not establish bounded history: {sync}")
+        if not isinstance(sync.get("pages_scanned"), int):
+            raise SystemExit(f"{lane.alias} sync omitted page metrics: {sync}")
+        turns = sync.get("turns_indexed")
+        items = sync.get("items_indexed")
+        if not isinstance(turns, int) or turns > 2:
+            raise SystemExit(f"{lane.alias} sync exceeded its turn bound: {sync}")
+        if not isinstance(items, int) or items > 20:
+            raise SystemExit(f"{lane.alias} sync exceeded its item bound: {sync}")
+        if not isinstance(sync.get("truncated"), bool):
+            raise SystemExit(f"{lane.alias} sync omitted truncation state: {sync}")
+        return sync
+
+    def _bounded_sync_matches(self, lane: LaneRun) -> list[dict[str, object]]:
+        out = self._dispatch_json(["query", lane.expect_contains, "--lane", lane.id, "--json"])
+        matches = out.get("matches")
+        if not isinstance(matches, list) or not all(isinstance(match, dict) for match in matches):
+            raise SystemExit(f"{lane.alias} query returned invalid matches: {out}")
+        return matches
 
     def _assert_query_contains(self, lane: LaneRun) -> None:
         if lane.expect_tool is None:

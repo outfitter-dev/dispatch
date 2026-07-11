@@ -16,7 +16,8 @@ Layout:
 
 - `app_server/` — raw App Server result payloads and notifications, plus the
   compact generated protocol manifest refreshed by `just app-server-manifest`.
-  The manifest records canonical `ThreadItem` discriminants, and
+  The manifest records canonical `ThreadItem` discriminants plus bounded
+  resume/turn/item pagination fields, and
   `thread_read/canonical_items_v0144.json` exercises every known 0.144 variant.
   `thread_list/descendants_v0144.json` exercises tagged subagent sources and
   parent, ancestor, and fork relationships.

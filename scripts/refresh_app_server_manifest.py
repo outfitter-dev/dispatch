@@ -141,6 +141,24 @@ def build_manifest(command: list[str]) -> dict[str, object]:
                 "thread_list_experimental_fields": _properties(
                     experimental / "v2" / "ThreadListParams.json"
                 ),
+                "thread_resume_experimental_fields": _properties(
+                    experimental / "v2" / "ThreadResumeParams.json"
+                ),
+                "thread_resume_result_experimental_fields": _properties(
+                    experimental / "v2" / "ThreadResumeResponse.json"
+                ),
+                "thread_turns_list_fields": _properties(
+                    experimental / "v2" / "ThreadTurnsListParams.json"
+                ),
+                "thread_turns_page_fields": _properties(
+                    experimental / "v2" / "ThreadTurnsListResponse.json"
+                ),
+                "thread_items_list_fields": _properties(
+                    experimental / "v2" / "ThreadItemsListParams.json"
+                ),
+                "thread_items_page_fields": _properties(
+                    experimental / "v2" / "ThreadItemsListResponse.json"
+                ),
             },
         }
 

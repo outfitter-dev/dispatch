@@ -276,7 +276,17 @@ def test_cli_composed_routes_invoke_canonical_ops() -> None:
                 "topology_limit": 50,
             },
         ),
-        ("sync", {"lane": "@docs", "full": False}),
+        (
+            "sync",
+            {
+                "lane": "@docs",
+                "full": False,
+                "max_turns": 50,
+                "max_items": 500,
+                "max_bytes": 524288,
+                "max_seconds": 5.0,
+            },
+        ),
         (
             "search",
             {

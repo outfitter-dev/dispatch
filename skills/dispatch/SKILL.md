@@ -276,12 +276,29 @@ indexed view.
 
 ```bash
 uv run dispatch sync <dispatch-ref-or-thread-id>
-uv run dispatch sync <dispatch-ref-or-thread-id> --full
+uv run dispatch sync <dispatch-ref-or-thread-id> --max-turns 20 --max-items 200
+uv run dispatch sync <dispatch-ref-or-thread-id> --full --max-bytes 16777216
 ```
 
-Sync indexes source identity, sync state, latest event time, latest turn id, and
-bounded top+tail JSONL facts when Codex exposes a rollout path. It does not copy
-the full transcript by default. Bare `history` reads the local index only.
+Sync establishes metadata-only live observation, indexes recent App Server history
+first, and persists bounded turn/item cursors to reconcile missed newer turns before
+later backwards continuation. It also indexes source identity, sync state, latest event time, latest turn id, and
+bounded incremental JSONL facts when Codex exposes a rollout path. Check
+`history_capability`, `history_complete`, `truncated`, page/item counts, scanned
+bytes, and duration in JSON output. Older binaries fall back to metadata/JSONL
+with an explicit unsupported capability. `turn-page-fallback` means turn paging
+works but item paging does not; an atomic turn that exceeds the configured
+persistence budget stays pending/truncated until sync is rerun with a larger
+explicit budget. The aggregate byte target is checked between provider pages;
+`scanned_bytes` may exceed it by one received page, but a page that would exceed
+the remaining persistence budget is not indexed. One `--max-seconds` deadline
+bounds metadata, provider history, local parsing, persistence, and archive
+reconciliation. Durable cursor-cycle detection prevents repeated syncs from
+spinning. Bare `history` reads the local index only.
+When experimental paging is unavailable, sync retries stable metadata-only
+resume and reports observation separately from history capability. An oversized
+complete JSONL record remains at its current offset with an actionable
+`--max-bytes` diagnostic rather than being silently skipped.
 Selector-scoped transcript reads through `tail`, `history`, or
 transcript-inclusive `get` still use App Server `thread/read(includeTurns:true)`
 as the canonical source, and those reads backfill Dispatch's normalized local

@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any, Protocol
 from uuid import uuid4
 
-from outfitter.dispatch.client.errors import ClientError
+from outfitter.dispatch.client.errors import AppServerError, ClientError
 from outfitter.dispatch.contracts.context import Ctx, LaneClient
 from outfitter.dispatch.core.queue import drain_idle_queues
 
@@ -84,13 +84,20 @@ class Supervisor:
         """Restore persisted lane observation on the (re)connected app-server.
 
         Owned lanes are resumed so their app-server event stream is reattached.
-        Attached lanes stay metadata-only per ADR-0017; restarting the daemon must
-        not turn registration into an implicit resume.
+        Attached lanes stay metadata-only unless an explicit sync previously
+        established live observation; plain registration never becomes a resume.
         """
         for lane in await self._ctx.registry.list_lanes():
             try:
-                if lane.source == "own":
-                    await client.thread_resume(lane.id)
+                sync = await self._ctx.registry.get_lane_sync(lane.id)
+                observed = sync is not None and sync.observation_enabled
+                if lane.source == "own" or observed:
+                    try:
+                        await client.thread_resume(lane.id, exclude_turns=True)
+                    except AppServerError as exc:
+                        if exc.code != -32602:
+                            raise
+                        await client.thread_resume(lane.id)
                     self._ctx.log.info("lane.resumed", lane=lane.id, source=lane.source)
                 else:
                     await client.thread_read(lane.id, include_turns=False)

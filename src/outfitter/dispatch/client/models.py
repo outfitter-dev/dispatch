@@ -39,6 +39,8 @@ type ServerRequestCategory = Literal[
     "unknown",
 ]
 SortDirection = Literal["asc", "desc"]
+TurnItemsView = Literal["notLoaded", "summary", "full"]
+TurnStatus = Literal["completed", "interrupted", "failed", "inProgress"]
 ThreadSortKey = Literal["created_at", "updated_at", "recency_at"]
 ThreadListCwdFilter = str | list[str]
 ThreadSourceKind = Literal[
@@ -359,6 +361,13 @@ class ThreadStartParams(WireModel):
 class ThreadResumeParams(WireModel):
     thread_id: str
     exclude_turns: bool | None = None
+    initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None
+
+
+class ThreadResumeInitialTurnsPageParams(WireModel):
+    limit: int | None = Field(default=None, ge=0)
+    sort_direction: SortDirection | None = None
+    items_view: TurnItemsView | None = None
 
 
 class ThreadForkParams(WireModel):
@@ -472,6 +481,78 @@ class ThreadListResult(WireModel):
     data: list[ThreadInfo] = []
     next_cursor: str | None = None
     backwards_cursor: str | None = None
+
+
+class TurnError(WireModel):
+    message: str
+    additional_details: str | None = None
+    codex_error_info: JsonValue = None
+
+
+class ThreadTurn(WireModel):
+    id: str
+    status: TurnStatus
+    items: list[dict[str, object]] = Field(default_factory=list)
+    items_view: TurnItemsView = "full"
+    started_at: int | None = None
+    completed_at: int | None = None
+    duration_ms: int | None = None
+    error: TurnError | None = None
+
+
+class ThreadTurnsListParams(WireModel):
+    thread_id: str
+    cursor: str | None = None
+    limit: int | None = Field(default=None, ge=0)
+    sort_direction: SortDirection | None = None
+    items_view: TurnItemsView | None = None
+
+
+class ThreadTurnsPage(WireModel):
+    data: list[ThreadTurn] = Field(default_factory=list)
+    next_cursor: str | None = None
+    backwards_cursor: str | None = None
+
+
+class ThreadItemsListParams(WireModel):
+    thread_id: str
+    cursor: str | None = None
+    limit: int | None = Field(default=None, ge=0)
+    sort_direction: SortDirection | None = None
+    turn_id: str | None = None
+
+
+class ThreadItemsPage(WireModel):
+    data: list[dict[str, object]] = Field(default_factory=list)
+    next_cursor: str | None = None
+    backwards_cursor: str | None = None
+
+
+class ActivePermissionProfile(WireModel):
+    id: str
+    extends: str | None = None
+
+
+class ThreadResumeResult(WireModel):
+    """Full ``thread/resume`` response, including an optional bootstrap page.
+
+    Configuration fields remain optional so callers can also parse responses
+    from App Server versions that returned only ``thread``.
+    """
+
+    thread: ThreadInfo
+    initial_turns_page: ThreadTurnsPage | None = None
+    active_permission_profile: ActivePermissionProfile | None = None
+    approval_policy: JsonValue = None
+    approvals_reviewer: ApprovalsReviewer | None = None
+    cwd: str | None = None
+    model: str | None = None
+    model_provider: str | None = None
+    reasoning_effort: str | None = None
+    runtime_workspace_roots: list[str] = Field(default_factory=list)
+    sandbox: JsonValue = None
+    service_tier: str | None = None
+    instruction_sources: list[str] = Field(default_factory=list)
 
 
 class ThreadSearchMatch(WireModel):

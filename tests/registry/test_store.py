@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -18,6 +19,7 @@ from outfitter.dispatch.registry.models import (
     LaneRuntimeSettings,
     LaneSync,
     ProviderThreadObservation,
+    QueuedMessage,
     Subscription,
 )
 from outfitter.dispatch.registry.refs import BASE58BTC_ALPHABET, codex_ref_payload
@@ -1368,6 +1370,7 @@ async def test_lane_sync_roundtrip_and_many_lookup(store: Registry) -> None:
             line_count=5,
             first_offset=0,
             tail_offset=128,
+            next_offset=256,
             display_name="Desktop",
             preview="hello",
             cwd="/work",
@@ -1379,12 +1382,40 @@ async def test_lane_sync_roundtrip_and_many_lookup(store: Registry) -> None:
             session_id="L1",
             latest_event_at="2026-06-05T10:00:00.000Z",
             latest_turn_id="turn-1",
+            history_source="app-server-turns",
+            history_cursor="older-page",
+            history_backwards_cursor="newer-page",
+            history_recent_cursor="recent-page",
+            history_pending_backwards_cursor="pending-newer-page",
+            history_item_turn_id="turn-5",
+            history_item_turn_cursor="turn-page",
+            history_item_turn_direction="asc",
+            history_item_cursor="item-page",
+            history_cursor_guard="00ff",
+            history_capability="supported",
+            observation_enabled=True,
+            pages_scanned=1,
+            turns_indexed=5,
+            items_indexed=20,
+            scanned_bytes=4096,
+            duration_ms=12,
+            truncated=True,
         )
     )
 
     assert saved.last_synced_at == _clock().isoformat()
     assert saved.display_name == "Desktop"
     assert saved.source_size == 3
+    assert saved.next_offset == 256
+    assert saved.history_cursor == "older-page"
+    assert saved.history_item_cursor == "item-page"
+    assert saved.history_recent_cursor == "recent-page"
+    assert saved.observation_enabled is True
+    assert saved.history_item_turn_cursor == "turn-page"
+    assert saved.history_item_turn_direction == "asc"
+    assert saved.history_cursor_guard == "00ff"
+    assert saved.turns_indexed == 5
+    assert saved.truncated is True
 
     updated = await store.upsert_lane_sync(
         saved.model_copy(
@@ -1398,6 +1429,84 @@ async def test_lane_sync_roundtrip_and_many_lookup(store: Registry) -> None:
     many = await store.get_lane_sync_many(["L1", "L2"])
     assert set(many) == {"L1"}
     assert many["L1"].preview == "hello"
+
+
+async def test_lane_sync_transaction_serializes_with_live_event_writes(
+    store: Registry,
+) -> None:
+    await store.add_lane(id="L1", handle="@one", source="own")
+
+    async def sync_once(index: int) -> None:
+        await store.upsert_lane_sync(LaneSync(lane="L1", state="partial", pages_scanned=index))
+
+    async def event_once(index: int) -> None:
+        await store.touch_lane_event("L1")
+        await store.log_action("event", lane="L1", detail=str(index))
+
+    await asyncio.gather(
+        *(sync_once(index) for index in range(20)),
+        *(event_once(index) for index in range(20)),
+    )
+
+    assert await store.get_lane_sync("L1") is not None
+    assert len(await store.recent_actions(limit=25)) == 20
+
+
+async def test_unrelated_write_cannot_commit_or_enter_active_transaction(
+    store: Registry,
+) -> None:
+    await store.add_lane(id="L1", handle="@one", source="own")
+    queued: asyncio.Task[QueuedMessage] | None = None
+
+    with pytest.raises(RuntimeError, match="rollback owner"):
+        async with store._transaction():
+            await store._insert_action_log("should-rollback", lane="L1")
+            queued = asyncio.create_task(store.enqueue_message(lane="L1", text="later"))
+            await asyncio.sleep(0.01)
+            assert queued.done() is False
+            raise RuntimeError("rollback owner")
+
+    assert queued is not None
+    message = await queued
+    assert message.text == "later"
+    assert all(action.op != "should-rollback" for action in await store.recent_actions())
+
+
+async def test_unrelated_read_cannot_observe_active_transaction(store: Registry) -> None:
+    await store.add_lane(id="L1", handle="@one", source="own")
+    inserted = asyncio.Event()
+    release = asyncio.Event()
+
+    async def rollback_owner() -> None:
+        with pytest.raises(RuntimeError, match="rollback owner"):
+            async with store._transaction():
+                await store._insert_action_log("should-rollback", lane="L1")
+                inserted.set()
+                await release.wait()
+                raise RuntimeError("rollback owner")
+
+    owner = asyncio.create_task(rollback_owner())
+    await inserted.wait()
+    reader = asyncio.create_task(store.recent_actions())
+    await asyncio.sleep(0.01)
+    assert reader.done() is False
+
+    release.set()
+    await owner
+    assert all(action.op != "should-rollback" for action in await reader)
+
+
+def test_all_public_registry_access_is_serialized() -> None:
+    unguarded = [
+        name
+        for name, member in Registry.__dict__.items()
+        if not name.startswith("_")
+        and name != "open"
+        and inspect.iscoroutinefunction(member)
+        and not getattr(member, "__registry_serialized__", False)
+    ]
+
+    assert unguarded == []
 
 
 async def test_lane_sync_upsert_rolls_back_source_row_if_snapshot_write_fails(
@@ -1607,7 +1716,63 @@ async def test_v17_migration_adds_replace_in_place_provider_capacity_table(
         async with migrated._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
         assert row is not None
-        assert int(row[0]) == SCHEMA_VERSION == 17
+        assert int(row[0]) == SCHEMA_VERSION == 19
+    finally:
+        await migrated.close()
+
+
+async def test_v18_migration_adds_bounded_history_progress_columns(tmp_path: Path) -> None:
+    db = tmp_path / "registry-v17.db"
+    conn = await aiosqlite.connect(db)
+    await conn.executescript(
+        """
+        CREATE TABLE lanes (id TEXT PRIMARY KEY);
+        CREATE TABLE lane_sync_sources (
+            lane TEXT PRIMARY KEY,
+            state TEXT NOT NULL,
+            source_path TEXT,
+            source_device INTEGER,
+            source_inode INTEGER,
+            source_size INTEGER,
+            source_mtime_ns INTEGER,
+            line_count INTEGER,
+            first_offset INTEGER,
+            tail_offset INTEGER,
+            last_synced_at TEXT,
+            error TEXT
+        );
+        PRAGMA user_version = 17;
+        """
+    )
+    await conn.commit()
+    await conn.close()
+
+    migrated = await Registry.open(db, now=_clock)
+    try:
+        async with migrated._conn.execute("PRAGMA table_info(lane_sync_sources)") as cur:
+            columns = {str(row["name"]) for row in await cur.fetchall()}
+        assert {
+            "history_cursor",
+            "next_offset",
+            "history_backwards_cursor",
+            "history_recent_cursor",
+            "history_pending_backwards_cursor",
+            "history_item_turn_id",
+            "history_item_turn_cursor",
+            "history_item_turn_direction",
+            "history_item_cursor",
+            "history_cursor_guard",
+            "history_complete",
+            "history_capability",
+            "observation_enabled",
+            "pages_scanned",
+            "turns_indexed",
+            "items_indexed",
+            "unchanged_skipped",
+            "scanned_bytes",
+            "duration_ms",
+            "truncated",
+        } <= columns
     finally:
         await migrated.close()
 

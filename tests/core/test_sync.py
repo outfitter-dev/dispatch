@@ -126,3 +126,120 @@ def test_full_scan_marks_complete_and_reports_missing_file(tmp_path: Path) -> No
     assert full.line_count == 1
     assert missing.state == "error"
     assert missing.error is not None
+
+
+def test_scan_skips_unchanged_source_and_bounds_full_reads(tmp_path: Path) -> None:
+    path = tmp_path / "rollout.jsonl"
+    _write_jsonl(
+        path,
+        [
+            {"type": "session_meta", "payload": {"id": "T1", "value": "x" * 256}},
+            {"type": "event_msg", "payload": {"type": "task_complete"}},
+        ],
+    )
+
+    first = scan_codex_jsonl(str(path), full=True, limits=SyncLimits(full_bytes=128))
+    assert first.state == "partial"
+    assert first.bytes_scanned <= 128
+    assert first.source is not None
+
+    unchanged = scan_codex_jsonl(
+        str(path), previous=first.source, previous_offset=path.stat().st_size
+    )
+    assert unchanged.unchanged is True
+    assert unchanged.bytes_scanned == 0
+
+
+def test_scan_resumes_unread_offset_when_source_identity_is_unchanged(tmp_path: Path) -> None:
+    path = tmp_path / "rollout.jsonl"
+    _write_jsonl(
+        path,
+        [
+            {"type": "session_meta", "payload": {"id": "T1", "part": 1}},
+            {"type": "event_msg", "payload": {"type": "task_complete", "part": 2}},
+        ],
+    )
+    limits = SyncLimits(full_bytes=80, tail_bytes=512)
+    first = scan_codex_jsonl(str(path), full=True, limits=limits)
+    assert first.state == "partial"
+    assert first.source is not None
+    assert first.next_offset is not None
+    assert first.next_offset < first.source.size
+
+    second = scan_codex_jsonl(
+        str(path),
+        full=True,
+        limits=limits,
+        previous=first.source,
+        previous_offset=first.next_offset,
+    )
+
+    assert second.unchanged is False
+    assert second.bytes_scanned > 0
+    assert second.next_offset == path.stat().st_size
+
+
+def test_scan_retries_same_identity_when_prior_scan_never_started(tmp_path: Path) -> None:
+    path = tmp_path / "rollout.jsonl"
+    _write_jsonl(
+        path,
+        [{"type": "session_meta", "payload": {"id": "T1"}}],
+    )
+    first = scan_codex_jsonl(str(path), limits=SyncLimits(top_bytes=0, tail_bytes=0))
+    assert first.source is not None
+    assert first.next_offset is None
+
+    second = scan_codex_jsonl(
+        str(path),
+        previous=first.source,
+        previous_offset=first.next_offset,
+        limits=SyncLimits(top_bytes=1024, tail_bytes=1024),
+    )
+
+    assert second.unchanged is False
+    assert second.session_id == "T1"
+
+
+def test_scan_reports_oversized_complete_record_without_advancing(tmp_path: Path) -> None:
+    path = tmp_path / "rollout.jsonl"
+    _write_jsonl(
+        path,
+        [
+            {"type": "session_meta", "payload": {"id": "T1", "large": "x" * 500}},
+            {"type": "event_msg", "payload": {"type": "task_complete"}},
+        ],
+    )
+    source = scan_codex_jsonl(str(path), full=True, limits=SyncLimits(full_bytes=0)).source
+    assert source is not None
+
+    result = scan_codex_jsonl(
+        str(path),
+        previous=source,
+        previous_offset=0,
+        limits=SyncLimits(tail_bytes=64),
+    )
+
+    assert result.next_offset == 0
+    assert result.bytes_scanned == 0
+    assert result.error is not None
+    assert "exceeds the 64-byte local scan budget" in result.error
+
+
+def test_scan_continues_from_last_complete_line_after_append(tmp_path: Path) -> None:
+    path = tmp_path / "rollout.jsonl"
+    _write_jsonl(
+        path,
+        [{"type": "session_meta", "payload": {"id": "T1"}}],
+        partial='{"type":"event_msg"',
+    )
+    first = scan_codex_jsonl(str(path))
+    assert first.source is not None
+    assert first.next_offset is not None
+
+    with path.open("a") as handle:
+        handle.write(',"payload":{"type":"task_complete","turn_id":"turn-2"}}\n')
+    second = scan_codex_jsonl(str(path), previous=first.source, previous_offset=first.next_offset)
+
+    assert second.bytes_scanned > 0
+    assert second.latest_turn_id == "turn-2"
+    assert second.next_offset == path.stat().st_size
