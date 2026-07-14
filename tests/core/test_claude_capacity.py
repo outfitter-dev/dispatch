@@ -129,6 +129,38 @@ async def test_refresh_claude_capacity_normalizes_account_and_runtime_without_ro
         assert secret not in payload
 
 
+async def test_refresh_claude_capacity_normalizes_whitespace_only_optional_fields(
+    store: Registry,
+) -> None:
+    responses = {
+        ("auth", "status", "--json"): ClaudeCommandResult(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "loggedIn": True,
+                    "authMethod": "   ",
+                    "apiProvider": "   ",
+                    "email": "agent@example.com",
+                    "orgName": "   ",
+                    "subscriptionType": "   ",
+                }
+            ),
+        ),
+        ("agents", "--json"): ClaudeCommandResult(returncode=0, stdout="[]"),
+    }
+
+    async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
+        return _command_response(responses, args)
+
+    observation = await refresh_claude_capacity(make_ctx(store), run_command=run)
+
+    assert observation.state == "ready"
+    assert observation.auth_method is None
+    assert observation.api_provider is None
+    assert observation.organization_label is None
+    assert observation.plan is None
+
+
 async def test_refresh_claude_capacity_signed_out_skips_runtime_probe(store: Registry) -> None:
     await store.upsert_provider_capacity_observation(
         ProviderCapacityObservation(

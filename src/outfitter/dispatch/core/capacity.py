@@ -40,6 +40,8 @@ def _bounded(value: str | None, limit: int = 120) -> str | None:
     if value is None:
         return None
     collapsed = " ".join(value.split())
+    if not collapsed:
+        return None
     return collapsed if len(collapsed) <= limit else collapsed[: limit - 1].rstrip() + "…"
 
 
@@ -102,8 +104,8 @@ def _all_windows(
             )
         if base_id not in snapshots:
             result.extend(_windows(base, fallback_id=base_id, observed_at=observed_at))
-        return list({(window.limit_id, window.window): window for window in result}.values())
-    return _windows(limits.rate_limits, fallback_id="default", observed_at=observed_at)
+        return list({(window.limit_id, window.window): window for window in result}.values())[:64]
+    return _windows(limits.rate_limits, fallback_id="default", observed_at=observed_at)[:64]
 
 
 def _push_limit_id(
@@ -381,7 +383,7 @@ async def observe_codex_rate_limits(
         existing.model_copy(
             update={
                 "state": existing.state if prior_is_usable else "partial",
-                "windows": retained + replacement,
+                "windows": (retained + replacement)[-64:],
                 "source": source,
                 "observed_at": observed_at,
                 "capacity_observed_at": observed_at,

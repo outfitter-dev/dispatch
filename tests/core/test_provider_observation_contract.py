@@ -103,6 +103,21 @@ async def test_observations_persist_latest_value_per_provider_host_and_config(
         await reopened.close()
 
 
+async def test_invalid_copied_observation_is_rejected_before_replacing_row(tmp_path: Path) -> None:
+    store = await Registry.open(tmp_path / "dispatch.db")
+    try:
+        valid = provider_capacity_observation()
+        await store.upsert_provider_capacity_observation(valid)
+        invalid = valid.model_copy(update={"source": [f"source-{index}" for index in range(17)]})
+
+        with pytest.raises(ValidationError):
+            await store.upsert_provider_capacity_observation(invalid)
+
+        assert await store.get_provider_capacity_observation("codex") == valid
+    finally:
+        await store.close()
+
+
 def test_observation_provenance_is_bounded() -> None:
     observation = provider_capacity_observation()
     data = observation.model_dump()
@@ -132,6 +147,24 @@ def test_observation_rejects_unsafe_persisted_values(field: str, unsafe_value: s
 
     with pytest.raises(ValidationError):
         type(observation).model_validate({**observation.model_dump(), field: unsafe_value})
+
+
+@pytest.mark.parametrize(
+    "credit_update",
+    [
+        {"fingerprint": "opaque-credit-1"},
+        {"title": "x" * 121},
+        {"reset_type": "x" * 121},
+        {"status": "x" * 121},
+    ],
+)
+def test_observation_rejects_unsafe_reset_credit_values(credit_update: dict[str, str]) -> None:
+    observation = provider_capacity_observation()
+    data = observation.model_dump()
+    [credit] = data["reset_credits"]
+
+    with pytest.raises(ValidationError):
+        type(observation).model_validate({**data, "reset_credits": [{**credit, **credit_update}]})
 
 
 async def test_missing_provider_is_absence_with_refresh_hint(tmp_path: Path) -> None:

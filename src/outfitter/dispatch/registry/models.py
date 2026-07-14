@@ -232,12 +232,12 @@ class ProviderCapacityWindow(BaseModel):
 
 
 class ProviderResetCredit(BaseModel):
-    fingerprint: str
-    reset_type: str
-    status: str
+    fingerprint: ProviderFingerprint
+    reset_type: ProviderText
+    status: ProviderText
     granted_at: int
     expires_at: int | None = None
-    title: str | None = None
+    title: ProviderText | None = None
 
 
 class ProviderUsageSummary(BaseModel):

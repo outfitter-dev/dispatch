@@ -19,10 +19,11 @@ from outfitter.dispatch.client.models import (
     SpendControlLimitSnapshot,
 )
 from outfitter.dispatch.core import handlers
-from outfitter.dispatch.core.capacity import refresh_codex_capacity
+from outfitter.dispatch.core.capacity import observe_codex_rate_limits, refresh_codex_capacity
 from outfitter.dispatch.core.models import UsageInput
 from outfitter.dispatch.core.reactor import Reactor
 from outfitter.dispatch.core.triggers import TriggerRunner
+from outfitter.dispatch.registry.models import ProviderCapacityWindow
 from outfitter.dispatch.registry.store import Registry
 from tests.fakes import FakeLaneClient, make_ctx
 from tests.fixtures import load_json
@@ -256,6 +257,40 @@ async def test_rate_limit_notification_refreshes_without_polling(store: Registry
     assert saved.usage_observed_at is None
     assert saved.source == ["account/rateLimits/updated"]
     assert client.calls == []
+
+
+async def test_rate_limit_notification_keeps_observation_window_bound(store: Registry) -> None:
+    observed_at = "2026-07-14T12:00:00+00:00"
+    existing = provider_capacity_observation(observed_at=observed_at).model_copy(
+        update={
+            "windows": [
+                ProviderCapacityWindow(
+                    limit_id=f"limit-{index}",
+                    window="primary",
+                    used_percent=index,
+                    observed_at=observed_at,
+                )
+                for index in range(64)
+            ]
+        }
+    )
+    await store.upsert_provider_capacity_observation(existing)
+
+    saved = await observe_codex_rate_limits(
+        make_ctx(store),
+        RateLimitSnapshot(
+            limit_id="new-limit",
+            primary=RateLimitWindow(used_percent=50),
+        ),
+    )
+
+    assert len(saved.windows) == 64
+    assert ("new-limit", "primary") in {
+        (window.limit_id, window.window) for window in saved.windows
+    }
+    assert ("limit-0", "primary") not in {
+        (window.limit_id, window.window) for window in saved.windows
+    }
 
 
 async def test_rate_limit_notification_preserves_component_freshness(store: Registry) -> None:

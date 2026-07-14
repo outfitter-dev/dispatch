@@ -108,6 +108,8 @@ def _bounded(value: object, limit: int = 120) -> str | None:
     if not isinstance(value, str):
         return None
     collapsed = " ".join(value.split())
+    if not collapsed:
+        return None
     return collapsed if len(collapsed) <= limit else collapsed[: limit - 1].rstrip() + "…"
 
 

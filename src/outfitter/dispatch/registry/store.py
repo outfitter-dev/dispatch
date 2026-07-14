@@ -2416,6 +2416,9 @@ class Registry:
     async def upsert_provider_capacity_observation(
         self, observation: ProviderCapacityObservation
     ) -> ProviderCapacityObservation:
+        observation = ProviderCapacityObservation.model_validate(
+            observation.model_dump(mode="python")
+        )
         payload = _json_dump_compact(observation.model_dump(mode="json"))
         async with self._write_lock:
             try:
@@ -2451,14 +2454,7 @@ class Registry:
             except Exception:
                 await self._conn.rollback()
                 raise
-        saved = await self.get_provider_capacity_observation(
-            observation.provider,
-            host_scope=observation.host_scope,
-            config_scope=observation.config_scope,
-        )
-        if saved is None:
-            raise RuntimeError("provider capacity upsert did not return a row")
-        return saved
+        return observation
 
     @_serialized_access
     async def get_provider_capacity_observation(
