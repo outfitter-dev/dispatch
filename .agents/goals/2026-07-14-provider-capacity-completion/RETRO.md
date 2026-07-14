@@ -13,10 +13,10 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 - Objective: Complete DIS-34's remaining Claude provider account/capacity foundation.
 - Completion horizon: `ready-pr`.
 - Authority used: Packet preparation, scoped Linear mutation, Graphite branching/PR publication, implementation, tests, docs, and isolated read-only provider smokes.
-- Outcome: DIS-36 is ready at PR #88; DIS-37 is locally green and awaiting review.
+- Outcome: DIS-36 is ready at PR #88; DIS-37 is locally green and cleanly reviewed, awaiting draft PR/CI.
 - Tracker/PR/source-control state: DIS-34/DIS-36/DIS-37 In Progress; PR #88 ready and CI-green; DIS-40 blocked by DIS-37; current stacked branch `dis-37-capture-claude-capacity-from-statusline-snapshots`.
 - Verification: DIS-36 full gate passed 631 tests; DIS-37 full gate passed 645 tests plus package build; both isolated smokes passed.
-- Review state: DIS-36 standing/privacy gates clean at 5/5; DIS-37 review not started.
+- Review state: DIS-36 standing/privacy and DIS-37 standing/statusline gates are clean at 5/5 with zero open P0-P2.
 - Remaining risks: Statusline payload/schema drift, wrapper setup ergonomics, and stale DIS-38 history wording.
 
 ## Readiness
@@ -27,7 +27,7 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 - Verification blockers: none known.
 - Tracker blockers: DIS-38 contract needs reconciliation against ADR-0023.
 - Authority blockers: merge/release/publish and live Claude config mutation are not authorized.
-- Next action: commit and review DIS-37, then publish the second stack PR.
+- Next action: publish the DIS-37 draft PR, wait for CI/remote review, then begin DIS-38 reconciliation.
 
 ## Goal Amendments
 
@@ -138,6 +138,8 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | 2 | Statusline atomicity/privacy review | `tmp/reviews/statusline/dis-37-round-2.json` | 3/5 | changes requested | 1 | Locking/durability/partial merge fixed; both-absent input still erased cached windows. |
 | 3 | Standing DIS-37 incremental review | `tmp/reviews/standing/dis-37-round-3.json` | 3/5 | changes requested | 1 | File retained unavailable cache, but first registry refresh ignored those windows. |
 | 3 | Statusline atomicity/privacy review | `tmp/reviews/statusline/dis-37-round-3.json` | 3/5 | changes requested | 1 | Same downstream gate lost retained windows on an empty registry. |
+| 4 | Standing DIS-37 incremental review | `tmp/reviews/standing/dis-37-round-4.json` | 5/5 | clean | 0 | Empty-registry recovery, partial/unavailable state, timestamps, focused/surface/type/lint checks verified. |
+| 4 | Statusline atomicity/privacy review | `tmp/reviews/statusline/dis-37-round-4.json` | 5/5 | clean | 0 | Exact two-window unavailable sequence, staleness, raw-id exclusion, locking/durability/bounds all verified. |
 
 ## Verification Log
 
