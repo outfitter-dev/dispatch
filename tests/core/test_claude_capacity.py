@@ -17,6 +17,7 @@ from outfitter.dispatch.core import handlers
 from outfitter.dispatch.core.claude_capacity import (
     ClaudeCommandOutputError,
     ClaudeCommandResult,
+    _merge_windows,
     refresh_claude_capacity,
     run_claude_command,
 )
@@ -159,6 +160,32 @@ async def test_refresh_claude_capacity_normalizes_whitespace_only_optional_field
     assert observation.api_provider is None
     assert observation.organization_label is None
     assert observation.plan is None
+
+
+def test_merge_windows_keeps_incoming_window_within_observation_bound() -> None:
+    observed_at = "2026-07-14T12:00:00+00:00"
+    existing = [
+        ProviderCapacityWindow(
+            limit_id=f"existing-{index}",
+            window="primary",
+            used_percent=index,
+            observed_at=observed_at,
+        )
+        for index in range(64)
+    ]
+    captured = [
+        ProviderCapacityWindow(
+            limit_id="incoming",
+            window="five_hour",
+            used_percent=50,
+            observed_at="2026-07-14T12:01:00+00:00",
+        )
+    ]
+
+    merged = _merge_windows(existing, captured)
+
+    assert len(merged) == 64
+    assert ("incoming", "five_hour") in {(window.limit_id, window.window) for window in merged}
 
 
 async def test_refresh_claude_capacity_signed_out_skips_runtime_probe(store: Registry) -> None:

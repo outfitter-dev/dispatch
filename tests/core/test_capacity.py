@@ -231,6 +231,33 @@ async def test_refresh_codex_capacity_clears_reset_credits_when_success_omits_th
     assert refreshed.reset_credits == []
 
 
+async def test_codex_plan_normalizes_whitespace_and_preserves_prior_value(
+    store: Registry,
+) -> None:
+    existing = provider_capacity_observation().model_copy(update={"plan": "pro"})
+    await store.upsert_provider_capacity_observation(existing)
+    client = FakeLaneClient()
+    signed_in = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    assert signed_in.account is not None
+    client.account_result = signed_in.model_copy(
+        update={"account": signed_in.account.model_copy(update={"plan_type": "   "})}
+    )
+    client.rate_limits_result = AccountRateLimitsResult(
+        rate_limits=RateLimitSnapshot(plan_type="   ")
+    )
+
+    refreshed = await refresh_codex_capacity(make_ctx(store, client))
+    pushed = await observe_codex_rate_limits(
+        make_ctx(store),
+        RateLimitSnapshot(plan_type="   ", primary=RateLimitWindow(used_percent=10)),
+    )
+
+    assert refreshed.plan == "pro"
+    assert pushed.plan == "pro"
+
+
 async def test_refresh_codex_capacity_preserves_observation_when_account_probe_fails(
     store: Registry,
 ) -> None:

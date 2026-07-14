@@ -133,6 +133,7 @@ def _merge_windows(
     existing: list[ProviderCapacityWindow], captured: list[ProviderCapacityWindow]
 ) -> list[ProviderCapacityWindow]:
     merged = {(window.limit_id, window.window): window for window in existing}
+    updated: set[tuple[str, str]] = set()
     for window in captured:
         key = (window.limit_id, window.window)
         current = merged.get(key)
@@ -140,7 +141,9 @@ def _merge_windows(
         captured_at = _observed_at(window.observed_at)
         if current_at is None or (captured_at is not None and captured_at > current_at):
             merged[key] = window
-    return [merged[key] for key in sorted(merged)][:64]
+            updated.add(key)
+    ordered = [key for key in sorted(merged) if key not in updated] + sorted(updated)
+    return [merged[key] for key in ordered[-64:]]
 
 
 async def _save_auth_failure(
