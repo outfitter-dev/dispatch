@@ -496,6 +496,36 @@ async def test_refresh_claude_capacity_preserves_existing_capacity_windows(
     ]
 
 
+async def test_refresh_claude_capacity_keeps_newest_source_bound(store: Registry) -> None:
+    existing = ProviderCapacityObservation(
+        provider="claude",
+        state="partial",
+        source=[f"legacy-{index}" for index in range(16)],
+        observed_at="2026-07-14T12:00:00+00:00",
+        confidence=0.8,
+    )
+    await store.upsert_provider_capacity_observation(existing)
+    responses = {
+        ("auth", "status", "--json"): ClaudeCommandResult(
+            0,
+            json.dumps({"loggedIn": True, "authMethod": "claude.ai"}),
+        ),
+        ("agents", "--json"): ClaudeCommandResult(0, "[]"),
+    }
+
+    async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
+        return _command_response(responses, args)
+
+    observation = await refresh_claude_capacity(make_ctx(store, FakeLaneClient()), run_command=run)
+
+    assert len(observation.source) == 16
+    assert observation.source[-3:] == [
+        "claude auth status --json",
+        "claude --version",
+        "claude agents --json",
+    ]
+
+
 async def test_refresh_claude_capacity_keeps_account_when_agents_output_is_invalid(
     store: Registry,
 ) -> None:

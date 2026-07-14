@@ -113,6 +113,52 @@ async def test_refresh_codex_capacity_deduplicates_base_windows_absent_from_map(
     assert len(keys) == len(set(keys))
 
 
+async def test_refresh_codex_capacity_keeps_newest_window_bound(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.rate_limits_result = AccountRateLimitsResult(
+        rate_limits=RateLimitSnapshot(),
+        rate_limits_by_limit_id={
+            f"limit-{index}": RateLimitSnapshot(
+                limit_id=f"limit-{index}",
+                primary=RateLimitWindow(used_percent=index),
+            )
+            for index in range(65)
+        },
+    )
+
+    observation = await refresh_codex_capacity(make_ctx(store, client))
+
+    assert len(observation.windows) == 64
+    assert all(window.limit_id != "limit-0" for window in observation.windows)
+    assert any(window.limit_id == "limit-64" for window in observation.windows)
+
+
+async def test_refresh_codex_capacity_keeps_newest_source_bound(store: Registry) -> None:
+    existing = provider_capacity_observation().model_copy(
+        update={"source": [f"legacy-{index}" for index in range(16)]}
+    )
+    await store.upsert_provider_capacity_observation(existing)
+    client = FakeLaneClient()
+    client.account_result = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    client.rate_limits_result = AccountRateLimitsResult.model_validate(
+        load_json("app_server", "account_rate_limits", "current.json")
+    )
+    client.usage_result = AccountUsageResult.model_validate(
+        load_json("app_server", "account_usage", "current.json")
+    )
+
+    observation = await refresh_codex_capacity(make_ctx(store, client))
+
+    assert len(observation.source) == 16
+    assert observation.source[-3:] == [
+        "account/read",
+        "account/rateLimits/read",
+        "account/usage/read",
+    ]
+
+
 async def test_refresh_codex_capacity_signed_out_skips_capacity_reads(store: Registry) -> None:
     client = FakeLaneClient()
     client.account_result = AccountReadResult.model_validate(
