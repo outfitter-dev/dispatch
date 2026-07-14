@@ -110,6 +110,15 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 - Blockers: Review recheck pending.
 ```
 
+```text
+2026-07-14 execution - DIS-37 third-round review fix
+- Changed: Provider refresh now imports retained snapshot windows even when the newest event says rate limits are currently unavailable, while keeping the partial/error signal separate.
+- Verified: Focused statusline/provider/store suite 114 passed; surface suite 58 passed; just check 652 passed; wheel/sdist build passed.
+- Result: A fresh registry receives the last valid timestamped windows plus explicit current unavailability; no cache loss or freshness fabrication remains.
+- Next: Same-reviewer round-four recheck, fix commit, draft PR, and CI.
+- Blockers: Review recheck pending.
+```
+
 ## Review Log
 
 | Round | Scope | Report | Score | State | Open P0-P2 | Notes |
@@ -127,6 +136,8 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | 1 | Statusline atomicity/privacy review | `tmp/reviews/statusline/dis-37-round-1.json` | 2/5 | changes requested | 3 | Also serialize/monotonically order captures and fsync the containing directory. |
 | 2 | Standing DIS-37 incremental review | `tmp/reviews/standing/dis-37-round-2.json` | 5/5 | clean | 0 | Keyed merge, original per-window freshness, installed entrypoint, file mode, privacy, and checks verified. |
 | 2 | Statusline atomicity/privacy review | `tmp/reviews/statusline/dis-37-round-2.json` | 3/5 | changes requested | 1 | Locking/durability/partial merge fixed; both-absent input still erased cached windows. |
+| 3 | Standing DIS-37 incremental review | `tmp/reviews/standing/dis-37-round-3.json` | 3/5 | changes requested | 1 | File retained unavailable cache, but first registry refresh ignored those windows. |
+| 3 | Statusline atomicity/privacy review | `tmp/reviews/statusline/dis-37-round-3.json` | 3/5 | changes requested | 1 | Same downstream gate lost retained windows on an empty registry. |
 
 ## Verification Log
 
@@ -150,6 +161,8 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | `just check` | Post-review DIS-37 full repository and package gate | passed | Ruff, format, strict mypy, 650 tests, sdist/wheel, package contents. |
 | `uv run pytest tests/core/test_claude_statusline.py tests/core/test_claude_capacity.py tests/core/test_capacity.py tests/registry/test_store.py -q` | DIS-37 unavailable-with-cache behavior | passed | 113 passed. |
 | `just check` | DIS-37 second-review full repository and package gate | passed | Ruff, format, strict mypy, 651 tests, sdist/wheel, package contents. |
+| `uv run pytest tests/core/test_claude_statusline.py tests/core/test_claude_capacity.py tests/core/test_capacity.py tests/registry/test_store.py -q` | DIS-37 empty-registry unavailable-cache behavior | passed | 114 passed. |
+| `just check` | DIS-37 third-review full repository and package gate | passed | Ruff, format, strict mypy, 652 tests, sdist/wheel, package contents. |
 
 ## Prompt / Goal Alignment
 

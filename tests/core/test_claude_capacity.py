@@ -664,6 +664,40 @@ async def test_refresh_claude_capacity_preserves_capacity_when_statusline_has_no
     assert observation.error == "claude statusline rate limits unavailable"
 
 
+async def test_refresh_claude_capacity_imports_cached_windows_when_current_limits_unavailable(
+    store: Registry, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path))
+    capture_claude_statusline(
+        json.dumps(
+            {"rate_limits": {"five_hour": {"used_percentage": 25, "resets_at": 2}}}
+        ).encode(),
+        observed_at="2026-07-14T18:00:00+00:00",
+    )
+    capture_claude_statusline(
+        json.dumps({"session_id": "new-session", "version": "2.1.207"}).encode(),
+        observed_at="2026-07-14T19:00:00+00:00",
+    )
+    responses = {
+        ("auth", "status", "--json"): ClaudeCommandResult(
+            0, json.dumps({"loggedIn": True, "authMethod": "claude.ai"})
+        ),
+        ("agents", "--json"): ClaudeCommandResult(0, "[]"),
+    }
+
+    async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
+        return _command_response(responses, args)
+
+    observation = await refresh_claude_capacity(make_ctx(store, FakeLaneClient()), run_command=run)
+
+    assert observation.state == "partial"
+    assert observation.error == "claude statusline rate limits unavailable"
+    assert len(observation.windows) == 1
+    assert observation.windows[0].used_percent == 25
+    assert observation.windows[0].observed_at == "2026-07-14T18:00:00+00:00"
+    assert observation.capacity_observed_at == "2026-07-14T18:00:00+00:00"
+
+
 @pytest.mark.parametrize(
     ("existing_window", "captured_window"),
     [("five_hour", "seven_day"), ("seven_day", "five_hour")],

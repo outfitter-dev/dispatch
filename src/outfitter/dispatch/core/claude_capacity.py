@@ -325,7 +325,7 @@ async def refresh_claude_capacity(
     if statusline is not None:
         statusline_source = "claude statusline snapshot"
         captured_windows = statusline_capacity_windows(statusline)
-        if statusline.rate_limits_available and captured_windows:
+        if captured_windows:
             windows = _merge_windows(windows, captured_windows)
             latest_window = max(
                 windows,
@@ -336,7 +336,7 @@ async def refresh_claude_capacity(
             capacity_observed_at = latest_window.observed_at
             if cli_version is None:
                 cli_version = statusline.claude_code_version
-        else:
+        if not statusline.rate_limits_available:
             errors.append("claude statusline rate limits unavailable")
     email = auth.get("email")
     org_id = auth.get("orgId")
