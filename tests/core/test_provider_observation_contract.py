@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -114,6 +115,30 @@ async def test_invalid_copied_observation_is_rejected_before_replacing_row(tmp_p
             await store.upsert_provider_capacity_observation(invalid)
 
         assert await store.get_provider_capacity_observation("codex") == valid
+    finally:
+        await store.close()
+
+
+async def test_legacy_oversized_windows_are_bounded_when_read(tmp_path: Path) -> None:
+    store = await Registry.open(tmp_path / "dispatch.db")
+    try:
+        valid = provider_capacity_observation()
+        await store.upsert_provider_capacity_observation(valid)
+        payload = valid.model_dump(mode="json")
+        [window] = payload["windows"]
+        payload["windows"] = [{**window, "limit_id": f"legacy-{index}"} for index in range(65)]
+        await store._conn.execute(
+            "UPDATE provider_capacity_observations SET payload = ?",
+            (json.dumps(payload),),
+        )
+        await store._conn.commit()
+
+        loaded = await store.get_provider_capacity_observation("codex")
+
+        assert loaded is not None
+        assert len(loaded.windows) == 64
+        assert loaded.windows[0].limit_id == "legacy-1"
+        assert loaded.windows[-1].limit_id == "legacy-64"
     finally:
         await store.close()
 

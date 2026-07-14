@@ -205,6 +205,32 @@ async def test_refresh_codex_capacity_preserves_components_when_subprobes_fail(
     assert "account/usage/read" in after_usage_failure.source
 
 
+async def test_refresh_codex_capacity_clears_reset_credits_when_success_omits_them(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    client.account_result = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    client.rate_limits_result = AccountRateLimitsResult.model_validate(
+        load_json("app_server", "account_rate_limits", "current.json")
+    )
+    client.usage_result = AccountUsageResult.model_validate(
+        load_json("app_server", "account_usage", "current.json")
+    )
+    initial = await refresh_codex_capacity(make_ctx(store, client))
+    assert initial.reset_credits_available == 2
+    assert initial.reset_credits
+
+    client.rate_limits_result = client.rate_limits_result.model_copy(
+        update={"rate_limit_reset_credits": None}
+    )
+    refreshed = await refresh_codex_capacity(make_ctx(store, client))
+
+    assert refreshed.reset_credits_available is None
+    assert refreshed.reset_credits == []
+
+
 async def test_refresh_codex_capacity_preserves_observation_when_account_probe_fails(
     store: Registry,
 ) -> None:

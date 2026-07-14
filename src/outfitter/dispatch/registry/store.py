@@ -2472,7 +2472,7 @@ class Registry:
             row = await cur.fetchone()
         if row is None:
             return None
-        return ProviderCapacityObservation.model_validate_json(str(row["payload"]))
+        return _provider_capacity_observation_from_payload(row["payload"])
 
     @_serialized_access
     async def list_provider_capacity_observations(
@@ -2496,9 +2496,7 @@ class Registry:
             tuple(params),
         ) as cur:
             rows = await cur.fetchall()
-        return [
-            ProviderCapacityObservation.model_validate_json(str(row["payload"])) for row in rows
-        ]
+        return [_provider_capacity_observation_from_payload(row["payload"]) for row in rows]
 
     # --- provider events / normalized history ---------------------------------
 
@@ -3682,6 +3680,22 @@ def _bool_or_none(value: bool | None) -> int | None:
 
 def _json_dump_compact(value: object) -> str:
     return json.dumps(value, separators=(",", ":"))
+
+
+def _provider_capacity_observation_from_payload(value: object) -> ProviderCapacityObservation:
+    data = json.loads(str(value))
+    if not isinstance(data, dict):
+        raise ValueError("provider capacity payload must be an object")
+    for field, limit in (
+        ("windows", 64),
+        ("reset_credits", 100),
+        ("daily_usage", 90),
+        ("source", 16),
+    ):
+        rows = data.get(field)
+        if isinstance(rows, list) and len(rows) > limit:
+            data[field] = rows[-limit:]
+    return ProviderCapacityObservation.model_validate(data)
 
 
 def _server_request_thread_key(provider_thread_id: str | None) -> str:

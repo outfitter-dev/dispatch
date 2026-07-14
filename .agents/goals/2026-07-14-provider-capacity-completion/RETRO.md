@@ -1,8 +1,8 @@
 # Execution Retro: Provider Capacity Completion
 
 Date started: 2026-07-14
-Date finalized: pending
-Status: active
+Date finalized: 2026-07-14
+Status: complete at ready-PR horizon
 Spec: `.agents/goals/2026-07-14-provider-capacity-completion/SPEC.md`
 Goal: `.agents/goals/2026-07-14-provider-capacity-completion/GOAL.md`
 Prompt: `.agents/goals/2026-07-14-provider-capacity-completion/PROMPT.md`
@@ -13,21 +13,21 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 - Objective: Complete DIS-34's remaining Claude provider account/capacity foundation.
 - Completion horizon: `ready-pr`.
 - Authority used: Packet preparation, scoped Linear mutation, Graphite branching/PR publication, implementation, tests, docs, and isolated read-only provider smokes.
-- Outcome: DIS-36 is ready at PR #88; DIS-37 is locally green and cleanly reviewed, awaiting draft PR/CI.
-- Tracker/PR/source-control state: DIS-34/DIS-36/DIS-37 In Progress; PR #88 ready and CI-green; DIS-40 blocked by DIS-37; current stacked branch `dis-37-capture-claude-capacity-from-statusline-snapshots`.
-- Verification: DIS-36 full gate passed 631 tests; DIS-37 full gate passed 645 tests plus package build; both isolated smokes passed.
-- Review state: DIS-36 standing/privacy and DIS-37 standing/statusline gates are clean at 5/5 with zero open P0-P2.
-- Remaining risks: Statusline payload/schema drift, wrapper setup ergonomics, and stale DIS-38 history wording.
+- Outcome: DIS-36, DIS-37, and DIS-38 are implemented as a three-PR Graphite stack (#88, #89, #90), green, cleanly reviewed, and ready for review/stack merge.
+- Tracker/PR/source-control state: DIS-34/DIS-36/DIS-37/DIS-38 In Progress; PRs #88/#89/#90 linked; DIS-40 remains blocked by DIS-37; current stacked branch `dis-38-store-normalized-provider-observations-for-mesh-heartbeats`.
+- Verification: final full gate passed 673 tests with 17 intentional deselections plus sdist/wheel/package checks; focused final provider suite passed 135; both isolated provider smokes passed.
+- Review state: every standing and targeted gate is clean at 5/5 with zero open P0-P2; remote Cursor passes are recorded on #88/#89, with #90's final pass required after the retro-only head update.
+- Remaining risks: Claude statusline schema drift, manual wrapper setup ergonomics, and future mesh transport/node identity remain outside this ready-PR horizon.
 
 ## Readiness
 
 - Prompt checked: yes; 3,857/4,000 characters with no unresolved placeholders.
 - Goal/prompt alignment checked: yes; sequence, loop, review, checks, rules, stop rules, done/not-done, evidence, and persistence are carried directly.
-- Review blockers: none for DIS-36.
+- Review blockers: none; all local standing and targeted reviews are clean.
 - Verification blockers: none known.
-- Tracker blockers: DIS-38 contract needs reconciliation against ADR-0023.
+- Tracker blockers: none within the ready-PR horizon; issue statuses remain In Progress until merge.
 - Authority blockers: merge/release/publish and live Claude config mutation are not authorized.
-- Next action: publish the DIS-37 draft PR, wait for CI/remote review, then begin DIS-38 reconciliation.
+- Next action: merge the stack through Graphite when authorized, then close the Linear children and parent.
 
 ## Goal Amendments
 
@@ -119,6 +119,24 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 - Blockers: Review recheck pending.
 ```
 
+```text
+2026-07-14 execution - DIS-38 observation contract reconciliation
+- Changed: Accepted ADR-0025, reconciled Linear to latest-value snapshots/read-time staleness, added deterministic contract tests, preserved Codex components across probe failures, and enforced bounded/privacy-safe observations before SQL persistence.
+- Verified: Focused provider suite 133 passed; just check 671 passed with 17 deselected; wheel/sdist/package checks passed; invalid model-copy repro leaves the prior SQLite row unchanged.
+- Result: Provider observations are bounded per provider/host/config, retain stale last-known components truthfully, reject raw identity/reset handles and malformed timestamps, and remain suitable for future heartbeat embedding without implementing transport.
+- Next: Clean review rechecks, final remote review, and ready-PR handoff.
+- Blockers: Merge and tracker completion remain outside authorized horizon.
+```
+
+```text
+2026-07-14 execution - DIS-38 remote review follow-up
+- Changed: Successful rate-limit responses now clear omitted reset-credit count/list together, while legacy pre-bound observations with oversized collections are normalized on read so existing registries remain usable.
+- Verified: Focused provider suite 135 passed; just check 673 passed with 17 deselected; wheel/sdist/package checks passed; direct legacy 65-window row reads as the newest bounded 64.
+- Result: Both Cursor findings on PR #90 are fixed with regression coverage and no manual registry repair requirement.
+- Next: Push, resolve/reply to both review threads, request final Cursor pass, and mark the PR ready when green.
+- Blockers: Final remote re-review pending.
+```
+
 ## Review Log
 
 | Round | Scope | Report | Score | State | Open P0-P2 | Notes |
@@ -140,6 +158,13 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | 3 | Statusline atomicity/privacy review | `tmp/reviews/statusline/dis-37-round-3.json` | 3/5 | changes requested | 1 | Same downstream gate lost retained windows on an empty registry. |
 | 4 | Standing DIS-37 incremental review | `tmp/reviews/standing/dis-37-round-4.json` | 5/5 | clean | 0 | Empty-registry recovery, partial/unavailable state, timestamps, focused/surface/type/lint checks verified. |
 | 4 | Statusline atomicity/privacy review | `tmp/reviews/statusline/dis-37-round-4.json` | 5/5 | clean | 0 | Exact two-window unavailable sequence, staleness, raw-id exclusion, locking/durability/bounds all verified. |
+| 1 | Standing DIS-38 incremental review | `tmp/reviews/standing/dis-38-round-1.json` | 3/5 | changes requested | 2 | Preserve Codex components across subprobe failures and enforce provenance bounds. |
+| 1 | Observation/privacy contract review | `tmp/reviews/observation/dis-38-round-1.json` | 3/5 | changes requested | 2 | Enforce durable identity/timestamp/size invariants and repair PR evidence rendering. |
+| 2 | Standing DIS-38 incremental review | `tmp/reviews/standing/dis-38-round-2.json` | 3/5 | changes requested | 2 | Validate before commit and bound nested reset-credit values. |
+| 2 | Observation/privacy contract review | `tmp/reviews/observation/dis-38-round-2.json` | 3/5 | changes requested | 2 | Same pre-write gap plus whitespace-only optional-field failure. |
+| 3 | Standing DIS-38 incremental review | `tmp/reviews/standing/dis-38-round-3.json` | 5/5 | clean | 0 | Pre-SQL validation, prior-row preservation, component cache, window caps, and nested bounds verified. |
+| 3 | Observation/privacy contract review | `tmp/reviews/observation/dis-38-round-3.json` | 5/5 | clean | 0 | Independent invalid-write repro, whitespace normalization, PR evidence, privacy, and focused suite verified. |
+| remote | Cursor Bugbot on PR #90 | GitHub review threads `discussion_r3582374957` and `discussion_r3582374965` | not scored | changes requested | 2 | Reset-credit omission mismatch and legacy oversized-window read compatibility; both fixed with regression coverage. |
 
 ## Verification Log
 
@@ -165,6 +190,9 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | `just check` | DIS-37 second-review full repository and package gate | passed | Ruff, format, strict mypy, 651 tests, sdist/wheel, package contents. |
 | `uv run pytest tests/core/test_claude_statusline.py tests/core/test_claude_capacity.py tests/core/test_capacity.py tests/registry/test_store.py -q` | DIS-37 empty-registry unavailable-cache behavior | passed | 114 passed. |
 | `just check` | DIS-37 third-review full repository and package gate | passed | Ruff, format, strict mypy, 652 tests, sdist/wheel, package contents. |
+| `uv run pytest tests/core/test_provider_observation_contract.py tests/core/test_capacity.py tests/core/test_claude_capacity.py tests/core/test_claude_statusline.py tests/registry/test_store.py -q` | Final DIS-38 provider contract behavior | passed | 135 passed. |
+| `just check` | Final DIS-38 full repository and package gate | passed | Ruff, format, strict mypy, 673 tests, 17 deselected, sdist/wheel, package contents. |
+| GitHub Actions | PRs #88/#89/#90 | passed | Required `check` workflow green on each implementation head before final retro-only update. |
 
 ## Prompt / Goal Alignment
 
@@ -179,8 +207,8 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | --- | --- | --- |
 | DIS-34 | In Progress | Assigned to Matt; Codex children done and Claude sequence active. |
 | DIS-36 | In Progress | PR #88 ready for review; CI/CodeQL green; 5/5 standing and privacy review gates. |
-| DIS-37 | In Progress | Assigned to Matt; second stacked branch locally green and awaiting review. |
-| DIS-38 | Backlog | Substantially shipped; reconcile remaining fields/TTL and stale history criterion. |
+| DIS-37 | In Progress | PR #89 ready; CI and Cursor green; 5/5 standing/statusline gates. |
+| DIS-38 | In Progress | Assigned to Matt; PR #90 linked; accepted ADR and issue describe latest-value/read-time-staleness contract; 5/5 standing/observation gates. |
 | DIS-40 | Backlog, blocked by DIS-37 | Explicitly deferred private endpoint spike until supported statusline evidence exists. |
 
 ## Follow-Ups
@@ -189,10 +217,10 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 
 ## Final State
 
-- Completion proof: pending.
+- Completion proof: Three scoped Graphite PRs exist with linked Linear issues, green local/full checks, green implementation CI, and clean standing plus targeted review reports.
 - Prompt length: 3,857/4,000 characters.
-- Review report summary: pending.
-- Verification summary: baseline only; implementation pending.
-- Forbidden actions audit: no secrets read or retained; no tracker/source/live-config mutations during preparation.
-- Remaining P3s / risks: pending.
-- Final transcript proof: pending.
+- Review report summary: all final DIS-36 privacy, DIS-37 statusline, and DIS-38 observation reviews are clean at 5/5 with zero open P0-P2.
+- Verification summary: 673 passed, 17 deselected; package artifacts built and checked; focused final suite 135 passed; isolated Claude account/statusline smokes passed.
+- Forbidden actions audit: no secrets retained; no private Claude endpoints, live Claude settings mutation, merge, release, or publish performed.
+- Remaining P3s / risks: supported statusline schema may drift; wrapper installation is manual; mesh transport/node identity and routing remain deferred.
+- Final transcript proof: Linear DIS-36/DIS-37/DIS-38 and PRs #88/#89/#90 carry implementation, divergence, review, and verification evidence.

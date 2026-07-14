@@ -269,6 +269,8 @@ async def refresh_codex_capacity(ctx: Ctx) -> ProviderCapacityObservation:
     reset_credits_available = (
         credits.available_count
         if credits is not None
+        else None
+        if limits is not None
         else existing.reset_credits_available
         if existing is not None
         else None
