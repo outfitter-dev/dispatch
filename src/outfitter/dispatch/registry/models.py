@@ -5,7 +5,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, JsonValue, StrictInt, StrictStr, TypeAdapter, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    JsonValue,
+    StrictInt,
+    StrictStr,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 
 from outfitter.dispatch.client.models import (
     ApprovalPolicy,
@@ -33,6 +42,15 @@ ProviderTurnStatus = Literal["started", "completed", "failed", "unknown"]
 ProviderThreadLifecycleState = Literal["active", "archived", "deleted", "unknown"]
 ProviderCapacityState = Literal[
     "ready", "partial", "signed_out", "unsupported", "unavailable", "disabled"
+]
+ProviderText = Annotated[str, Field(min_length=1, max_length=120)]
+ProviderFingerprint = Annotated[str, Field(max_length=71, pattern=r"^sha256:[0-9a-f]{16,64}$")]
+MaskedAccountLabel = Annotated[
+    str,
+    Field(
+        max_length=254,
+        pattern=r"^(?:redacted|[^@\s]\*{3}@[^@\s]+)$",
+    ),
 ]
 SyncState = Literal["unknown", "metadata", "partial", "complete", "error"]
 HistoryCapability = Literal["unknown", "supported", "turn-page-fallback", "unsupported"]
@@ -194,15 +212,23 @@ class ProviderThreadNode(BaseModel):
 
 
 class ProviderCapacityWindow(BaseModel):
-    limit_id: str
-    limit_name: str | None = None
-    window: str
+    limit_id: ProviderText
+    limit_name: ProviderText | None = None
+    window: ProviderText
     used_percent: float | None = Field(default=None, ge=0, le=100)
     remaining_percent: float | None = Field(default=None, ge=0, le=100)
     duration_minutes: int | None = Field(default=None, ge=0)
     resets_at: int | None = None
-    reached_type: str | None = None
+    reached_type: ProviderText | None = None
     observed_at: str
+
+    @field_validator("observed_at")
+    @classmethod
+    def _valid_observed_at(cls, value: str) -> str:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            raise ValueError("observed_at must include a timezone")
+        return value
 
 
 class ProviderResetCredit(BaseModel):
@@ -244,36 +270,52 @@ class ProviderRuntimeSummary(BaseModel):
 
 
 class ProviderCapacityObservation(BaseModel):
-    provider: str
-    host_scope: str = "local"
-    config_scope: str = "default"
+    provider: ProviderText
+    host_scope: ProviderText = "local"
+    config_scope: ProviderText = "default"
     state: ProviderCapacityState
-    account_type: str | None = None
-    account_fingerprint: str | None = None
-    account_label: str | None = None
-    auth_method: str | None = None
-    api_provider: str | None = None
-    organization_fingerprint: str | None = None
-    organization_label: str | None = None
-    cli_version: str | None = None
-    plan: str | None = None
+    account_type: ProviderText | None = None
+    account_fingerprint: ProviderFingerprint | None = None
+    account_label: MaskedAccountLabel | None = None
+    auth_method: ProviderText | None = None
+    api_provider: ProviderText | None = None
+    organization_fingerprint: ProviderFingerprint | None = None
+    organization_label: ProviderText | None = None
+    cli_version: ProviderText | None = None
+    plan: ProviderText | None = None
     requires_auth: bool | None = None
     runtime: ProviderRuntimeSummary | None = None
-    windows: list[ProviderCapacityWindow] = Field(default_factory=list)
+    windows: list[ProviderCapacityWindow] = Field(default_factory=list, max_length=64)
     reset_credits_available: int | None = Field(default=None, ge=0)
-    reset_credits: list[ProviderResetCredit] = Field(default_factory=list)
+    reset_credits: list[ProviderResetCredit] = Field(default_factory=list, max_length=100)
     usage_summary: ProviderUsageSummary | None = None
-    daily_usage: list[ProviderDailyUsage] = Field(default_factory=list)
+    daily_usage: list[ProviderDailyUsage] = Field(default_factory=list, max_length=90)
     has_credits: bool | None = None
     unlimited_credits: bool | None = None
-    source: list[str] = Field(default_factory=list)
+    source: list[ProviderText] = Field(default_factory=list, max_length=16)
     observed_at: str
     account_observed_at: str | None = None
     runtime_observed_at: str | None = None
     capacity_observed_at: str | None = None
     usage_observed_at: str | None = None
     confidence: float = Field(ge=0.0, le=1.0)
-    error: str | None = None
+    error: Annotated[str, Field(max_length=500)] | None = None
+
+    @field_validator(
+        "observed_at",
+        "account_observed_at",
+        "runtime_observed_at",
+        "capacity_observed_at",
+        "usage_observed_at",
+    )
+    @classmethod
+    def _valid_observation_timestamp(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            raise ValueError("observation timestamps must include a timezone")
+        return value
 
 
 class ServerRequest(BaseModel):

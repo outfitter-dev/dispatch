@@ -462,7 +462,7 @@ async def test_refresh_claude_capacity_sanitizes_auth_command_failure(store: Reg
             provider="claude",
             state="ready",
             account_label="o***@example.com",
-            account_fingerprint="sha256:existing",
+            account_fingerprint="sha256:0123456789abcdef",
             observed_at="2026-07-14T12:00:00+00:00",
             account_observed_at="2026-07-14T12:00:00+00:00",
             confidence=1.0,

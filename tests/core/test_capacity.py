@@ -158,6 +158,83 @@ async def test_refresh_codex_capacity_marks_unsupported_and_partial_states(
     assert partial.windows == []
 
 
+async def test_refresh_codex_capacity_preserves_components_when_subprobes_fail(
+    store: Registry,
+) -> None:
+    initial_client = FakeLaneClient()
+    initial_client.account_result = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    initial_client.rate_limits_result = AccountRateLimitsResult.model_validate(
+        load_json("app_server", "account_rate_limits", "current.json")
+    )
+    initial_client.usage_result = AccountUsageResult.model_validate(
+        load_json("app_server", "account_usage", "current.json")
+    )
+    initial = await refresh_codex_capacity(make_ctx(store, initial_client))
+
+    class LimitsUnavailableClient(FakeLaneClient):
+        async def account_rate_limits_read(self) -> AccountRateLimitsResult:
+            raise AppServerError(-32000, "temporarily unavailable")
+
+    limits_unavailable = LimitsUnavailableClient()
+    limits_unavailable.account_result = initial_client.account_result
+    limits_unavailable.usage_result = initial_client.usage_result
+    after_limits_failure = await refresh_codex_capacity(make_ctx(store, limits_unavailable))
+
+    assert after_limits_failure.state == "partial"
+    assert after_limits_failure.windows == initial.windows
+    assert after_limits_failure.reset_credits == initial.reset_credits
+    assert after_limits_failure.capacity_observed_at == initial.capacity_observed_at
+    assert "account/rateLimits/read" in after_limits_failure.source
+
+    class UsageUnavailableClient(FakeLaneClient):
+        async def account_usage_read(self) -> AccountUsageResult:
+            raise AppServerError(-32000, "temporarily unavailable")
+
+    usage_unavailable = UsageUnavailableClient()
+    usage_unavailable.account_result = initial_client.account_result
+    usage_unavailable.rate_limits_result = initial_client.rate_limits_result
+    after_usage_failure = await refresh_codex_capacity(make_ctx(store, usage_unavailable))
+
+    assert after_usage_failure.state == "partial"
+    assert after_usage_failure.usage_summary == after_limits_failure.usage_summary
+    assert after_usage_failure.daily_usage == after_limits_failure.daily_usage
+    assert after_usage_failure.usage_observed_at == after_limits_failure.usage_observed_at
+    assert "account/usage/read" in after_usage_failure.source
+
+
+async def test_refresh_codex_capacity_preserves_observation_when_account_probe_fails(
+    store: Registry,
+) -> None:
+    initial_client = FakeLaneClient()
+    initial_client.account_result = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    initial_client.rate_limits_result = AccountRateLimitsResult.model_validate(
+        load_json("app_server", "account_rate_limits", "current.json")
+    )
+    initial_client.usage_result = AccountUsageResult.model_validate(
+        load_json("app_server", "account_usage", "current.json")
+    )
+    initial = await refresh_codex_capacity(make_ctx(store, initial_client))
+
+    class AccountUnavailableClient(FakeLaneClient):
+        async def account_read(self) -> AccountReadResult:
+            raise AppServerError(-32000, "temporarily unavailable")
+
+    failed = await refresh_codex_capacity(make_ctx(store, AccountUnavailableClient()))
+
+    assert failed.state == "unavailable"
+    assert failed.account_fingerprint == initial.account_fingerprint
+    assert failed.windows == initial.windows
+    assert failed.usage_summary == initial.usage_summary
+    assert failed.account_observed_at == initial.account_observed_at
+    assert failed.capacity_observed_at == initial.capacity_observed_at
+    assert failed.usage_observed_at == initial.usage_observed_at
+    assert failed.error == "account/read unavailable"
+
+
 async def test_rate_limit_notification_refreshes_without_polling(store: Registry) -> None:
     client = FakeLaneClient()
     ctx = make_ctx(store, client)

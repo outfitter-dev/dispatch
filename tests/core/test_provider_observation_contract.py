@@ -5,6 +5,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from outfitter.dispatch.core import handlers
 from outfitter.dispatch.core.models import UsageInput
 from outfitter.dispatch.registry.models import ProviderRuntimeSummary
@@ -96,11 +99,39 @@ async def test_observations_persist_latest_value_per_provider_host_and_config(
         ]
         assert observations[0].plan == "team"
         assert observations[0].observed_at == "2026-07-14T12:05:00+00:00"
-        payload = observations[0].model_dump_json()
-        assert "agent@example.com" not in payload
-        assert "opaque-credit-1" not in payload
     finally:
         await reopened.close()
+
+
+def test_observation_provenance_is_bounded() -> None:
+    observation = provider_capacity_observation()
+    data = observation.model_dump()
+
+    with pytest.raises(ValidationError, match="List should have at most 16 items"):
+        type(observation).model_validate(
+            {**data, "source": [f"source-{index}" for index in range(17)]}
+        )
+
+    with pytest.raises(ValidationError, match="String should have at most 120 characters"):
+        type(observation).model_validate({**data, "source": ["x" * 121]})
+
+
+@pytest.mark.parametrize(
+    ("field", "unsafe_value"),
+    [
+        ("account_label", "agent@example.com"),
+        ("account_fingerprint", "raw-account-id"),
+        ("organization_fingerprint", "opaque-org-id"),
+        ("organization_label", "x" * 121),
+        ("error", "x" * 501),
+        ("observed_at", "not-a-timestamp"),
+    ],
+)
+def test_observation_rejects_unsafe_persisted_values(field: str, unsafe_value: str) -> None:
+    observation = provider_capacity_observation()
+
+    with pytest.raises(ValidationError):
+        type(observation).model_validate({**observation.model_dump(), field: unsafe_value})
 
 
 async def test_missing_provider_is_absence_with_refresh_hint(tmp_path: Path) -> None:
