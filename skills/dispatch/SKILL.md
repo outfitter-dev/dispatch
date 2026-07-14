@@ -256,7 +256,8 @@ uv run dispatch schema usage
 Default `usage` refreshes local Codex and Claude independently and omits daily
 buckets. Claude uses the read-only `claude auth status --json` and `claude
 agents --json` surfaces; Dispatch stores aggregate state counts, never roster
-cwd/name/session/id fields or raw command output. Use `--no-refresh` for a
+cwd/name/session/id fields or raw command output. The observation also records
+the bounded semantic version from `claude --version`. Use `--no-refresh` for a
 database-only read and `--include-daily` only when historical detail is needed.
 The default host is `local`; use `--all-hosts` for mesh inventory. Treat `stale:
 true`, `partial`, `signed_out`, `disabled`, `unsupported`, and `unavailable` as

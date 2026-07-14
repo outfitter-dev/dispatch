@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -12,8 +14,10 @@ import pytest_asyncio
 
 from outfitter.dispatch.core import handlers
 from outfitter.dispatch.core.claude_capacity import (
+    ClaudeCommandOutputError,
     ClaudeCommandResult,
     refresh_claude_capacity,
+    run_claude_command,
 )
 from outfitter.dispatch.core.models import UsageInput
 from outfitter.dispatch.registry.models import (
@@ -31,6 +35,14 @@ async def store() -> AsyncIterator[Registry]:
         yield registry
     finally:
         await registry.close()
+
+
+def _command_response(
+    responses: dict[tuple[str, ...], ClaudeCommandResult], args: tuple[str, ...]
+) -> ClaudeCommandResult:
+    if args == ("--version",):
+        return ClaudeCommandResult(0, "2.1.206 (Claude Code)\n")
+    return responses[args]
 
 
 async def test_refresh_claude_capacity_normalizes_account_and_runtime_without_roster_data(
@@ -76,11 +88,15 @@ async def test_refresh_claude_capacity_normalizes_account_and_runtime_without_ro
 
     async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
         calls.append(args)
-        return responses[args]
+        return _command_response(responses, args)
 
     observation = await refresh_claude_capacity(make_ctx(store, FakeLaneClient()), run_command=run)
 
-    assert calls == [("auth", "status", "--json"), ("agents", "--json")]
+    assert calls == [
+        ("auth", "status", "--json"),
+        ("--version",),
+        ("agents", "--json"),
+    ]
     assert observation.provider == "claude"
     assert observation.state == "ready"
     assert observation.account_label == "a***@example.com"
@@ -90,6 +106,7 @@ async def test_refresh_claude_capacity_normalizes_account_and_runtime_without_ro
     assert observation.organization_label == "Outfitter"
     assert observation.organization_fingerprint is not None
     assert observation.plan == "max"
+    assert observation.cli_version == "2.1.206"
     assert observation.runtime is not None
     assert observation.runtime.total_agents == 2
     assert observation.runtime.active_agents == 1
@@ -110,6 +127,24 @@ async def test_refresh_claude_capacity_normalizes_account_and_runtime_without_ro
 
 
 async def test_refresh_claude_capacity_signed_out_skips_runtime_probe(store: Registry) -> None:
+    await store.upsert_provider_capacity_observation(
+        ProviderCapacityObservation(
+            provider="claude",
+            state="ready",
+            windows=[
+                ProviderCapacityWindow(
+                    limit_id="claude.ai",
+                    window="seven_day",
+                    used_percent=40,
+                    observed_at="2026-07-14T12:00:00+00:00",
+                )
+            ],
+            source=["claude statusline"],
+            observed_at="2026-07-14T12:00:00+00:00",
+            capacity_observed_at="2026-07-14T12:00:00+00:00",
+            confidence=0.8,
+        )
+    )
     calls: list[tuple[str, ...]] = []
 
     async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
@@ -133,17 +168,40 @@ async def test_refresh_claude_capacity_signed_out_skips_runtime_probe(store: Reg
     assert observation.runtime is None
     assert observation.runtime_observed_at is None
     assert observation.account_observed_at == observation.observed_at
+    assert observation.windows[0].window == "seven_day"
+    assert observation.capacity_observed_at == "2026-07-14T12:00:00+00:00"
 
 
 async def test_refresh_claude_capacity_marks_missing_cli_unavailable(store: Registry) -> None:
+    await store.upsert_provider_capacity_observation(
+        ProviderCapacityObservation(
+            provider="claude",
+            state="partial",
+            windows=[
+                ProviderCapacityWindow(
+                    limit_id="claude.ai",
+                    window="five_hour",
+                    used_percent=25,
+                    observed_at="2026-07-14T12:00:00+00:00",
+                )
+            ],
+            source=["claude statusline"],
+            observed_at="2026-07-14T12:00:00+00:00",
+            capacity_observed_at="2026-07-14T12:00:00+00:00",
+            confidence=0.8,
+        )
+    )
+
     async def run(_args: tuple[str, ...]) -> ClaudeCommandResult:
         raise FileNotFoundError("/private/path/claude")
 
     observation = await refresh_claude_capacity(make_ctx(store, FakeLaneClient()), run_command=run)
 
     assert observation.state == "unavailable"
-    assert observation.source == ["claude auth status --json"]
     assert observation.error == "claude CLI unavailable"
+    assert observation.windows[0].window == "five_hour"
+    assert observation.capacity_observed_at == "2026-07-14T12:00:00+00:00"
+    assert observation.source == ["claude statusline", "claude auth status --json"]
     assert "/private/path" not in observation.model_dump_json()
 
 
@@ -183,6 +241,10 @@ if [ "$1" = "auth" ]; then
   printf '%s\n' '"apiProvider":"firstParty","email":"agent@example.com","subscriptionType":"max"}'
   exit 0
 fi
+if [ "$1" = "--version" ]; then
+  printf '%s\n' '2.1.206 (Claude Code)'
+  exit 0
+fi
 if [ "$1" = "agents" ]; then
   printf '%s\n' '[{"cwd":"/private/workspace","id":"secret","sessionId":"secret","state":"active"}]'
   exit 0
@@ -203,6 +265,83 @@ exit 2
     assert claude_view.runtime_freshness_seconds == 0
     assert "agent@example.com" not in output.model_dump_json()
     assert "/private/workspace" not in output.model_dump_json()
+
+
+@pytest.mark.parametrize("failed_provider", ["codex", "claude"])
+async def test_usage_isolates_unexpected_provider_refresh_failures(
+    store: Registry, monkeypatch: pytest.MonkeyPatch, failed_provider: str
+) -> None:
+    async def refresh(provider: str) -> ProviderCapacityObservation:
+        if provider == failed_provider:
+            raise RuntimeError("private provider failure")
+        return await store.upsert_provider_capacity_observation(
+            ProviderCapacityObservation(
+                provider=provider,
+                state="ready",
+                observed_at=store.now_iso(),
+                confidence=1.0,
+            )
+        )
+
+    async def codex(_ctx: object) -> ProviderCapacityObservation:
+        return await refresh("codex")
+
+    async def claude(_ctx: object) -> ProviderCapacityObservation:
+        return await refresh("claude")
+
+    monkeypatch.setattr(handlers, "refresh_codex_capacity", codex)
+    monkeypatch.setattr(handlers, "refresh_claude_capacity", claude)
+
+    output = await handlers.usage(UsageInput(), make_ctx(store, FakeLaneClient()))
+
+    successful = "claude" if failed_provider == "codex" else "codex"
+    assert output.refreshed_providers == [successful]
+    assert [item.provider for item in output.observations] == [successful]
+    assert "private provider failure" not in output.model_dump_json()
+
+
+async def test_claude_command_runner_rejects_oversized_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    claude = tmp_path / "claude"
+    claude.write_text(
+        f"#!{sys.executable}\nimport sys\nsys.stdout.buffer.write(b'x' * (1024 * 1024 + 1))\n"
+    )
+    claude.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+
+    with pytest.raises(ClaudeCommandOutputError):
+        await run_claude_command(("auth", "status", "--json"))
+
+
+async def test_claude_command_runner_reaps_child_when_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pid_path = tmp_path / "claude.pid"
+    claude = tmp_path / "claude"
+    claude.write_text(
+        f"#!{sys.executable}\n"
+        "import os, pathlib, time\n"
+        "pathlib.Path(os.environ['CLAUDE_TEST_PID']).write_text(str(os.getpid()))\n"
+        "time.sleep(30)\n"
+    )
+    claude.chmod(0o755)
+    monkeypatch.setenv("CLAUDE_TEST_PID", str(pid_path))
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+
+    task = asyncio.create_task(run_claude_command(("auth", "status", "--json")))
+    for _ in range(100):
+        if pid_path.exists():
+            break
+        await asyncio.sleep(0.01)
+    assert pid_path.exists()
+    pid = int(pid_path.read_text())
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
 
 
 async def test_refresh_claude_capacity_preserves_existing_capacity_windows(
@@ -242,7 +381,7 @@ async def test_refresh_claude_capacity_preserves_existing_capacity_windows(
     }
 
     async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
-        return responses[args]
+        return _command_response(responses, args)
 
     observation = await refresh_claude_capacity(make_ctx(store, FakeLaneClient()), run_command=run)
 
@@ -253,6 +392,7 @@ async def test_refresh_claude_capacity_preserves_existing_capacity_windows(
     assert observation.source == [
         "claude statusline",
         "claude auth status --json",
+        "claude --version",
         "claude agents --json",
     ]
 
@@ -275,7 +415,7 @@ async def test_refresh_claude_capacity_keeps_account_when_agents_output_is_inval
     }
 
     async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
-        return responses[args]
+        return _command_response(responses, args)
 
     observation = await refresh_claude_capacity(make_ctx(store, FakeLaneClient()), run_command=run)
 
@@ -327,7 +467,7 @@ async def test_refresh_claude_capacity_keeps_account_when_agents_command_fails(
     }
 
     async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
-        return responses[args]
+        return _command_response(responses, args)
 
     observation = await refresh_claude_capacity(make_ctx(store, FakeLaneClient()), run_command=run)
 
@@ -342,6 +482,8 @@ async def test_refresh_claude_capacity_keeps_account_when_agents_probe_times_out
     store: Registry,
 ) -> None:
     async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
+        if args == ("--version",):
+            return ClaudeCommandResult(0, "2.1.206 (Claude Code)\n")
         if args == ("auth", "status", "--json"):
             return ClaudeCommandResult(
                 0,
@@ -379,16 +521,35 @@ async def test_refresh_claude_capacity_counts_blocked_agents_as_active_runtime(
                     {"state": "blocked"},
                     {"state": "done"},
                     {"state": "unknown"},
+                    {"state": {"cwd": "/private/leak"}},
                 ]
             ),
         ),
     }
 
     async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
-        return responses[args]
+        return _command_response(responses, args)
 
     observation = await refresh_claude_capacity(make_ctx(store, FakeLaneClient()), run_command=run)
 
     assert observation.runtime is not None
+    assert observation.runtime.total_agents == 4
     assert observation.runtime.active_agents == 1
-    assert observation.runtime.state_counts == {"blocked": 1, "done": 1, "unknown": 1}
+    assert observation.runtime.state_counts == {"blocked": 1, "done": 1, "unknown": 2}
+    assert "/private/leak" not in observation.model_dump_json()
+
+
+async def test_refresh_claude_capacity_marks_unparseable_version_partial(store: Registry) -> None:
+    async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
+        if args == ("auth", "status", "--json"):
+            return ClaudeCommandResult(0, '{"loggedIn":true}')
+        if args == ("--version",):
+            return ClaudeCommandResult(0, "private unparseable version")
+        return ClaudeCommandResult(0, "[]")
+
+    observation = await refresh_claude_capacity(make_ctx(store, FakeLaneClient()), run_command=run)
+
+    assert observation.state == "partial"
+    assert observation.cli_version is None
+    assert observation.error == "claude version unavailable"
+    assert "private unparseable" not in observation.model_dump_json()

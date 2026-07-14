@@ -13,6 +13,7 @@ import asyncio
 import os
 import time as time_module
 import uuid
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import UTC, datetime, time
 from pathlib import Path
@@ -3033,6 +3034,7 @@ def _freshness_seconds(now: datetime, observed_at: str | None) -> int | None:
 
 async def usage(inp: UsageInput, ctx: Ctx) -> UsageOutput:
     refreshed: list[str] = []
+    refreshes: list[tuple[str, Awaitable[object]]] = []
     refresh_local_codex = (
         inp.refresh
         and inp.provider in {None, "codex"}
@@ -3040,8 +3042,7 @@ async def usage(inp: UsageInput, ctx: Ctx) -> UsageOutput:
         and inp.config_scope in {None, "default"}
     )
     if refresh_local_codex:
-        await refresh_codex_capacity(ctx)
-        refreshed.append("codex")
+        refreshes.append(("codex", refresh_codex_capacity(ctx)))
     refresh_local_claude = (
         inp.refresh
         and inp.provider in {None, "claude"}
@@ -3049,8 +3050,16 @@ async def usage(inp: UsageInput, ctx: Ctx) -> UsageOutput:
         and inp.config_scope in {None, "default"}
     )
     if refresh_local_claude:
-        await refresh_claude_capacity(ctx)
-        refreshed.append("claude")
+        refreshes.append(("claude", refresh_claude_capacity(ctx)))
+    if refreshes:
+        results = await asyncio.gather(
+            *(refresh for _, refresh in refreshes), return_exceptions=True
+        )
+        for (provider, _), result in zip(refreshes, results, strict=True):
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            if not isinstance(result, BaseException):
+                refreshed.append(provider)
     observations = await ctx.registry.list_provider_capacity_observations(
         provider=inp.provider,
         host_scope=None if inp.all_hosts else inp.host,
@@ -3110,6 +3119,7 @@ async def usage(inp: UsageInput, ctx: Ctx) -> UsageOutput:
                 api_provider=observation.api_provider,
                 organization_fingerprint=observation.organization_fingerprint,
                 organization_label=observation.organization_label,
+                cli_version=observation.cli_version,
                 plan=observation.plan,
                 requires_auth=observation.requires_auth,
                 runtime=observation.runtime,

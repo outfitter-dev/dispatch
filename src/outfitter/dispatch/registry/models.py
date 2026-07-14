@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, JsonValue, StrictInt, StrictStr, TypeAdapter
+from pydantic import BaseModel, Field, JsonValue, StrictInt, StrictStr, TypeAdapter, model_validator
 
 from outfitter.dispatch.client.models import (
     ApprovalPolicy,
@@ -230,7 +230,17 @@ class ProviderDailyUsage(BaseModel):
 class ProviderRuntimeSummary(BaseModel):
     total_agents: int = Field(ge=0)
     active_agents: int = Field(ge=0)
-    state_counts: dict[str, int] = Field(default_factory=dict)
+    state_counts: dict[str, Annotated[int, Field(ge=0)]] = Field(
+        default_factory=dict, max_length=16
+    )
+
+    @model_validator(mode="after")
+    def _valid_counts(self) -> ProviderRuntimeSummary:
+        if self.active_agents > self.total_agents:
+            raise ValueError("active_agents cannot exceed total_agents")
+        if sum(self.state_counts.values()) != self.total_agents:
+            raise ValueError("state_counts must sum to total_agents")
+        return self
 
 
 class ProviderCapacityObservation(BaseModel):
@@ -245,6 +255,7 @@ class ProviderCapacityObservation(BaseModel):
     api_provider: str | None = None
     organization_fingerprint: str | None = None
     organization_label: str | None = None
+    cli_version: str | None = None
     plan: str | None = None
     requires_auth: bool | None = None
     runtime: ProviderRuntimeSummary | None = None

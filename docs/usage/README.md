@@ -334,7 +334,8 @@ uv run dispatch schema usage
 `usage` refreshes supported local Codex and Claude providers independently,
 then reads the provider-neutral observation store. One unavailable provider
 does not hide the other. The default response is compact: account type, masked
-label and fingerprint, plan, aggregate runtime counts, capacity windows,
+label and fingerprint, plan, Claude CLI version, aggregate runtime counts,
+capacity windows,
 reset-credit availability, usage summary, source, confidence, and component
 freshness. Daily buckets are bounded and opt-in with `--include-daily`.
 `--no-refresh` makes the command a local database read; provider, host, and

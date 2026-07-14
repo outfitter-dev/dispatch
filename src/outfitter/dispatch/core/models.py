@@ -1362,6 +1362,7 @@ class UsageObservationView(BaseModel):
     api_provider: str | None = None
     organization_fingerprint: str | None = None
     organization_label: str | None = None
+    cli_version: str | None = None
     plan: str | None = None
     requires_auth: bool | None = None
     runtime: ProviderRuntimeSummary | None = None
