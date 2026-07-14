@@ -107,8 +107,8 @@ def _all_windows(
             )
         if base_id not in snapshots:
             result.extend(_windows(base, fallback_id=base_id, observed_at=observed_at))
-        return list({(window.limit_id, window.window): window for window in result}.values())[:64]
-    return _windows(limits.rate_limits, fallback_id="default", observed_at=observed_at)[:64]
+        return list({(window.limit_id, window.window): window for window in result}.values())[-64:]
+    return _windows(limits.rate_limits, fallback_id="default", observed_at=observed_at)[-64:]
 
 
 def _push_limit_id(
@@ -160,6 +160,7 @@ async def _save_account_failure(
     source = list(existing.source) if existing is not None else []
     if "account/read" not in source:
         source.append("account/read")
+    source = source[-16:]
     if existing is not None:
         return await ctx.registry.upsert_provider_capacity_observation(
             existing.model_copy(
@@ -246,6 +247,7 @@ async def refresh_codex_capacity(ctx: Ctx) -> ProviderCapacityObservation:
     else:
         assert isinstance(usage_result, BaseException)
         errors.append(f"account/usage/read {_error_state(usage_result)}")
+    sources = sources[-16:]
 
     email = account.account.email
     snapshots = (
@@ -384,6 +386,7 @@ async def observe_codex_rate_limits(
     source = list(existing.source) if existing is not None else []
     if "account/rateLimits/updated" not in source:
         source.append("account/rateLimits/updated")
+    source = source[-16:]
     observation = (
         existing.model_copy(
             update={

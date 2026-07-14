@@ -157,6 +157,7 @@ async def _save_auth_failure(
     source = list(existing.source) if existing is not None else []
     if "claude auth status --json" not in source:
         source.append("claude auth status --json")
+    source = source[-16:]
     if existing is not None:
         return await ctx.registry.upsert_provider_capacity_observation(
             existing.model_copy(
@@ -234,6 +235,7 @@ async def refresh_claude_capacity(
         source = list(existing.source) if existing is not None else []
         if "claude auth status --json" not in source:
             source.append("claude auth status --json")
+        source = source[-16:]
         if existing is not None:
             return await ctx.registry.upsert_provider_capacity_observation(
                 existing.model_copy(
@@ -353,6 +355,7 @@ async def refresh_claude_capacity(
             source.append(name)
     if statusline_source is not None and statusline_source not in source:
         source.append(statusline_source)
+    source = source[-16:]
     observation = ProviderCapacityObservation(
         provider="claude",
         state="partial" if errors else "ready",
