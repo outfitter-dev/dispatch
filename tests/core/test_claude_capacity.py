@@ -664,6 +664,61 @@ async def test_refresh_claude_capacity_preserves_capacity_when_statusline_has_no
     assert observation.error == "claude statusline rate limits unavailable"
 
 
+@pytest.mark.parametrize(
+    ("existing_window", "captured_window"),
+    [("five_hour", "seven_day"), ("seven_day", "five_hour")],
+)
+async def test_refresh_claude_capacity_merges_partial_statusline_by_window(
+    store: Registry,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    existing_window: str,
+    captured_window: str,
+) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path))
+    await store.upsert_provider_capacity_observation(
+        ProviderCapacityObservation(
+            provider="claude",
+            state="ready",
+            windows=[
+                ProviderCapacityWindow(
+                    limit_id="claude.ai",
+                    window=existing_window,
+                    used_percent=10,
+                    observed_at="2026-07-14T12:00:00+00:00",
+                )
+            ],
+            observed_at="2026-07-14T12:00:00+00:00",
+            capacity_observed_at="2026-07-14T12:00:00+00:00",
+            confidence=1.0,
+        )
+    )
+    capture_claude_statusline(
+        json.dumps(
+            {"rate_limits": {captured_window: {"used_percentage": 20, "resets_at": 2}}}
+        ).encode(),
+        observed_at="2026-07-14T19:00:00+00:00",
+    )
+    responses = {
+        ("auth", "status", "--json"): ClaudeCommandResult(
+            0, json.dumps({"loggedIn": True, "authMethod": "claude.ai"})
+        ),
+        ("agents", "--json"): ClaudeCommandResult(0, "[]"),
+    }
+
+    async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
+        return _command_response(responses, args)
+
+    observation = await refresh_claude_capacity(make_ctx(store, FakeLaneClient()), run_command=run)
+
+    windows = {window.window: window for window in observation.windows}
+    assert set(windows) == {"five_hour", "seven_day"}
+    assert windows[existing_window].used_percent == 10
+    assert windows[existing_window].observed_at == "2026-07-14T12:00:00+00:00"
+    assert windows[captured_window].used_percent == 20
+    assert windows[captured_window].observed_at == "2026-07-14T19:00:00+00:00"
+
+
 async def test_refresh_claude_capacity_does_not_replace_newer_capacity_snapshot(
     store: Registry, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

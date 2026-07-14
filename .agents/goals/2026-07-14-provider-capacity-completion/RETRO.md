@@ -92,6 +92,15 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 - Blockers: Review pending.
 ```
 
+```text
+2026-07-14 execution - DIS-37 first-round review fixes
+- Changed: Merged windows independently in both the snapshot file and provider observation, added per-window timestamps, serialized writers with a file lock, rejected older captures monotonically, and fsynced the containing directory after rename.
+- Verified: Focused statusline/provider/store suite 112 passed; surface suite 58 passed; just check 650 passed; wheel/sdist build passed.
+- Result: All standing and targeted round-one P1/P2 findings are addressed with both-direction partial-window, older-capture, and directory-fsync regression tests.
+- Next: Same-reviewer recheck, fix commit, draft PR, and CI.
+- Blockers: Review recheck pending.
+```
+
 ## Review Log
 
 | Round | Scope | Report | Score | State | Open P0-P2 | Notes |
@@ -105,6 +114,8 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | 3 | Standing DIS-36 diff review | `tmp/reviews/standing/dis-36-round-3.json` | 5/5 | clean | 0 | All standing findings closed; exact focused, surface, type, lint, format, and diff checks passed. |
 | 3 | Claude privacy/resilience review | `tmp/reviews/privacy/dis-36-round-3.json` | 5/5 | clean | 0 | Component cache semantics and all earlier privacy/subprocess/isolation findings verified closed. |
 | remote | Cursor Bugbot on PR #88 | GitHub review thread `discussion_r3582064305` | not scored | changes requested | 1 | Signed-out refresh retained stale runtime/version; fixed by clearing account-dependent runtime facts. |
+| 1 | Standing DIS-37 incremental review | `tmp/reviews/standing/dis-37-round-1.json` | 3/5 | changes requested | 1 | Partial snapshots must replace by window key without erasing the independently absent window. |
+| 1 | Statusline atomicity/privacy review | `tmp/reviews/statusline/dis-37-round-1.json` | 2/5 | changes requested | 3 | Also serialize/monotonically order captures and fsync the containing directory. |
 
 ## Verification Log
 
@@ -124,6 +135,8 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | `uv run pytest tests/surfaces/test_derive_cli.py tests/surfaces/test_derive_mcp.py tests/surfaces/test_mcp_routing.py tests/surfaces/test_parity.py -q` | DIS-37 derived CLI/MCP parity | passed | 58 passed. |
 | `just check` | DIS-37 full repository and package gate | passed | Ruff, format, strict mypy, 645 tests, sdist/wheel, package contents. |
 | isolated `dispatch-claude-statusline` to `dispatch usage --provider claude --json` | DIS-37 end-to-end privacy/freshness smoke | passed | Decimal five-hour/seven-day windows fresh; raw session, cwd, transcript, and model id absent; temporary daemon/home removed after plugin-clone cleanup race. |
+| `uv run pytest tests/core/test_claude_statusline.py tests/core/test_claude_capacity.py tests/core/test_capacity.py tests/registry/test_store.py -q` | Post-review DIS-37 capture/merge/provider behavior | passed | 112 passed. |
+| `just check` | Post-review DIS-37 full repository and package gate | passed | Ruff, format, strict mypy, 650 tests, sdist/wheel, package contents. |
 
 ## Prompt / Goal Alignment
 

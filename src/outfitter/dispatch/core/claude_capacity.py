@@ -9,7 +9,7 @@ import re
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import cast
 
 from outfitter.dispatch.contracts.context import Ctx
@@ -19,6 +19,7 @@ from outfitter.dispatch.core.claude_statusline import (
 )
 from outfitter.dispatch.registry.models import (
     ProviderCapacityObservation,
+    ProviderCapacityWindow,
     ProviderRuntimeSummary,
 )
 
@@ -116,6 +117,28 @@ def _agent_state(agent: dict[str, object]) -> str:
         return "unknown"
     normalized = value.strip().lower()
     return normalized if normalized in _AGENT_STATES else "unknown"
+
+
+def _observed_at(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _merge_windows(
+    existing: list[ProviderCapacityWindow], captured: list[ProviderCapacityWindow]
+) -> list[ProviderCapacityWindow]:
+    merged = {(window.limit_id, window.window): window for window in existing}
+    for window in captured:
+        key = (window.limit_id, window.window)
+        current = merged.get(key)
+        current_at = _observed_at(current.observed_at) if current is not None else None
+        captured_at = _observed_at(window.observed_at)
+        if current_at is None or (captured_at is not None and captured_at > current_at):
+            merged[key] = window
+    return [merged[key] for key in sorted(merged)]
 
 
 async def _save_auth_failure(
@@ -303,17 +326,16 @@ async def refresh_claude_capacity(
         statusline_source = "claude statusline snapshot"
         captured_windows = statusline_capacity_windows(statusline)
         if captured_windows:
-            existing_capacity_at = (
-                datetime.fromisoformat(capacity_observed_at)
-                if capacity_observed_at is not None
-                else None
+            windows = _merge_windows(windows, captured_windows)
+            latest_window = max(
+                windows,
+                key=lambda window: (
+                    _observed_at(window.observed_at) or datetime.min.replace(tzinfo=UTC)
+                ),
             )
-            snapshot_at = datetime.fromisoformat(statusline.observed_at)
-            if existing_capacity_at is None or snapshot_at > existing_capacity_at:
-                windows = captured_windows
-                capacity_observed_at = statusline.observed_at
-                if cli_version is None:
-                    cli_version = statusline.claude_code_version
+            capacity_observed_at = latest_window.observed_at
+            if cli_version is None:
+                cli_version = statusline.claude_code_version
         else:
             errors.append("claude statusline rate limits unavailable")
     email = auth.get("email")

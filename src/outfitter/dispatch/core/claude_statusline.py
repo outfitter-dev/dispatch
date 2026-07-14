@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -28,6 +29,12 @@ class StatuslineCaptureError(Exception):
 class ClaudeStatuslineWindow(BaseModel):
     used_percentage: float = Field(ge=0, le=100)
     resets_at: int | None = Field(default=None, ge=0)
+    observed_at: str
+
+    @field_validator("observed_at")
+    @classmethod
+    def _valid_observed_at(cls, value: str) -> str:
+        return _validate_observed_at(value)
 
 
 class ClaudeStatuslineRateLimits(BaseModel):
@@ -46,13 +53,17 @@ class ClaudeStatuslineSnapshot(BaseModel):
     @field_validator("observed_at")
     @classmethod
     def _valid_observed_at(cls, value: str) -> str:
-        try:
-            parsed = datetime.fromisoformat(value)
-        except ValueError as exc:
-            raise ValueError("observed_at must be ISO-8601") from exc
-        if parsed.tzinfo is None:
-            raise ValueError("observed_at must include a timezone")
-        return value
+        return _validate_observed_at(value)
+
+
+def _validate_observed_at(value: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("observed_at must be ISO-8601") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("observed_at must include a timezone")
+    return value
 
 
 def _fingerprint(value: str) -> str:
@@ -76,7 +87,7 @@ def _version(value: object) -> str | None:
     return match.group(0) if match is not None else None
 
 
-def _window(value: object) -> ClaudeStatuslineWindow | None:
+def _window(value: object, *, observed_at: str) -> ClaudeStatuslineWindow | None:
     if value is None:
         return None
     if not isinstance(value, dict):
@@ -88,7 +99,9 @@ def _window(value: object) -> ClaudeStatuslineWindow | None:
         raise StatuslineCaptureError("incompatible statusline window")
     if resets_at is not None and (isinstance(resets_at, bool) or not isinstance(resets_at, int)):
         raise StatuslineCaptureError("incompatible statusline window")
-    return ClaudeStatuslineWindow(used_percentage=float(used), resets_at=resets_at)
+    return ClaudeStatuslineWindow(
+        used_percentage=float(used), resets_at=resets_at, observed_at=observed_at
+    )
 
 
 def _normalize(payload: bytes, *, observed_at: str) -> ClaudeStatuslineSnapshot:
@@ -119,8 +132,8 @@ def _normalize(payload: bytes, *, observed_at: str) -> ClaudeStatuslineSnapshot:
                 120,
             ),
             rate_limits=ClaudeStatuslineRateLimits(
-                five_hour=_window(limits.get("five_hour")),
-                seven_day=_window(limits.get("seven_day")),
+                five_hour=_window(limits.get("five_hour"), observed_at=observed_at),
+                seven_day=_window(limits.get("seven_day"), observed_at=observed_at),
             ),
         )
     except ValidationError as exc:
@@ -141,27 +154,64 @@ def capture_claude_statusline(
     )
     destination = path or claude_statusline_snapshot_path()
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    encoded = snapshot.model_dump_json().encode()
-    fd, temporary_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
-    )
-    temporary = Path(temporary_name)
+    lock_fd = os.open(destination.with_suffix(".lock"), os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, destination)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-    return snapshot
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        existing = _read_snapshot(destination)
+        snapshot = _merge_snapshot(existing, snapshot)
+        encoded = snapshot.model_dump_json().encode()
+        fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, destination)
+            directory_fd = os.open(destination.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+        return snapshot
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+
+
+def _merge_snapshot(
+    existing: ClaudeStatuslineSnapshot | None,
+    incoming: ClaudeStatuslineSnapshot,
+) -> ClaudeStatuslineSnapshot:
+    if existing is None:
+        return incoming
+    if datetime.fromisoformat(incoming.observed_at) < datetime.fromisoformat(existing.observed_at):
+        return existing
+    incoming_limits = incoming.rate_limits
+    if incoming_limits.five_hour is None and incoming_limits.seven_day is None:
+        return incoming
+    return incoming.model_copy(
+        update={
+            "rate_limits": ClaudeStatuslineRateLimits(
+                five_hour=incoming_limits.five_hour or existing.rate_limits.five_hour,
+                seven_day=incoming_limits.seven_day or existing.rate_limits.seven_day,
+            )
+        }
+    )
 
 
 def read_claude_statusline_snapshot(*, path: Path | None = None) -> ClaudeStatuslineSnapshot | None:
     """Read a bounded normalized snapshot, returning no raw parse detail."""
 
-    source = path or claude_statusline_snapshot_path()
+    return _read_snapshot(path or claude_statusline_snapshot_path())
+
+
+def _read_snapshot(source: Path) -> ClaudeStatuslineSnapshot | None:
     try:
         with source.open("rb") as handle:
             payload = handle.read(_MAX_SNAPSHOT_BYTES + 1)
@@ -193,7 +243,7 @@ def statusline_capacity_windows(
                 remaining_percent=100 - window.used_percentage,
                 duration_minutes=duration,
                 resets_at=window.resets_at,
-                observed_at=snapshot.observed_at,
+                observed_at=window.observed_at,
             )
         )
     return windows
