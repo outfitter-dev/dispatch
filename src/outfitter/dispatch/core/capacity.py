@@ -288,6 +288,8 @@ async def refresh_codex_capacity(ctx: Ctx) -> ProviderCapacityObservation:
             for credit in credit_rows
         ]
         if credits is not None
+        else []
+        if limits is not None
         else existing.reset_credits
         if existing is not None
         else []

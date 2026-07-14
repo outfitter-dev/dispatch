@@ -156,6 +156,20 @@ def test_observation_provenance_is_bounded() -> None:
         type(observation).model_validate({**data, "source": ["x" * 121]})
 
 
+def test_new_observation_rejects_oversized_window_collection() -> None:
+    observation = provider_capacity_observation()
+    data = observation.model_dump()
+    [window] = data["windows"]
+
+    with pytest.raises(ValidationError, match="List should have at most 64 items"):
+        type(observation).model_validate(
+            {
+                **data,
+                "windows": [{**window, "limit_id": f"new-{index}"} for index in range(65)],
+            }
+        )
+
+
 @pytest.mark.parametrize(
     ("field", "unsafe_value"),
     [

@@ -301,13 +301,6 @@ class ProviderCapacityObservation(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     error: Annotated[str, Field(max_length=500)] | None = None
 
-    @field_validator("windows", mode="before")
-    @classmethod
-    def _bound_windows(cls, value: object) -> object:
-        if isinstance(value, list) and len(value) > 64:
-            return value[:64]
-        return value
-
     @field_validator(
         "observed_at",
         "account_observed_at",

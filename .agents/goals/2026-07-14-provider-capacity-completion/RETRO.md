@@ -15,7 +15,7 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 - Authority used: Packet preparation, scoped Linear mutation, Graphite branching/PR publication, implementation, tests, docs, and isolated read-only provider smokes.
 - Outcome: DIS-36, DIS-37, and DIS-38 are implemented as a three-PR Graphite stack (#88, #89, #90), green, cleanly reviewed, and ready for review/stack merge.
 - Tracker/PR/source-control state: DIS-34/DIS-36/DIS-37/DIS-38 In Progress; PRs #88/#89/#90 linked; DIS-40 remains blocked by DIS-37; current stacked branch `dis-38-store-normalized-provider-observations-for-mesh-heartbeats`.
-- Verification: final full gate passed 673 tests with 17 intentional deselections plus sdist/wheel/package checks; focused final provider suite passed 135; both isolated provider smokes passed.
+- Verification: final full gate passed 674 tests with 17 intentional deselections plus sdist/wheel/package checks; focused final provider suite passed 136; both isolated provider smokes passed.
 - Review state: every standing and targeted gate is clean at 5/5 with zero open P0-P2; remote Cursor passes are recorded on #88/#89, with #90's final pass required after the retro-only head update.
 - Remaining risks: Claude statusline schema drift, manual wrapper setup ergonomics, and future mesh transport/node identity remain outside this ready-PR horizon.
 
@@ -131,8 +131,8 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 ```text
 2026-07-14 execution - DIS-38 remote review follow-up
 - Changed: Successful rate-limit responses now clear omitted reset-credit count/list together, while legacy pre-bound observations with oversized collections are normalized on read so existing registries remain usable.
-- Verified: Focused provider suite 135 passed; just check 673 passed with 17 deselected; wheel/sdist/package checks passed; direct legacy 65-window row reads as the newest bounded 64.
-- Result: Both Cursor findings on PR #90 are fixed with regression coverage and no manual registry repair requirement.
+- Verified: Focused provider suite 136 passed; just check 674 passed with 17 deselected; wheel/sdist/package checks passed; direct legacy 65-window row reads as the newest bounded 64 while new oversized writes remain rejected.
+- Result: Both Cursor findings on PR #90 are fixed with regression coverage and no manual registry repair requirement; the Cursor Autofix commit was reconciled without weakening pre-write validation.
 - Next: Push, resolve/reply to both review threads, request final Cursor pass, and mark the PR ready when green.
 - Blockers: Final remote re-review pending.
 ```
@@ -190,8 +190,8 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | `just check` | DIS-37 second-review full repository and package gate | passed | Ruff, format, strict mypy, 651 tests, sdist/wheel, package contents. |
 | `uv run pytest tests/core/test_claude_statusline.py tests/core/test_claude_capacity.py tests/core/test_capacity.py tests/registry/test_store.py -q` | DIS-37 empty-registry unavailable-cache behavior | passed | 114 passed. |
 | `just check` | DIS-37 third-review full repository and package gate | passed | Ruff, format, strict mypy, 652 tests, sdist/wheel, package contents. |
-| `uv run pytest tests/core/test_provider_observation_contract.py tests/core/test_capacity.py tests/core/test_claude_capacity.py tests/core/test_claude_statusline.py tests/registry/test_store.py -q` | Final DIS-38 provider contract behavior | passed | 135 passed. |
-| `just check` | Final DIS-38 full repository and package gate | passed | Ruff, format, strict mypy, 673 tests, 17 deselected, sdist/wheel, package contents. |
+| `uv run pytest tests/core/test_provider_observation_contract.py tests/core/test_capacity.py tests/core/test_claude_capacity.py tests/core/test_claude_statusline.py tests/registry/test_store.py -q` | Final DIS-38 provider contract behavior | passed | 136 passed. |
+| `just check` | Final DIS-38 full repository and package gate | passed | Ruff, format, strict mypy, 674 tests, 17 deselected, sdist/wheel, package contents. |
 | GitHub Actions | PRs #88/#89/#90 | passed | Required `check` workflow green on each implementation head before final retro-only update. |
 
 ## Prompt / Goal Alignment
@@ -220,7 +220,7 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 - Completion proof: Three scoped Graphite PRs exist with linked Linear issues, green local/full checks, green implementation CI, and clean standing plus targeted review reports.
 - Prompt length: 3,857/4,000 characters.
 - Review report summary: all final DIS-36 privacy, DIS-37 statusline, and DIS-38 observation reviews are clean at 5/5 with zero open P0-P2.
-- Verification summary: 673 passed, 17 deselected; package artifacts built and checked; focused final suite 135 passed; isolated Claude account/statusline smokes passed.
+- Verification summary: 674 passed, 17 deselected; package artifacts built and checked; focused final suite 136 passed; isolated Claude account/statusline smokes passed.
 - Forbidden actions audit: no secrets retained; no private Claude endpoints, live Claude settings mutation, merge, release, or publish performed.
 - Remaining P3s / risks: supported statusline schema may drift; wrapper installation is manual; mesh transport/node identity and routing remain deferred.
 - Final transcript proof: Linear DIS-36/DIS-37/DIS-38 and PRs #88/#89/#90 carry implementation, divergence, review, and verification evidence.
