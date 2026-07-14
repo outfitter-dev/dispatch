@@ -168,6 +168,7 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | 4 | Standing DIS-38 final reconciliation review | `tmp/reviews/standing/dis-38-round-4.json` | 5/5 | clean | 0 | Reset-credit semantics, read-only legacy normalization, strict new-write rejection, packet doctor, and RETRO evidence verified. |
 | 4 | Observation/privacy evidence review | `tmp/reviews/observation/dis-38-round-4.json` | 4/5 | changes requested | 1 | Code clean; held completion until current-head CI/Cursor, ready state, PR evidence, and RETRO review log were current. |
 | remote | Cursor Bugbot final on PR #90 | implementation head `4374e5e` | not scored | clean | 0 | No new issues; both prior threads replied to/resolved; required CI green; PR marked ready. |
+| 5 | Observation/privacy evidence closure | `tmp/reviews/observation/dis-38-round-5.json` | 5/5 | clean | 0 | Retro-only diff, current PR body, non-draft state, CI/Cursor passes, resolved threads, and ready-PR proof verified. |
 
 ## Verification Log
 
