@@ -248,11 +248,10 @@ async def refresh_codex_capacity(ctx: Ctx) -> ProviderCapacityObservation:
     snapshots = (
         limits.rate_limits_by_limit_id.values() if limits and limits.rate_limits_by_limit_id else []
     )
+    snapshot_plans = (_bounded(snapshot.plan_type) for snapshot in snapshots)
     plan = (
-        account.account.plan_type
-        or next(
-            (snapshot.plan_type for snapshot in snapshots if snapshot.plan_type is not None), None
-        )
+        _bounded(account.account.plan_type)
+        or next((value for value in snapshot_plans if value is not None), None)
         or (existing.plan if existing is not None else None)
     )
     credits = limits.rate_limit_reset_credits if limits is not None else None
@@ -391,7 +390,7 @@ async def observe_codex_rate_limits(
                 "source": source,
                 "observed_at": observed_at,
                 "capacity_observed_at": observed_at,
-                "plan": snapshot.plan_type or existing.plan,
+                "plan": _bounded(snapshot.plan_type) or existing.plan,
                 "confidence": max(existing.confidence, 0.8),
                 "error": existing.error
                 if prior_is_usable
@@ -402,7 +401,7 @@ async def observe_codex_rate_limits(
         else ProviderCapacityObservation(
             provider="codex",
             state="partial",
-            plan=snapshot.plan_type,
+            plan=_bounded(snapshot.plan_type),
             windows=replacement,
             source=source,
             observed_at=observed_at,

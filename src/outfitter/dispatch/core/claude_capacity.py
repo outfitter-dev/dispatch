@@ -140,7 +140,7 @@ def _merge_windows(
         captured_at = _observed_at(window.observed_at)
         if current_at is None or (captured_at is not None and captured_at > current_at):
             merged[key] = window
-    return [merged[key] for key in sorted(merged)]
+    return [merged[key] for key in sorted(merged)][:64]
 
 
 async def _save_auth_failure(
