@@ -325,7 +325,7 @@ async def refresh_claude_capacity(
     if statusline is not None:
         statusline_source = "claude statusline snapshot"
         captured_windows = statusline_capacity_windows(statusline)
-        if captured_windows:
+        if statusline.rate_limits_available and captured_windows:
             windows = _merge_windows(windows, captured_windows)
             latest_window = max(
                 windows,

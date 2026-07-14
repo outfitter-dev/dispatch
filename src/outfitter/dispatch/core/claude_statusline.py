@@ -48,6 +48,7 @@ class ClaudeStatuslineSnapshot(BaseModel):
     claude_code_version: str | None = Field(default=None, max_length=40)
     session_fingerprint: str | None = Field(default=None, max_length=40)
     model_label: str | None = Field(default=None, max_length=120)
+    rate_limits_available: bool
     rate_limits: ClaudeStatuslineRateLimits = Field(default_factory=ClaudeStatuslineRateLimits)
 
     @field_validator("observed_at")
@@ -119,6 +120,8 @@ def _normalize(payload: bytes, *, observed_at: str) -> ClaudeStatuslineSnapshot:
         raise StatuslineCaptureError("incompatible statusline rate limits")
     limits = cast(dict[str, object], raw_limits) if isinstance(raw_limits, dict) else {}
     try:
+        five_hour = _window(limits.get("five_hour"), observed_at=observed_at)
+        seven_day = _window(limits.get("seven_day"), observed_at=observed_at)
         return ClaudeStatuslineSnapshot(
             observed_at=observed_at,
             claude_code_version=_version(raw.get("version")),
@@ -131,9 +134,10 @@ def _normalize(payload: bytes, *, observed_at: str) -> ClaudeStatuslineSnapshot:
                 else None,
                 120,
             ),
+            rate_limits_available=five_hour is not None or seven_day is not None,
             rate_limits=ClaudeStatuslineRateLimits(
-                five_hour=_window(limits.get("five_hour"), observed_at=observed_at),
-                seven_day=_window(limits.get("seven_day"), observed_at=observed_at),
+                five_hour=five_hour,
+                seven_day=seven_day,
             ),
         )
     except ValidationError as exc:
@@ -193,8 +197,6 @@ def _merge_snapshot(
     if datetime.fromisoformat(incoming.observed_at) < datetime.fromisoformat(existing.observed_at):
         return existing
     incoming_limits = incoming.rate_limits
-    if incoming_limits.five_hour is None and incoming_limits.seven_day is None:
-        return incoming
     return incoming.model_copy(
         update={
             "rate_limits": ClaudeStatuslineRateLimits(

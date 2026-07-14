@@ -49,6 +49,7 @@ def test_capture_statusline_atomically_persists_only_normalized_capacity(tmp_pat
     assert snapshot.rate_limits.five_hour.used_percentage == 23.5
     assert snapshot.rate_limits.five_hour.observed_at == "2026-07-14T19:00:00+00:00"
     assert snapshot.rate_limits.seven_day is not None
+    assert snapshot.rate_limits_available is True
     assert snapshot.session_fingerprint is not None
     assert snapshot.session_fingerprint.startswith("sha256:")
     assert snapshot.model_label == "Opus"
@@ -150,6 +151,30 @@ def test_capture_statusline_records_absent_rate_limits_as_unavailable(tmp_path: 
 
     assert snapshot.rate_limits.five_hour is None
     assert snapshot.rate_limits.seven_day is None
+    assert snapshot.rate_limits_available is False
+
+
+def test_capture_statusline_retains_last_windows_when_current_limits_are_unavailable(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "statusline.json"
+    previous = capture_claude_statusline(
+        json.dumps(_payload()).encode(),
+        path=path,
+        observed_at="2026-07-14T18:00:00+00:00",
+    )
+
+    current = capture_claude_statusline(
+        json.dumps({"session_id": "new-session", "version": "2.1.207"}).encode(),
+        path=path,
+        observed_at="2026-07-14T19:00:00+00:00",
+    )
+
+    assert current.observed_at == "2026-07-14T19:00:00+00:00"
+    assert current.rate_limits_available is False
+    assert current.rate_limits == previous.rate_limits
+    assert current.rate_limits.five_hour is not None
+    assert current.rate_limits.five_hour.observed_at == "2026-07-14T18:00:00+00:00"
 
 
 @pytest.mark.parametrize(
@@ -168,6 +193,7 @@ def test_capture_statusline_rejects_invalid_input_without_clobbering(
     original = ClaudeStatuslineSnapshot.model_validate(
         {
             "observed_at": "2026-07-14T18:00:00+00:00",
+            "rate_limits_available": False,
             "rate_limits": {},
         }
     )

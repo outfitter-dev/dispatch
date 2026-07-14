@@ -101,6 +101,15 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 - Blockers: Review recheck pending.
 ```
 
+```text
+2026-07-14 execution - DIS-37 second-round review fix
+- Changed: Added an explicit current `rate_limits_available` fact while retaining the last valid per-window values/timestamps when a newer statusline event has no rate-limit fields.
+- Verified: Focused statusline/provider/store suite 113 passed; just check 651 passed; wheel/sdist build passed.
+- Result: Current unavailability remains observable without destructive cache loss or fabricated window freshness.
+- Next: Same-reviewer round-three recheck, fix commit, draft PR, and CI.
+- Blockers: Review recheck pending.
+```
+
 ## Review Log
 
 | Round | Scope | Report | Score | State | Open P0-P2 | Notes |
@@ -116,6 +125,8 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | remote | Cursor Bugbot on PR #88 | GitHub review thread `discussion_r3582064305` | not scored | changes requested | 1 | Signed-out refresh retained stale runtime/version; fixed by clearing account-dependent runtime facts. |
 | 1 | Standing DIS-37 incremental review | `tmp/reviews/standing/dis-37-round-1.json` | 3/5 | changes requested | 1 | Partial snapshots must replace by window key without erasing the independently absent window. |
 | 1 | Statusline atomicity/privacy review | `tmp/reviews/statusline/dis-37-round-1.json` | 2/5 | changes requested | 3 | Also serialize/monotonically order captures and fsync the containing directory. |
+| 2 | Standing DIS-37 incremental review | `tmp/reviews/standing/dis-37-round-2.json` | 5/5 | clean | 0 | Keyed merge, original per-window freshness, installed entrypoint, file mode, privacy, and checks verified. |
+| 2 | Statusline atomicity/privacy review | `tmp/reviews/statusline/dis-37-round-2.json` | 3/5 | changes requested | 1 | Locking/durability/partial merge fixed; both-absent input still erased cached windows. |
 
 ## Verification Log
 
@@ -137,6 +148,8 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | isolated `dispatch-claude-statusline` to `dispatch usage --provider claude --json` | DIS-37 end-to-end privacy/freshness smoke | passed | Decimal five-hour/seven-day windows fresh; raw session, cwd, transcript, and model id absent; temporary daemon/home removed after plugin-clone cleanup race. |
 | `uv run pytest tests/core/test_claude_statusline.py tests/core/test_claude_capacity.py tests/core/test_capacity.py tests/registry/test_store.py -q` | Post-review DIS-37 capture/merge/provider behavior | passed | 112 passed. |
 | `just check` | Post-review DIS-37 full repository and package gate | passed | Ruff, format, strict mypy, 650 tests, sdist/wheel, package contents. |
+| `uv run pytest tests/core/test_claude_statusline.py tests/core/test_claude_capacity.py tests/core/test_capacity.py tests/registry/test_store.py -q` | DIS-37 unavailable-with-cache behavior | passed | 113 passed. |
+| `just check` | DIS-37 second-review full repository and package gate | passed | Ruff, format, strict mypy, 651 tests, sdist/wheel, package contents. |
 
 ## Prompt / Goal Alignment
 
