@@ -132,6 +132,12 @@ async def test_refresh_claude_capacity_signed_out_skips_runtime_probe(store: Reg
         ProviderCapacityObservation(
             provider="claude",
             state="ready",
+            cli_version="2.1.100",
+            runtime=ProviderRuntimeSummary(
+                total_agents=1,
+                active_agents=1,
+                state_counts={"active": 1},
+            ),
             windows=[
                 ProviderCapacityWindow(
                     limit_id="claude.ai",
@@ -142,6 +148,7 @@ async def test_refresh_claude_capacity_signed_out_skips_runtime_probe(store: Reg
             ],
             source=["claude statusline"],
             observed_at="2026-07-14T12:00:00+00:00",
+            runtime_observed_at="2026-07-14T12:00:00+00:00",
             capacity_observed_at="2026-07-14T12:00:00+00:00",
             confidence=0.8,
         )
@@ -168,6 +175,7 @@ async def test_refresh_claude_capacity_signed_out_skips_runtime_probe(store: Reg
     assert observation.requires_auth is True
     assert observation.runtime is None
     assert observation.runtime_observed_at is None
+    assert observation.cli_version is None
     assert observation.account_observed_at == observation.observed_at
     assert observation.windows[0].window == "seven_day"
     assert observation.capacity_observed_at == "2026-07-14T12:00:00+00:00"

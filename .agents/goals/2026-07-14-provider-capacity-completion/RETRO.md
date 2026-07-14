@@ -73,6 +73,15 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 - Blockers: Review recheck pending.
 ```
 
+```text
+2026-07-14 execution - DIS-36 remote review follow-up
+- Changed: A successful signed-out observation now clears cached runtime, runtime freshness, and CLI version while preserving independent capacity and usage facts.
+- Verified: Focused Claude provider tests passed; full gate rerun before resubmission.
+- Result: Cursor Bugbot's stale-runtime finding is fixed with regression coverage.
+- Next: Push parent update, resolve the review thread, and restack DIS-37.
+- Blockers: None.
+```
+
 ## Review Log
 
 | Round | Scope | Report | Score | State | Open P0-P2 | Notes |
@@ -85,6 +94,7 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | 2 | Claude privacy/resilience review | `tmp/reviews/privacy/dis-36-round-2.json` | 3/5 | changes requested | 1 | Prior findings closed; retain the last valid runtime aggregate when roster refresh fails. |
 | 3 | Standing DIS-36 diff review | `tmp/reviews/standing/dis-36-round-3.json` | 5/5 | clean | 0 | All standing findings closed; exact focused, surface, type, lint, format, and diff checks passed. |
 | 3 | Claude privacy/resilience review | `tmp/reviews/privacy/dis-36-round-3.json` | 5/5 | clean | 0 | Component cache semantics and all earlier privacy/subprocess/isolation findings verified closed. |
+| remote | Cursor Bugbot on PR #88 | GitHub review thread `discussion_r3582064305` | not scored | changes requested | 1 | Signed-out refresh retained stale runtime/version; fixed by clearing account-dependent runtime facts. |
 
 ## Verification Log
 
