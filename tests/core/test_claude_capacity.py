@@ -118,6 +118,16 @@ async def test_refresh_claude_capacity_normalizes_account_and_runtime_without_ro
     assert observation.account_observed_at == observation.observed_at
     assert observation.runtime_observed_at == observation.observed_at
     assert observation.capacity_observed_at is None
+    payload = observation.model_dump_json()
+    for secret in (
+        "agent@example.com",
+        "org-sensitive-id",
+        "/private/workspace",
+        "agent-secret-1",
+        "secret-agent-name",
+        "session-secret-1",
+    ):
+        assert secret not in payload
 
 
 async def test_claude_email_masking_cannot_exceed_persisted_label_bound(
@@ -142,17 +152,11 @@ async def test_claude_email_masking_cannot_exceed_persisted_label_bound(
 
     observation = await refresh_claude_capacity(make_ctx(store, FakeLaneClient()), run_command=run)
 
+    raw_email = f"a@{'x' * 252}"
     assert observation.account_label == "redacted"
-    payload = observation.model_dump_json()
-    for secret in (
-        "agent@example.com",
-        "org-sensitive-id",
-        "/private/workspace",
-        "agent-secret-1",
-        "secret-agent-name",
-        "session-secret-1",
-    ):
-        assert secret not in payload
+    assert observation.account_fingerprint is not None
+    assert raw_email not in observation.model_dump_json()
+    assert await store.get_provider_capacity_observation("claude") == observation
 
 
 async def test_refresh_claude_capacity_normalizes_whitespace_only_optional_fields(

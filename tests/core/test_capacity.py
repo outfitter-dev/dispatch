@@ -233,6 +233,32 @@ async def test_refresh_codex_capacity_clears_reset_credits_when_success_omits_th
     assert refreshed.reset_credits == []
 
 
+async def test_refresh_codex_capacity_bounds_reset_credit_collection(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    client.rate_limits_result = AccountRateLimitsResult(
+        rate_limits=RateLimitSnapshot(primary=RateLimitWindow(used_percent=10)),
+        rate_limit_reset_credits=RateLimitResetCreditsSummary(
+            available_count=101,
+            credits=[
+                RateLimitResetCredit(
+                    id=f"opaque-credit-{index}",
+                    reset_type="codexRateLimits",
+                    status="available",
+                    granted_at=index,
+                )
+                for index in range(101)
+            ],
+        ),
+    )
+
+    observation = await refresh_codex_capacity(make_ctx(store, client))
+
+    assert observation.reset_credits_available == 101
+    assert len(observation.reset_credits) == 100
+
+
 async def test_codex_plan_normalizes_whitespace_and_preserves_prior_value(
     store: Registry,
 ) -> None:
@@ -534,6 +560,33 @@ async def test_rate_limit_notification_preserves_component_freshness(store: Regi
     )
     assert after_primary.observed_at == after.observed_at
     assert after_secondary.observed_at == before_secondary.observed_at
+
+
+async def test_rate_limit_notification_preserves_unavailable_account_state(
+    store: Registry,
+) -> None:
+    existing = provider_capacity_observation().model_copy(
+        update={
+            "state": "unavailable",
+            "confidence": 0.4,
+            "error": "account/read unavailable",
+        }
+    )
+    await store.upsert_provider_capacity_observation(existing)
+
+    observation = await observe_codex_rate_limits(
+        make_ctx(store),
+        RateLimitSnapshot(
+            limit_id="codex",
+            primary=RateLimitWindow(used_percent=20),
+        ),
+    )
+
+    assert observation.state == "unavailable"
+    assert observation.confidence == 0.4
+    assert observation.error == "account/read unavailable"
+    assert observation.capacity_observed_at == observation.observed_at
+    assert observation.windows[0].used_percent == 20
 
 
 async def test_idless_rate_limit_notification_reuses_unambiguous_named_limit(
