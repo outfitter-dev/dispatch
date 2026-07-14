@@ -65,6 +65,7 @@ from outfitter.dispatch.registry.models import (
 from . import queue
 from .backfill import backfill_codex_history
 from .capacity import refresh_codex_capacity
+from .claude_capacity import refresh_claude_capacity
 from .history import (
     detect_worktree,
     history_items_from_indexed,
@@ -3041,6 +3042,15 @@ async def usage(inp: UsageInput, ctx: Ctx) -> UsageOutput:
     if refresh_local_codex:
         await refresh_codex_capacity(ctx)
         refreshed.append("codex")
+    refresh_local_claude = (
+        inp.refresh
+        and inp.provider in {None, "claude"}
+        and inp.host in {None, "local"}
+        and inp.config_scope in {None, "default"}
+    )
+    if refresh_local_claude:
+        await refresh_claude_capacity(ctx)
+        refreshed.append("claude")
     observations = await ctx.registry.list_provider_capacity_observations(
         provider=inp.provider,
         host_scope=None if inp.all_hosts else inp.host,
@@ -3058,11 +3068,14 @@ async def usage(inp: UsageInput, ctx: Ctx) -> UsageOutput:
     for observation in observations:
         freshness = _freshness_seconds(now, observation.observed_at)
         account_freshness = _freshness_seconds(now, observation.account_observed_at)
+        runtime_freshness = _freshness_seconds(now, observation.runtime_observed_at)
         capacity_freshness = _freshness_seconds(now, observation.capacity_observed_at)
         usage_freshness = _freshness_seconds(now, observation.usage_observed_at)
         relevant_freshness = (
             capacity_freshness
             if observation.windows
+            else runtime_freshness
+            if observation.runtime is not None
             else account_freshness
             if observation.account_type is not None or observation.requires_auth is not None
             else freshness
@@ -3087,13 +3100,19 @@ async def usage(inp: UsageInput, ctx: Ctx) -> UsageOutput:
                 stale=relevant_freshness is None or relevant_freshness > inp.stale_after_seconds,
                 freshness_seconds=freshness,
                 account_freshness_seconds=account_freshness,
+                runtime_freshness_seconds=runtime_freshness,
                 capacity_freshness_seconds=capacity_freshness,
                 usage_freshness_seconds=usage_freshness,
                 account_type=observation.account_type,
                 account_fingerprint=observation.account_fingerprint,
                 account_label=observation.account_label,
+                auth_method=observation.auth_method,
+                api_provider=observation.api_provider,
+                organization_fingerprint=observation.organization_fingerprint,
+                organization_label=observation.organization_label,
                 plan=observation.plan,
                 requires_auth=observation.requires_auth,
+                runtime=observation.runtime,
                 windows=windows,
                 reset_credits_available=observation.reset_credits_available,
                 reset_credits=observation.reset_credits,
