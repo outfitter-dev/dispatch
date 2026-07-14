@@ -113,8 +113,9 @@ def _all_windows(
 def _push_limit_id(
     snapshot: RateLimitSnapshot, existing: ProviderCapacityObservation | None
 ) -> str:
-    if snapshot.limit_id is not None:
-        return snapshot.limit_id
+    limit_id = _bounded(snapshot.limit_id)
+    if limit_id is not None:
+        return limit_id
     if existing is None:
         return "default"
 
@@ -314,7 +315,7 @@ async def refresh_codex_capacity(ctx: Ctx) -> ProviderCapacityObservation:
     observation = ProviderCapacityObservation(
         provider="codex",
         state="ready" if not errors else "partial",
-        account_type=account.account.type,
+        account_type=_bounded(account.account.type) or "unknown",
         account_fingerprint=_fingerprint(email) if email else None,
         account_label=_masked_email(email) if email else None,
         plan=plan,

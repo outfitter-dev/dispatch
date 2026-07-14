@@ -357,6 +357,28 @@ async def test_codex_normalizes_bounded_window_and_reset_credit_text(store: Regi
     assert credit.status == "unknown"
 
 
+async def test_codex_normalizes_account_type(store: Registry) -> None:
+    client = FakeLaneClient()
+    signed_in = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    assert signed_in.account is not None
+    client.account_result = signed_in.model_copy(
+        update={"account": signed_in.account.model_copy(update={"type": "x" * 121})}
+    )
+
+    bounded = await refresh_codex_capacity(make_ctx(store, client))
+
+    assert bounded.account_type == "x" * 119 + "…"
+
+    client.account_result = signed_in.model_copy(
+        update={"account": signed_in.account.model_copy(update={"type": "   "})}
+    )
+    fallback = await refresh_codex_capacity(make_ctx(store, client))
+
+    assert fallback.account_type == "unknown"
+
+
 async def test_refresh_codex_capacity_preserves_observation_when_account_probe_fails(
     store: Registry,
 ) -> None:
@@ -541,6 +563,62 @@ async def test_idless_rate_limit_notification_reuses_unambiguous_named_limit(
         if window.limit_id == "codex" and window.window == "secondary"
     )
     assert after_secondary.observed_at == before_secondary.observed_at
+
+
+async def test_whitespace_id_rate_limit_notification_uses_normalized_matching(
+    store: Registry,
+) -> None:
+    observed_at = "2026-07-14T12:00:00+00:00"
+    existing = provider_capacity_observation(observed_at=observed_at).model_copy(
+        update={
+            "windows": [
+                ProviderCapacityWindow(
+                    limit_id="codex",
+                    limit_name="Codex",
+                    window="primary",
+                    used_percent=10,
+                    observed_at=observed_at,
+                ),
+                ProviderCapacityWindow(
+                    limit_id="review",
+                    limit_name="Review",
+                    window="primary",
+                    used_percent=5,
+                    observed_at=observed_at,
+                ),
+            ]
+        }
+    )
+    await store.upsert_provider_capacity_observation(existing)
+
+    matched = await observe_codex_rate_limits(
+        make_ctx(store),
+        RateLimitSnapshot(
+            limit_id="   ",
+            limit_name="Codex",
+            primary=RateLimitWindow(used_percent=20),
+        ),
+    )
+
+    assert {(window.limit_id, window.used_percent) for window in matched.windows} == {
+        ("codex", 20),
+        ("review", 5),
+    }
+
+    unmatched = await observe_codex_rate_limits(
+        make_ctx(store),
+        RateLimitSnapshot(
+            limit_id="   ",
+            limit_name="Other",
+            primary=RateLimitWindow(used_percent=30),
+        ),
+    )
+
+    assert {(window.limit_id, window.used_percent) for window in unmatched.windows} == {
+        ("codex", 20),
+        ("review", 5),
+        ("default", 30),
+    }
 
 
 async def test_idless_rate_limit_notification_reuses_sole_existing_limit(
