@@ -23,6 +23,7 @@ from outfitter.dispatch.core.models import UsageInput
 from outfitter.dispatch.registry.models import (
     ProviderCapacityObservation,
     ProviderCapacityWindow,
+    ProviderRuntimeSummary,
 )
 from outfitter.dispatch.registry.store import Registry
 from tests.fakes import FakeLaneClient, make_ctx
@@ -400,6 +401,22 @@ async def test_refresh_claude_capacity_preserves_existing_capacity_windows(
 async def test_refresh_claude_capacity_keeps_account_when_agents_output_is_invalid(
     store: Registry,
 ) -> None:
+    await store.upsert_provider_capacity_observation(
+        ProviderCapacityObservation(
+            provider="claude",
+            state="ready",
+            account_label="o***@example.com",
+            runtime=ProviderRuntimeSummary(
+                total_agents=2,
+                active_agents=1,
+                state_counts={"active": 1, "idle": 1},
+            ),
+            observed_at="2026-07-14T12:00:00+00:00",
+            account_observed_at="2026-07-14T12:00:00+00:00",
+            runtime_observed_at="2026-07-14T12:00:00+00:00",
+            confidence=1.0,
+        )
+    )
     responses = {
         ("auth", "status", "--json"): ClaudeCommandResult(
             0,
@@ -421,19 +438,36 @@ async def test_refresh_claude_capacity_keeps_account_when_agents_output_is_inval
 
     assert observation.state == "partial"
     assert observation.account_label == "a***@example.com"
-    assert observation.runtime is None
-    assert observation.runtime_observed_at is None
+    assert observation.runtime is not None
+    assert observation.runtime.total_agents == 2
+    assert observation.runtime.state_counts == {"active": 1, "idle": 1}
+    assert observation.runtime_observed_at == "2026-07-14T12:00:00+00:00"
     assert observation.error == "claude agents returned invalid JSON"
     assert "private malformed roster" not in observation.model_dump_json()
 
 
 async def test_refresh_claude_capacity_sanitizes_auth_command_failure(store: Registry) -> None:
+    await store.upsert_provider_capacity_observation(
+        ProviderCapacityObservation(
+            provider="claude",
+            state="ready",
+            account_label="o***@example.com",
+            account_fingerprint="sha256:existing",
+            observed_at="2026-07-14T12:00:00+00:00",
+            account_observed_at="2026-07-14T12:00:00+00:00",
+            confidence=1.0,
+        )
+    )
+
     async def run(_args: tuple[str, ...]) -> ClaudeCommandResult:
         return ClaudeCommandResult(2, "", "private auth failure")
 
     observation = await refresh_claude_capacity(make_ctx(store, FakeLaneClient()), run_command=run)
 
     assert observation.state == "unavailable"
+    assert observation.account_label == "o***@example.com"
+    assert observation.account_observed_at == "2026-07-14T12:00:00+00:00"
+    assert observation.observed_at != observation.account_observed_at
     assert observation.error == "claude auth status failed"
     assert "private auth failure" not in observation.model_dump_json()
 

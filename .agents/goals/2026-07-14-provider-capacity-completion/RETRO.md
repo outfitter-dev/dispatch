@@ -58,9 +58,18 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 ```text
 2026-07-14 execution - DIS-36 first-round review fixes
 - Changed: Preserved independent capacity on auth failure/sign-out, bounded and normalized agent states/counts, added true subprocess byte limits and cancellation cleanup, refreshed providers concurrently with failure isolation, and surfaced the Claude CLI version.
-- Verified: Focused provider/store suite 93 passed; surface suite 63 passed; just check 631 passed; wheel/sdist build passed.
+- Verified: Focused provider/store suite 93 passed; surface suite 58 passed; just check 631 passed; wheel/sdist build passed.
 - Result: All four standing-review and five privacy-review P1/P2 blockers are addressed locally with regression coverage.
 - Next: Same-reviewer recheck, fix commit, draft PR, and CI.
+- Blockers: Review recheck pending.
+```
+
+```text
+2026-07-14 execution - DIS-36 second-round review fixes
+- Changed: Kept successful account/runtime component timestamps and cached facts unchanged when later probes fail; corrected the documented subprocess inventory and exact surface-test evidence.
+- Verified: Focused provider/store suite 93 passed; surface suite 58 passed; just check 631 passed; wheel/sdist build passed.
+- Result: All round-two standing/privacy blockers are addressed locally with regression coverage for account and runtime freshness.
+- Next: Same-reviewer round-three recheck, fix commit, draft PR, and CI.
 - Blockers: Review recheck pending.
 ```
 
@@ -72,6 +81,8 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | preparation | Tracker/repo reconciliation audit | subagent response | not scored | complete | 0 | DIS-34 should move to In Progress; DIS-40 should depend on DIS-37; unrelated stale issues remain outside this goal. |
 | 1 | Standing DIS-36 diff review | `tmp/reviews/standing/dis-36-round-1.json` | 3/5 | changes requested | 4 | Preserve cached capacity on auth failures; bound agent states; enforce output bytes; expose CLI version. |
 | 1 | Claude privacy/resilience review | `tmp/reviews/privacy/dis-36-round-1.json` | 2/5 | changes requested | 5 | Also isolate provider refreshes concurrently and guarantee subprocess cleanup. |
+| 2 | Standing DIS-36 diff review | `tmp/reviews/standing/dis-36-round-2.json` | 3/5 | changes requested | 3 | Prior findings closed; keep failed auth from refreshing stale account facts and correct docs/evidence counts. |
+| 2 | Claude privacy/resilience review | `tmp/reviews/privacy/dis-36-round-2.json` | 3/5 | changes requested | 1 | Prior findings closed; retain the last valid runtime aggregate when roster refresh fails. |
 
 ## Verification Log
 
@@ -85,7 +96,7 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | `just check` | Full repository and package gate | passed | Ruff, format, strict mypy, 625 tests, sdist/wheel, package contents. |
 | isolated `dispatch usage --provider claude --json` | Live Claude CLI/manual privacy smoke | passed | Provider ready; aggregate roster only; sensitive source values absent; isolated homes cleaned up. |
 | `uv run pytest tests/core/test_claude_capacity.py tests/core/test_capacity.py tests/registry/test_store.py -q` | Post-review provider/store behavior | passed | 93 passed. |
-| `uv run pytest tests/surfaces/test_derive_cli.py tests/surfaces/test_derive_mcp.py tests/surfaces/test_mcp_routing.py tests/surfaces/test_parity.py -q` | Post-review derived CLI/MCP parity | passed | 63 passed. |
+| `uv run pytest tests/surfaces/test_derive_cli.py tests/surfaces/test_derive_mcp.py tests/surfaces/test_mcp_routing.py tests/surfaces/test_parity.py -q` | Post-review derived CLI/MCP parity | passed | 58 passed. |
 | `just check` | Post-review full repository and package gate | passed | Ruff, format, strict mypy, 631 tests, sdist/wheel, package contents. |
 
 ## Prompt / Goal Alignment

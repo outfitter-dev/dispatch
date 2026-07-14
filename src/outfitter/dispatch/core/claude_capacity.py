@@ -130,7 +130,6 @@ async def _save_auth_failure(
                     "state": "unavailable",
                     "source": source,
                     "observed_at": observed_at,
-                    "account_observed_at": observed_at,
                     "confidence": 0.0,
                     "error": error,
                 }
@@ -142,7 +141,6 @@ async def _save_auth_failure(
             state="unavailable",
             source=source,
             observed_at=observed_at,
-            account_observed_at=observed_at,
             confidence=0.0,
             error=error,
         )
@@ -239,7 +237,7 @@ async def refresh_claude_capacity(
             )
         )
     errors: list[str] = []
-    cli_version: str | None = None
+    cli_version = existing.cli_version if existing is not None else None
     try:
         version_result = await runner(("--version",))
     except (FileNotFoundError, TimeoutError, ClaudeCommandOutputError):
@@ -250,7 +248,8 @@ async def refresh_claude_capacity(
             cli_version = match.group(0)
         else:
             errors.append("claude version unavailable")
-    runtime: ProviderRuntimeSummary | None = None
+    runtime = existing.runtime if existing is not None else None
+    runtime_observed_at = existing.runtime_observed_at if existing is not None else None
     runtime_error: str | None = None
     try:
         agents_result = await runner(("agents", "--json"))
@@ -283,6 +282,7 @@ async def refresh_claude_capacity(
                 active_agents=sum(states[state] for state in _ACTIVE_AGENT_STATES),
                 state_counts=dict(sorted(states.items())),
             )
+            runtime_observed_at = observed_at
         except (json.JSONDecodeError, TypeError):
             runtime_error = "claude agents returned invalid JSON"
     if runtime_error is not None:
@@ -318,7 +318,7 @@ async def refresh_claude_capacity(
         source=source,
         observed_at=observed_at,
         account_observed_at=observed_at,
-        runtime_observed_at=observed_at if runtime is not None else None,
+        runtime_observed_at=runtime_observed_at,
         capacity_observed_at=existing.capacity_observed_at if existing is not None else None,
         usage_observed_at=existing.usage_observed_at if existing is not None else None,
         confidence=0.7 if errors else 1.0,

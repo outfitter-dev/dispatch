@@ -343,8 +343,8 @@ config-scope filters also work for future mesh observations without changing
 the contract. The default host is `local`; use `--all-hosts` to inspect every
 observed machine.
 
-Claude refresh uses only `claude auth status --json` and `claude agents
---json`. It persists a masked/fingerprinted account identity and aggregate
+Claude refresh uses only `claude auth status --json`, `claude --version`, and
+`claude agents --json`. It persists a masked/fingerprinted account identity and aggregate
 agent state counts, not the roster: cwd values, agent/session ids, agent names,
 raw command output, auth files, cookies, and tokens are excluded. Claude
 capacity windows remain absent until a supported statusline snapshot has been
