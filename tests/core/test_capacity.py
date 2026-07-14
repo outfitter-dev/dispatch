@@ -14,6 +14,8 @@ from outfitter.dispatch.client.models import (
     AccountRateLimitsResult,
     AccountReadResult,
     AccountUsageResult,
+    RateLimitResetCredit,
+    RateLimitResetCreditsSummary,
     RateLimitSnapshot,
     RateLimitWindow,
     SpendControlLimitSnapshot,
@@ -256,6 +258,69 @@ async def test_codex_plan_normalizes_whitespace_and_preserves_prior_value(
 
     assert refreshed.plan == "pro"
     assert pushed.plan == "pro"
+
+
+async def test_codex_window_and_credit_fields_are_bounded(store: Registry) -> None:
+    client = FakeLaneClient()
+    signed_in = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    client.account_result = signed_in
+    long_name = "x" * 150
+    client.rate_limits_result = AccountRateLimitsResult(
+        rate_limits=RateLimitSnapshot(
+            limit_id="codex",
+            limit_name="   ",
+            rate_limit_reached_type=long_name,
+            primary=RateLimitWindow(used_percent=10),
+        ),
+        rate_limit_reset_credits=RateLimitResetCreditsSummary(
+            available_count=2,
+            credits=[
+                RateLimitResetCredit(
+                    id="opaque-credit-1",
+                    reset_type=long_name,
+                    status="  available  ",
+                    granted_at=1783700000,
+                    title="   ",
+                ),
+                RateLimitResetCredit(
+                    id="opaque-credit-2",
+                    reset_type="   ",
+                    status="available",
+                    granted_at=1783700001,
+                    title="kept out",
+                ),
+            ],
+        ),
+    )
+
+    refreshed = await refresh_codex_capacity(make_ctx(store, client))
+    pushed = await observe_codex_rate_limits(
+        make_ctx(store),
+        RateLimitSnapshot(
+            limit_id="codex",
+            limit_name=long_name,
+            rate_limit_reached_type="   ",
+            primary=RateLimitWindow(used_percent=20),
+        ),
+    )
+
+    assert refreshed.windows
+    assert all(window.limit_name is None for window in refreshed.windows)
+    assert all(
+        window.reached_type is not None and len(window.reached_type) <= 120
+        for window in refreshed.windows
+    )
+    assert len(refreshed.reset_credits) == 1
+    assert refreshed.reset_credits[0].status == "available"
+    assert len(refreshed.reset_credits[0].reset_type) <= 120
+    assert refreshed.reset_credits[0].title is None
+    assert pushed.windows
+    assert all(
+        window.limit_name is not None and len(window.limit_name) <= 120 for window in pushed.windows
+    )
+    assert all(window.reached_type is None for window in pushed.windows)
 
 
 async def test_refresh_codex_capacity_preserves_observation_when_account_probe_fails(

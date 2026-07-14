@@ -49,6 +49,8 @@ def _windows(
     snapshot: RateLimitSnapshot, *, fallback_id: str, observed_at: str
 ) -> list[ProviderCapacityWindow]:
     limit_id = snapshot.limit_id or fallback_id
+    limit_name = _bounded(snapshot.limit_name)
+    reached_type = _bounded(snapshot.rate_limit_reached_type)
     result: list[ProviderCapacityWindow] = []
     for name, window in (("primary", snapshot.primary), ("secondary", snapshot.secondary)):
         if window is None:
@@ -57,13 +59,13 @@ def _windows(
         result.append(
             ProviderCapacityWindow(
                 limit_id=limit_id,
-                limit_name=snapshot.limit_name,
+                limit_name=limit_name,
                 window=name,
                 used_percent=used,
                 remaining_percent=100 - used,
                 duration_minutes=window.window_duration_mins,
                 resets_at=window.resets_at,
-                reached_type=snapshot.rate_limit_reached_type,
+                reached_type=reached_type,
                 observed_at=observed_at,
             )
         )
@@ -72,12 +74,12 @@ def _windows(
         result.append(
             ProviderCapacityWindow(
                 limit_id=limit_id,
-                limit_name=snapshot.limit_name,
+                limit_name=limit_name,
                 window="individual",
                 remaining_percent=remaining,
                 used_percent=100 - remaining,
                 resets_at=snapshot.individual_limit.resets_at,
-                reached_type=snapshot.rate_limit_reached_type,
+                reached_type=reached_type,
                 observed_at=observed_at,
             )
         )
@@ -116,11 +118,10 @@ def _push_limit_id(
     if existing is None:
         return "default"
 
-    if snapshot.limit_name is not None:
+    limit_name = _bounded(snapshot.limit_name)
+    if limit_name is not None:
         named_ids = {
-            window.limit_id
-            for window in existing.windows
-            if window.limit_name == snapshot.limit_name
+            window.limit_id for window in existing.windows if window.limit_name == limit_name
         }
         if len(named_ids) == 1:
             return named_ids.pop()
@@ -278,13 +279,15 @@ async def refresh_codex_capacity(ctx: Ctx) -> ProviderCapacityObservation:
         [
             ProviderResetCredit(
                 fingerprint=_fingerprint(credit.id),
-                reset_type=credit.reset_type,
-                status=credit.status,
+                reset_type=reset_type,
+                status=status,
                 granted_at=credit.granted_at,
                 expires_at=credit.expires_at,
                 title=_bounded(credit.title),
             )
             for credit in credit_rows
+            if (reset_type := _bounded(credit.reset_type)) is not None
+            and (status := _bounded(credit.status)) is not None
         ]
         if credits is not None
         else []
