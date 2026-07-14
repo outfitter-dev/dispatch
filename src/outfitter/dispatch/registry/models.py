@@ -197,8 +197,8 @@ class ProviderCapacityWindow(BaseModel):
     limit_id: str
     limit_name: str | None = None
     window: str
-    used_percent: int | None = Field(default=None, ge=0, le=100)
-    remaining_percent: int | None = Field(default=None, ge=0, le=100)
+    used_percent: float | None = Field(default=None, ge=0, le=100)
+    remaining_percent: float | None = Field(default=None, ge=0, le=100)
     duration_minutes: int | None = Field(default=None, ge=0)
     resets_at: int | None = None
     reached_type: str | None = None

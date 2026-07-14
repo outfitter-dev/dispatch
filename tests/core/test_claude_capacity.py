@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from outfitter.dispatch.core.claude_capacity import (
     refresh_claude_capacity,
     run_claude_command,
 )
+from outfitter.dispatch.core.claude_statusline import capture_claude_statusline
 from outfitter.dispatch.core.models import UsageInput
 from outfitter.dispatch.registry.models import (
     ProviderCapacityObservation,
@@ -579,6 +581,162 @@ async def test_refresh_claude_capacity_counts_blocked_agents_as_active_runtime(
     assert observation.runtime.active_agents == 1
     assert observation.runtime.state_counts == {"blocked": 1, "done": 1, "unknown": 2}
     assert "/private/leak" not in observation.model_dump_json()
+
+
+async def test_refresh_claude_capacity_merges_fresh_statusline_windows(
+    store: Registry, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path))
+    captured = capture_claude_statusline(
+        json.dumps(
+            {
+                "session_id": "private-session",
+                "version": "2.1.206",
+                "model": {"display_name": "Opus"},
+                "rate_limits": {
+                    "five_hour": {"used_percentage": 23.5, "resets_at": 1_738_425_600},
+                    "seven_day": {"used_percentage": 41.2, "resets_at": 1_738_857_600},
+                },
+            }
+        ).encode(),
+        observed_at=datetime.now(UTC).isoformat(),
+    )
+    responses = {
+        ("auth", "status", "--json"): ClaudeCommandResult(
+            0, json.dumps({"loggedIn": True, "authMethod": "claude.ai"})
+        ),
+        ("agents", "--json"): ClaudeCommandResult(0, "[]"),
+    }
+
+    async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
+        return _command_response(responses, args)
+
+    observation = await refresh_claude_capacity(make_ctx(store, FakeLaneClient()), run_command=run)
+
+    assert [(window.window, window.used_percent) for window in observation.windows] == [
+        ("five_hour", 23.5),
+        ("seven_day", 41.2),
+    ]
+    assert observation.capacity_observed_at == captured.observed_at
+    assert "claude statusline snapshot" in observation.source
+    assert "private-session" not in observation.model_dump_json()
+
+
+async def test_refresh_claude_capacity_preserves_capacity_when_statusline_has_no_limits(
+    store: Registry, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path))
+    await store.upsert_provider_capacity_observation(
+        ProviderCapacityObservation(
+            provider="claude",
+            state="ready",
+            windows=[
+                ProviderCapacityWindow(
+                    limit_id="claude.ai",
+                    window="five_hour",
+                    used_percent=30,
+                    observed_at="2026-07-14T12:00:00+00:00",
+                )
+            ],
+            observed_at="2026-07-14T12:00:00+00:00",
+            capacity_observed_at="2026-07-14T12:00:00+00:00",
+            confidence=1.0,
+        )
+    )
+    capture_claude_statusline(
+        json.dumps({"session_id": "private-session", "version": "2.1.206"}).encode(),
+        observed_at=datetime.now(UTC).isoformat(),
+    )
+    responses = {
+        ("auth", "status", "--json"): ClaudeCommandResult(
+            0, json.dumps({"loggedIn": True, "authMethod": "claude.ai"})
+        ),
+        ("agents", "--json"): ClaudeCommandResult(0, "[]"),
+    }
+
+    async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
+        return _command_response(responses, args)
+
+    observation = await refresh_claude_capacity(make_ctx(store, FakeLaneClient()), run_command=run)
+
+    assert observation.windows[0].used_percent == 30
+    assert observation.capacity_observed_at == "2026-07-14T12:00:00+00:00"
+    assert observation.error == "claude statusline rate limits unavailable"
+
+
+async def test_refresh_claude_capacity_does_not_replace_newer_capacity_snapshot(
+    store: Registry, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path))
+    await store.upsert_provider_capacity_observation(
+        ProviderCapacityObservation(
+            provider="claude",
+            state="ready",
+            windows=[
+                ProviderCapacityWindow(
+                    limit_id="claude.ai",
+                    window="seven_day",
+                    used_percent=30,
+                    observed_at="2026-07-14T12:00:00+00:00",
+                )
+            ],
+            observed_at="2026-07-14T12:00:00+00:00",
+            capacity_observed_at="2026-07-14T12:00:00+00:00",
+            confidence=1.0,
+        )
+    )
+    capture_claude_statusline(
+        json.dumps(
+            {"rate_limits": {"seven_day": {"used_percentage": 90, "resets_at": 1}}}
+        ).encode(),
+        observed_at="2020-01-01T00:00:00+00:00",
+    )
+    responses = {
+        ("auth", "status", "--json"): ClaudeCommandResult(
+            0, json.dumps({"loggedIn": True, "authMethod": "claude.ai"})
+        ),
+        ("agents", "--json"): ClaudeCommandResult(0, "[]"),
+    }
+
+    async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
+        return _command_response(responses, args)
+
+    observation = await refresh_claude_capacity(make_ctx(store, FakeLaneClient()), run_command=run)
+
+    assert observation.windows[0].used_percent == 30
+    assert observation.capacity_observed_at == "2026-07-14T12:00:00+00:00"
+    assert observation.error is None
+
+
+async def test_usage_marks_old_statusline_capacity_stale(
+    store: Registry, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path))
+    capture_claude_statusline(
+        json.dumps(
+            {"rate_limits": {"seven_day": {"used_percentage": 90, "resets_at": 1}}}
+        ).encode(),
+        observed_at="2020-01-01T00:00:00+00:00",
+    )
+    responses = {
+        ("auth", "status", "--json"): ClaudeCommandResult(
+            0, json.dumps({"loggedIn": True, "authMethod": "claude.ai"})
+        ),
+        ("agents", "--json"): ClaudeCommandResult(0, "[]"),
+    }
+
+    async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
+        return _command_response(responses, args)
+
+    await refresh_claude_capacity(make_ctx(store, FakeLaneClient()), run_command=run)
+    output = await handlers.usage(
+        UsageInput(refresh=False, provider="claude", stale_after_seconds=300),
+        make_ctx(store, FakeLaneClient()),
+    )
+
+    assert output.observations[0].stale is True
+    assert output.observations[0].capacity_freshness_seconds is not None
+    assert output.observations[0].windows[0].stale is True
 
 
 async def test_refresh_claude_capacity_marks_unparseable_version_partial(store: Registry) -> None:

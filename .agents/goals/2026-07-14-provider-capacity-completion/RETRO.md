@@ -12,12 +12,12 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 
 - Objective: Complete DIS-34's remaining Claude provider account/capacity foundation.
 - Completion horizon: `ready-pr`.
-- Authority used: Packet preparation, scoped Linear mutation, DIS-36 branch creation, implementation, tests, docs, and isolated read-only Claude smoke.
-- Outcome: DIS-36 implementation is locally green and cleanly reviewed, awaiting draft PR/CI.
-- Tracker/PR/source-control state: DIS-34 and DIS-36 In Progress; DIS-40 blocked by DIS-37; branch `dis-36-add-claude-account-and-runtime-probes`; no PR yet.
-- Verification: Existing baseline passed 75 tests; post-review focused provider/store suite passed 93 tests; `just check` passed 631 tests plus package build; isolated live Claude smoke passed.
-- Review state: Standing and privacy gates are clean at 5/5 with zero open P0-P2 after three rounds.
-- Remaining risks: Claude CLI drift and stale DIS-38 history wording.
+- Authority used: Packet preparation, scoped Linear mutation, Graphite branching/PR publication, implementation, tests, docs, and isolated read-only provider smokes.
+- Outcome: DIS-36 is ready at PR #88; DIS-37 is locally green and awaiting review.
+- Tracker/PR/source-control state: DIS-34/DIS-36/DIS-37 In Progress; PR #88 ready and CI-green; DIS-40 blocked by DIS-37; current stacked branch `dis-37-capture-claude-capacity-from-statusline-snapshots`.
+- Verification: DIS-36 full gate passed 631 tests; DIS-37 full gate passed 645 tests plus package build; both isolated smokes passed.
+- Review state: DIS-36 standing/privacy gates clean at 5/5; DIS-37 review not started.
+- Remaining risks: Statusline payload/schema drift, wrapper setup ergonomics, and stale DIS-38 history wording.
 
 ## Readiness
 
@@ -27,13 +27,14 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 - Verification blockers: none known.
 - Tracker blockers: DIS-38 contract needs reconciliation against ADR-0023.
 - Authority blockers: merge/release/publish and live Claude config mutation are not authorized.
-- Next action: push the DIS-36 draft PR and wait for CI.
+- Next action: commit and review DIS-37, then publish the second stack PR.
 
 ## Goal Amendments
 
 | Time | Change | Reason | Approved By |
 | --- | --- | --- | --- |
 | 2026-07-14 preparation | Sequence DIS-38 reconciliation after DIS-36/DIS-37 while allowing minimal model extensions in DIS-36 | Audit found most DIS-38 storage/surface work already shipped in PRs #79/#80 | Coordinator within existing scope |
+| 2026-07-14 DIS-37 | Fingerprint the statusline session id instead of retaining the raw id | Correlation is preserved while the packet privacy boundary excludes raw session identifiers from disk and usage output | Coordinator within existing scope; divergence to be documented on DIS-37 |
 
 ## Execution Log
 
@@ -82,6 +83,15 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 - Blockers: None.
 ```
 
+```text
+2026-07-14 execution - DIS-37 statusline capacity capture
+- Changed: Added an opt-in standalone stdin helper, bounded normalized snapshot schema, atomic owner-only writes beneath DISPATCH_HOME, decimal Claude windows, monotonic merge into provider observations, stale rendering, and manual non-clobbering wrapper docs.
+- Verified: Focused statusline/provider/store suite 107 passed; surface suite 58 passed; just check 645 passed; wheel/sdist build passed; isolated capture-to-usage smoke returned both windows and excluded raw session/path/model identifiers.
+- Result: Supported Claude.ai five-hour/seven-day capacity is available without editing Claude settings or calling the private OAuth endpoint; missing limits and older snapshots do not erase newer capacity.
+- Next: Commit, standing and targeted atomicity/privacy reviews, draft PR, and CI.
+- Blockers: Review pending.
+```
+
 ## Review Log
 
 | Round | Scope | Report | Score | State | Open P0-P2 | Notes |
@@ -110,6 +120,10 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | `uv run pytest tests/core/test_claude_capacity.py tests/core/test_capacity.py tests/registry/test_store.py -q` | Post-review provider/store behavior | passed | 93 passed. |
 | `uv run pytest tests/surfaces/test_derive_cli.py tests/surfaces/test_derive_mcp.py tests/surfaces/test_mcp_routing.py tests/surfaces/test_parity.py -q` | Post-review derived CLI/MCP parity | passed | 58 passed. |
 | `just check` | Post-review full repository and package gate | passed | Ruff, format, strict mypy, 631 tests, sdist/wheel, package contents. |
+| `uv run pytest tests/core/test_claude_statusline.py tests/core/test_claude_capacity.py tests/core/test_capacity.py tests/registry/test_store.py -q` | DIS-37 capture/merge/provider behavior | passed | 107 passed. |
+| `uv run pytest tests/surfaces/test_derive_cli.py tests/surfaces/test_derive_mcp.py tests/surfaces/test_mcp_routing.py tests/surfaces/test_parity.py -q` | DIS-37 derived CLI/MCP parity | passed | 58 passed. |
+| `just check` | DIS-37 full repository and package gate | passed | Ruff, format, strict mypy, 645 tests, sdist/wheel, package contents. |
+| isolated `dispatch-claude-statusline` to `dispatch usage --provider claude --json` | DIS-37 end-to-end privacy/freshness smoke | passed | Decimal five-hour/seven-day windows fresh; raw session, cwd, transcript, and model id absent; temporary daemon/home removed after plugin-clone cleanup race. |
 
 ## Prompt / Goal Alignment
 
@@ -123,8 +137,8 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | Item | State | Notes |
 | --- | --- | --- |
 | DIS-34 | In Progress | Assigned to Matt; Codex children done and Claude sequence active. |
-| DIS-36 | In Progress | Assigned to Matt; implementation locally green on issue branch. |
-| DIS-37 | Backlog | Second stacked branch. |
+| DIS-36 | In Progress | PR #88 ready for review; CI/CodeQL green; 5/5 standing and privacy review gates. |
+| DIS-37 | In Progress | Assigned to Matt; second stacked branch locally green and awaiting review. |
 | DIS-38 | Backlog | Substantially shipped; reconcile remaining fields/TTL and stale history criterion. |
 | DIS-40 | Backlog, blocked by DIS-37 | Explicitly deferred private endpoint spike until supported statusline evidence exists. |
 

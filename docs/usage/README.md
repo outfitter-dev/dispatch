@@ -14,6 +14,7 @@ Install the CLI from PyPI:
 uv tool install outfitter-dispatch
 dispatch --help
 dispatchd --help
+command -v dispatch-claude-statusline
 dispatch doctor
 ```
 
@@ -24,8 +25,9 @@ uv tool upgrade outfitter-dispatch
 uv tool uninstall outfitter-dispatch
 ```
 
-The PyPI package installs the `dispatch` and `dispatchd` commands, including
-the `dispatch mcp` entrypoint. It also ships read-only copies of the first-party
+The PyPI package installs `dispatch`, `dispatchd`, and the opt-in
+`dispatch-claude-statusline` capture helper, including the `dispatch mcp`
+entrypoint. It also ships read-only copies of the first-party
 `dispatch` and `dm` skills plus the local plugin bundle under the installed
 `outfitter.dispatch.assets` package. Edit source assets in this repository under
 `skills/` and `plugins/dispatch/`; installed copies are for setup and inspection.
@@ -344,13 +346,50 @@ the contract. The default host is `local`; use `--all-hosts` to inspect every
 observed machine.
 
 Claude refresh uses only `claude auth status --json`, `claude --version`, and
-`claude agents --json`. It persists a masked/fingerprinted account identity and aggregate
-agent state counts, not the roster: cwd values, agent/session ids, agent names,
+`claude agents --json`. It persists a masked/fingerprinted account identity and
+aggregate agent state counts, not the roster: cwd values, agent/session ids, agent names,
 raw command output, auth files, cookies, and tokens are excluded. Claude
 capacity windows remain absent until a supported statusline snapshot has been
 captured; account/runtime state can still be `ready` without capacity data.
 Dispatch does not run `claude daemon status` because its free-form output
 includes local paths and operational detail unnecessary for this inventory.
+
+### Capture Claude capacity from a statusline
+
+Claude Code sends supported subscriber rate-limit fields to statusline commands
+after the first API response in a Pro/Max session. Dispatch provides a narrow
+stdin capture helper:
+
+```bash
+dispatch-claude-statusline
+```
+
+The helper emits no statusline text. It atomically writes only a bounded,
+normalized snapshot to
+`$DISPATCH_HOME/providers/claude/statusline.json` (default
+`~/.dispatch/providers/claude/statusline.json`): capture time, Claude Code
+version, a fingerprint of the session id, bounded model label, and the
+`five_hour`/`seven_day` percentages and reset times. Raw stdin, cwd, transcript
+path, model id, and raw session id are never retained. Missing `rate_limits` is
+recorded as unavailable because the field is absent before the first API
+response and may be absent for non-subscriber sessions.
+
+Dispatch never edits `~/.claude/settings.json`. To opt in without replacing an
+existing statusline, create a wrapper you control that feeds the same JSON to
+both commands:
+
+```bash
+#!/bin/sh
+input="$(cat)"
+printf '%s' "$input" | dispatch-claude-statusline
+printf '%s' "$input" | "$HOME/.claude/existing-statusline.sh"
+```
+
+Then manually point Claude Code's `statusLine.command` at that wrapper. If no
+statusline exists yet, the wrapper can render any text you prefer after the
+capture call. A fresh snapshot is merged into `dispatch usage`; a missing or
+stale snapshot never erases the last valid capacity windows. The undocumented
+`/api/oauth/usage` endpoint is intentionally not used.
 
 States are explicit: `ready`, `partial`, `signed_out`, `disabled`,
 `unsupported`, and `unavailable`. `stale` is separate from state and is computed

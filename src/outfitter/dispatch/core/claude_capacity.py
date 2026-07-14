@@ -9,9 +9,14 @@ import re
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import cast
 
 from outfitter.dispatch.contracts.context import Ctx
+from outfitter.dispatch.core.claude_statusline import (
+    read_claude_statusline_snapshot,
+    statusline_capacity_windows,
+)
 from outfitter.dispatch.registry.models import (
     ProviderCapacityObservation,
     ProviderRuntimeSummary,
@@ -290,6 +295,27 @@ async def refresh_claude_capacity(
             runtime_error = "claude agents returned invalid JSON"
     if runtime_error is not None:
         errors.append(runtime_error)
+    windows = existing.windows if existing is not None else []
+    capacity_observed_at = existing.capacity_observed_at if existing is not None else None
+    statusline = await asyncio.to_thread(read_claude_statusline_snapshot)
+    statusline_source: str | None = None
+    if statusline is not None:
+        statusline_source = "claude statusline snapshot"
+        captured_windows = statusline_capacity_windows(statusline)
+        if captured_windows:
+            existing_capacity_at = (
+                datetime.fromisoformat(capacity_observed_at)
+                if capacity_observed_at is not None
+                else None
+            )
+            snapshot_at = datetime.fromisoformat(statusline.observed_at)
+            if existing_capacity_at is None or snapshot_at > existing_capacity_at:
+                windows = captured_windows
+                capacity_observed_at = statusline.observed_at
+                if cli_version is None:
+                    cli_version = statusline.claude_code_version
+        else:
+            errors.append("claude statusline rate limits unavailable")
     email = auth.get("email")
     org_id = auth.get("orgId")
     organization = auth.get("orgName")
@@ -297,6 +323,8 @@ async def refresh_claude_capacity(
     for name in ("claude auth status --json", "claude --version", "claude agents --json"):
         if name not in source:
             source.append(name)
+    if statusline_source is not None and statusline_source not in source:
+        source.append(statusline_source)
     observation = ProviderCapacityObservation(
         provider="claude",
         state="partial" if errors else "ready",
@@ -311,7 +339,7 @@ async def refresh_claude_capacity(
         plan=_bounded(auth.get("subscriptionType")),
         requires_auth=not bool(auth.get("loggedIn")),
         runtime=runtime,
-        windows=existing.windows if existing is not None else [],
+        windows=windows,
         reset_credits_available=existing.reset_credits_available if existing is not None else None,
         reset_credits=existing.reset_credits if existing is not None else [],
         usage_summary=existing.usage_summary if existing is not None else None,
@@ -322,7 +350,7 @@ async def refresh_claude_capacity(
         observed_at=observed_at,
         account_observed_at=observed_at,
         runtime_observed_at=runtime_observed_at,
-        capacity_observed_at=existing.capacity_observed_at if existing is not None else None,
+        capacity_observed_at=capacity_observed_at,
         usage_observed_at=existing.usage_observed_at if existing is not None else None,
         confidence=0.7 if errors else 1.0,
         error="; ".join(errors) if errors else None,
