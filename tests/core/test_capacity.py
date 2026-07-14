@@ -379,6 +379,23 @@ async def test_codex_normalizes_account_type(store: Registry) -> None:
     assert fallback.account_type == "unknown"
 
 
+async def test_codex_email_masking_cannot_exceed_persisted_label_bound(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    signed_in = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    assert signed_in.account is not None
+    client.account_result = signed_in.model_copy(
+        update={"account": signed_in.account.model_copy(update={"email": f"a@{'x' * 252}"})}
+    )
+
+    observation = await refresh_codex_capacity(make_ctx(store, client))
+
+    assert observation.account_label == "redacted"
+
+
 async def test_refresh_codex_capacity_preserves_observation_when_account_probe_fails(
     store: Registry,
 ) -> None:

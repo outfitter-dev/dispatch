@@ -118,6 +118,31 @@ async def test_refresh_claude_capacity_normalizes_account_and_runtime_without_ro
     assert observation.account_observed_at == observation.observed_at
     assert observation.runtime_observed_at == observation.observed_at
     assert observation.capacity_observed_at is None
+
+
+async def test_claude_email_masking_cannot_exceed_persisted_label_bound(
+    store: Registry,
+) -> None:
+    responses = {
+        ("auth", "status", "--json"): ClaudeCommandResult(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "loggedIn": True,
+                    "authMethod": "claude.ai",
+                    "email": f"a@{'x' * 252}",
+                }
+            ),
+        ),
+        ("agents", "--json"): ClaudeCommandResult(returncode=0, stdout="[]"),
+    }
+
+    async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
+        return _command_response(responses, args)
+
+    observation = await refresh_claude_capacity(make_ctx(store, FakeLaneClient()), run_command=run)
+
+    assert observation.account_label == "redacted"
     payload = observation.model_dump_json()
     for secret in (
         "agent@example.com",

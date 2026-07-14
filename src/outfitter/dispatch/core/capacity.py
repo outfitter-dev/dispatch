@@ -33,7 +33,8 @@ def _masked_email(value: str) -> str:
     local, separator, domain = value.strip().partition("@")
     if not separator or not local or not domain:
         return "redacted"
-    return f"{local[0]}***@{domain.lower()}"
+    masked = f"{local[0]}***@{domain.lower()}"
+    return masked if len(masked) <= 254 else "redacted"
 
 
 def _bounded(value: str | None, limit: int = 120) -> str | None:
