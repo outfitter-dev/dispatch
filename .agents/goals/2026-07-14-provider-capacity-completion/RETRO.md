@@ -15,7 +15,7 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 - Authority used: Packet preparation, scoped Linear mutation, Graphite branching/PR publication, implementation, tests, docs, and isolated read-only provider smokes.
 - Outcome: DIS-36, DIS-37, and DIS-38 are implemented as a three-PR Graphite stack (#88, #89, #90); the latest DIS-38 local findings are fixed and awaiting exact-head rechecks.
 - Tracker/PR/source-control state: DIS-34/DIS-36/DIS-37/DIS-38 In Progress; PRs #88/#89/#90 linked; DIS-40 remains blocked by DIS-37; current stacked branch `dis-38-store-normalized-provider-observations-for-mesh-heartbeats`.
-- Verification: latest full gate passed 684 tests with 17 intentional deselections plus sdist/wheel/package checks; focused provider suite passed 146; both isolated provider smokes passed.
+- Verification: latest full gate passed 689 tests with 17 intentional deselections plus sdist/wheel/package checks; focused provider suite passed 151; both isolated provider smokes passed.
 - Review state: the latest standing and targeted findings are fixed locally with regression coverage; final exact-head standing, targeted, CI, and Cursor rechecks remain pending.
 - Remaining risks: Claude statusline schema drift, manual wrapper setup ergonomics, and future mesh transport/node identity remain outside this ready-PR horizon.
 
@@ -182,6 +182,15 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 - Blockers: Final exact-head local and remote re-review pending.
 ```
 
+```text
+2026-07-14 execution - DIS-38 complete push-state preservation follow-up
+- Changed: A capacity push now preserves state, confidence, and error for every existing Codex observation state; only a push with no prior row synthesizes partial/0.8/generic account-history context.
+- Verified: Parameterized coverage spans ready, partial, signed_out, unsupported, unavailable, and disabled; focused provider suite 151 passed; just check 689 passed with 17 deselected; wheel/sdist/package checks passed.
+- Result: Independent capacity evidence cannot contradict the latest account/config state while still advancing capacity facts and freshness.
+- Next: Commit and push, repeat exact-head standing/targeted and remote gates, then finalize the retro.
+- Blockers: Final exact-head local and remote re-review pending.
+```
+
 ## Review Log
 
 | Round | Scope | Report | Score | State | Open P0-P2 | Notes |
@@ -223,6 +232,9 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | 8 | Observation/privacy push-matching closure | `tmp/reviews/observation/dis-38-round-8.json` | 5/5 | clean | 0 | Whitespace-id name matching, ambiguous default behavior, account type bounding, privacy, and persistence verified. |
 | 8 | Standing DIS-38 masking recheck | `tmp/reviews/standing/dis-38-round-8.json` | 4/5 | changes requested | 1 | Restore raw-secret assertions to the secret-bearing Claude fixture and make the long-email test prove its own privacy/persistence contract. |
 | remote | Cursor Bugbot delayed sweep on PR #90 | GitHub review threads `discussion_r3582599761` and `discussion_r3582599768` | not scored | changes requested | 2 | Bound reset-credit details at 100 and preserve unavailable/unsupported account state across capacity pushes. |
+| 9 | Observation/privacy Cursor closure | `tmp/reviews/observation/dis-38-round-9.json` | 2/5 | changes requested | 3 | Snapshot review captured the two delayed Cursor findings plus the misplaced Claude privacy assertions before their successor fixes. |
+| 9 | Standing DIS-38 state-truth review | `tmp/reviews/standing/dis-38-round-9.json` | 3/5 | changes requested | 1 | Preserve signed_out and disabled, not only unavailable/unsupported, when a capacity push updates an existing observation. |
+| 10 | Observation/privacy truth closure | `tmp/reviews/observation/dis-38-round-10.json` | 5/5 | clean | 0 | Reset-credit cap, unavailable/unsupported push truth, meaningful Claude privacy coverage, and prior invariants verified. |
 
 ## Verification Log
 
@@ -248,8 +260,8 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | `just check` | DIS-37 second-review full repository and package gate | passed | Ruff, format, strict mypy, 651 tests, sdist/wheel, package contents. |
 | `uv run pytest tests/core/test_claude_statusline.py tests/core/test_claude_capacity.py tests/core/test_capacity.py tests/registry/test_store.py -q` | DIS-37 empty-registry unavailable-cache behavior | passed | 114 passed. |
 | `just check` | DIS-37 third-review full repository and package gate | passed | Ruff, format, strict mypy, 652 tests, sdist/wheel, package contents. |
-| `uv run pytest tests/core/test_provider_observation_contract.py tests/core/test_capacity.py tests/core/test_claude_capacity.py tests/core/test_claude_statusline.py tests/registry/test_store.py -q` | Latest DIS-38 provider contract behavior | passed | 146 passed. |
-| `just check` | Latest DIS-38 full repository and package gate | passed | Ruff, format, strict mypy, 684 tests, 17 deselected, sdist/wheel, package contents. |
+| `uv run pytest tests/core/test_provider_observation_contract.py tests/core/test_capacity.py tests/core/test_claude_capacity.py tests/core/test_claude_statusline.py tests/registry/test_store.py -q` | Latest DIS-38 provider contract behavior | passed | 151 passed. |
+| `just check` | Latest DIS-38 full repository and package gate | passed | Ruff, format, strict mypy, 689 tests, 17 deselected, sdist/wheel, package contents. |
 | GitHub Actions | PRs #88/#89/#90 | pending | #88/#89 remain green; #90 exact successor head has not yet been pushed/rechecked. |
 | Cursor Bugbot | PR #90 discussion `r3582515796` | changes requested | Raw Codex window/reset text skipped adapter-boundary normalization; fixed locally with regression coverage, final rerun pending. |
 
@@ -279,7 +291,7 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 - Completion proof: pending final review of the latest DIS-38 adapter fixes.
 - Prompt length: 3,857/4,000 characters.
 - Review report summary: DIS-36 privacy and DIS-37 statusline gates are clean; DIS-38 standing/observation findings are fixed locally and await exact-head rechecks, so prior changes-requested reports remain open evidence.
-- Verification summary: 684 passed, 17 deselected; package artifacts built and checked; focused latest suite 146 passed; isolated Claude account/statusline smokes passed.
+- Verification summary: 689 passed, 17 deselected; package artifacts built and checked; focused latest suite 151 passed; isolated Claude account/statusline smokes passed.
 - Forbidden actions audit: no secrets retained; no private Claude endpoints, live Claude settings mutation, merge, release, or publish performed.
 - Remaining P3s / risks: supported statusline schema may drift; wrapper installation is manual; mesh transport/node identity and routing remain deferred.
 - Final transcript proof: Linear DIS-36/DIS-37/DIS-38 and PRs #88/#89/#90 carry implementation, divergence, review, and verification evidence.

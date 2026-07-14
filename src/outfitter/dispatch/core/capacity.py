@@ -384,26 +384,17 @@ async def observe_codex_rate_limits(
     source = list(existing.source) if existing is not None else []
     if "account/rateLimits/updated" not in source:
         source.append("account/rateLimits/updated")
-    prior_is_usable = existing is not None and existing.state in {"ready", "partial"}
-    prior_keeps_failure = existing is not None and existing.state in {
-        "unavailable",
-        "unsupported",
-    }
     observation = (
         existing.model_copy(
             update={
-                "state": existing.state if prior_is_usable or prior_keeps_failure else "partial",
+                "state": existing.state,
                 "windows": (retained + replacement)[-64:],
                 "source": source,
                 "observed_at": observed_at,
                 "capacity_observed_at": observed_at,
                 "plan": _bounded(snapshot.plan_type) or existing.plan,
-                "confidence": (
-                    existing.confidence if prior_keeps_failure else max(existing.confidence, 0.8)
-                ),
-                "error": existing.error
-                if prior_is_usable or prior_keeps_failure
-                else "account and historical usage not observed",
+                "confidence": existing.confidence,
+                "error": existing.error,
             }
         )
         if existing is not None

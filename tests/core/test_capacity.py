@@ -25,7 +25,7 @@ from outfitter.dispatch.core.capacity import observe_codex_rate_limits, refresh_
 from outfitter.dispatch.core.models import UsageInput
 from outfitter.dispatch.core.reactor import Reactor
 from outfitter.dispatch.core.triggers import TriggerRunner
-from outfitter.dispatch.registry.models import ProviderCapacityWindow
+from outfitter.dispatch.registry.models import ProviderCapacityState, ProviderCapacityWindow
 from outfitter.dispatch.registry.store import Registry
 from tests.fakes import FakeLaneClient, make_ctx
 from tests.fixtures import load_json
@@ -562,14 +562,18 @@ async def test_rate_limit_notification_preserves_component_freshness(store: Regi
     assert after_secondary.observed_at == before_secondary.observed_at
 
 
-async def test_rate_limit_notification_preserves_unavailable_account_state(
-    store: Registry,
+@pytest.mark.parametrize(
+    "state",
+    ["ready", "partial", "signed_out", "unsupported", "unavailable", "disabled"],
+)
+async def test_rate_limit_notification_preserves_existing_account_state(
+    store: Registry, state: ProviderCapacityState
 ) -> None:
     existing = provider_capacity_observation().model_copy(
         update={
-            "state": "unavailable",
+            "state": state,
             "confidence": 0.4,
-            "error": "account/read unavailable",
+            "error": "account state remains authoritative",
         }
     )
     await store.upsert_provider_capacity_observation(existing)
@@ -582,9 +586,9 @@ async def test_rate_limit_notification_preserves_unavailable_account_state(
         ),
     )
 
-    assert observation.state == "unavailable"
+    assert observation.state == state
     assert observation.confidence == 0.4
-    assert observation.error == "account/read unavailable"
+    assert observation.error == "account state remains authoritative"
     assert observation.capacity_observed_at == observation.observed_at
     assert observation.windows[0].used_percent == 20
 
