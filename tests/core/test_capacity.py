@@ -312,15 +312,49 @@ async def test_codex_window_and_credit_fields_are_bounded(store: Registry) -> No
         window.reached_type is not None and len(window.reached_type) <= 120
         for window in refreshed.windows
     )
-    assert len(refreshed.reset_credits) == 1
+    assert len(refreshed.reset_credits) == 2
     assert refreshed.reset_credits[0].status == "available"
     assert len(refreshed.reset_credits[0].reset_type) <= 120
     assert refreshed.reset_credits[0].title is None
+    assert refreshed.reset_credits[1].reset_type == "unknown"
     assert pushed.windows
     assert all(
         window.limit_name is not None and len(window.limit_name) <= 120 for window in pushed.windows
     )
     assert all(window.reached_type is None for window in pushed.windows)
+
+
+async def test_codex_normalizes_bounded_window_and_reset_credit_text(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.rate_limits_result = AccountRateLimitsResult(
+        rate_limits=RateLimitSnapshot(
+            limit_id="   ",
+            limit_name="x" * 121,
+            primary=RateLimitWindow(used_percent=10),
+            rate_limit_reached_type="   ",
+        ),
+        rate_limit_reset_credits=RateLimitResetCreditsSummary(
+            available_count=1,
+            credits=[
+                RateLimitResetCredit(
+                    id="opaque-credit",
+                    reset_type="x" * 121,
+                    status="   ",
+                    granted_at=1,
+                )
+            ],
+        ),
+    )
+
+    observation = await refresh_codex_capacity(make_ctx(store, client))
+
+    [window] = observation.windows
+    assert window.limit_id == "default"
+    assert window.limit_name == "x" * 119 + "…"
+    assert window.reached_type is None
+    [credit] = observation.reset_credits
+    assert credit.reset_type == "x" * 119 + "…"
+    assert credit.status == "unknown"
 
 
 async def test_refresh_codex_capacity_preserves_observation_when_account_probe_fails(

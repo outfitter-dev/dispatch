@@ -48,7 +48,7 @@ def _bounded(value: str | None, limit: int = 120) -> str | None:
 def _windows(
     snapshot: RateLimitSnapshot, *, fallback_id: str, observed_at: str
 ) -> list[ProviderCapacityWindow]:
-    limit_id = snapshot.limit_id or fallback_id
+    limit_id = _bounded(snapshot.limit_id) or _bounded(fallback_id) or "default"
     limit_name = _bounded(snapshot.limit_name)
     reached_type = _bounded(snapshot.rate_limit_reached_type)
     result: list[ProviderCapacityWindow] = []
@@ -279,15 +279,13 @@ async def refresh_codex_capacity(ctx: Ctx) -> ProviderCapacityObservation:
         [
             ProviderResetCredit(
                 fingerprint=_fingerprint(credit.id),
-                reset_type=reset_type,
-                status=status,
+                reset_type=_bounded(credit.reset_type) or "unknown",
+                status=_bounded(credit.status) or "unknown",
                 granted_at=credit.granted_at,
                 expires_at=credit.expires_at,
                 title=_bounded(credit.title),
             )
             for credit in credit_rows
-            if (reset_type := _bounded(credit.reset_type)) is not None
-            and (status := _bounded(credit.status)) is not None
         ]
         if credits is not None
         else []
