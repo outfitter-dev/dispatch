@@ -31,6 +31,8 @@ uv run python spikes/claude/assert_probe.py aggregate-fixture \
   spikes/claude/fixtures/aggregate-receipts.jsonl
 uv run python spikes/claude/assert_probe.py negative-fixtures \
   spikes/claude/fixtures/negative
+uv run python spikes/claude/assert_probe.py receipt \
+  spikes/claude/fixtures/tool-only-processing.jsonl
 jq -cf spikes/claude/sanitize_stream.jq \
   spikes/claude/fixtures/whitespace-block-raw.jsonl |
   jq -e '.blocking_decision == true and (has("stdout") | not)'

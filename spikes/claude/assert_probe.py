@@ -30,6 +30,13 @@ def assert_hooks_paired(events: list[Event]) -> None:
     assert started == finished
 
 
+def is_provider_activity(event: Event) -> bool:
+    return event.get("type") == "assistant" or (
+        event.get("subtype") == "hook_started"
+        and event.get("hook_event") in {"PreToolUse", "PostToolUse"}
+    )
+
+
 def assert_processing(events: list[Event]) -> None:
     assert_hooks_paired(events)
     prompt = responses(events, "UserPromptSubmit")
@@ -38,14 +45,14 @@ def assert_processing(events: list[Event]) -> None:
     assert not any(event.get("blocking_decision") for event in prompt)
     prompt_settled = max(event["sequence"] for event in prompt)
     assert any(
-        event.get("type") == "assistant" and event["sequence"] > prompt_settled for event in events
+        is_provider_activity(event) and event["sequence"] > prompt_settled for event in events
     )
 
 
 def assert_completed(events: list[Event]) -> None:
     assert_processing(events)
-    assistants = [event["sequence"] for event in events if event.get("type") == "assistant"]
-    last_activity = max(assistants)
+    activities = [event["sequence"] for event in events if is_provider_activity(event)]
+    last_activity = max(activities)
     final_stops = [
         event for event in responses(events, "Stop") if event["sequence"] > last_activity
     ]
