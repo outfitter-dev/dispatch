@@ -107,6 +107,13 @@ Refs: `.agents/goals/2026-07-15-claude-control-plane-research/REFS.md`
 - Independent `claude agents --json` returned exact short/full identities and states for the blocked rows represented in the cockpit. The UI additionally retained completed rows and the quick-reply footer.
 - This raises confidence in the roster-identity plus guarded-VT composition. It does not prove current-screen revision, atomic/redacted writes, concurrent-human exclusion, Claude receipts, or one shared history; DIS-54 remains blocked and all mutation tests stay disposable-only.
 
+2026-07-15 - Primary Agent View/zmx contract reconciliation
+- Official Agent View docs confirm Space-to-peek and Enter-to-reply through the selected session; an ordinary failed/unreachable reply is saved as the session's next prompt, and replying/peeking/attaching to an exited row restarts it from saved state. `claude agents --json --all` supplies completed rows; filter text is navigation only. Agent View remains a research preview.
+- Tagged zmx 0.6.0 source confirms `history` serializes the in-memory Ghostty terminal as plain/VT/HTML, PTY output broadcasts to multiple clients, nonleader user input can transfer the resize leader, `send` receives no daemon ACK, the 256 KiB queue drops new overflow bytes without sender error, and debug logs retain raw input with no disable switch.
+- Architecture consequence: Claude's supervisor owns reply delivery/queueing, zmx owns guarded UI state/input only, and hooks plus owned activity own receipts. Any possible payload-plus-Enter write remains non-retryable because the supervisor may already have accepted or queued it.
+- Ran the new isolated `zmx_snapshot_probe.sh` against `fake_repl.sh` only. Plain, VT, and HTML renders each contained the synthetic target-owned markers; the isolated session and logs were removed. Agent View launch/mutation stayed frozen.
+- Hosted Codex review found the repository-gated tests were included in the sdist without their spike assets. Added `/spikes/claude` to the sdist and required every exercised helper/fixture in package-content validation.
+
 2026-07-15 - Aggregate receipts, transport/security review, and preflight milestone
 - Transport review round 1 scored 2/5 with 3 P1 and 4 P2 findings. Security/product review round 1 scored 2/5 with 4 P1 and 2 P2 findings. Reports are local scratch under `tmp/reviews/transport/round-1.json` and `tmp/reviews/security-product/round-1.json`.
 - Blocking sibling prompt hook: the Dispatch observer completed, a sibling `UserPromptSubmit` hook exited 2, no assistant activity or Stop occurred, yet the CLI emitted result subtype success. Therefore observer success and result success do not prove acceptance; processing requires aggregate prompt-hook settlement plus owned-stream assistant/tool activity.
@@ -151,6 +158,7 @@ Refs: `.agents/goals/2026-07-15-claude-control-plane-research/REFS.md`
 | cockpit-1 | Is there a target-safe path into the existing Agent View owner? | Read Crew quick-reply implementation, committed live lessons, and current identity guards | Crew commit `4a24fdb` + dirty worktree | Yes as UI composition: exact row, detail/title, return/reselect, literal-space reply, reply-prompt guard, submit | medium-high; direct Dispatch/zmx proof pending | cockpit plan fixture + provider plan | read-only; no process launch |
 | cockpit-2 | Can installed zmx safely implement the cockpit route? | Compare zmx 0.6.0 help/source/fake failures to Crew console needs | zmx 0.6.0 | No as shipped: lacks revisioned screen, named/conditional atomic input, reliable ACK/errors, and redaction | high | transport table + DIS-54 | no zmx mutation |
 | cockpit-3 | Can zmx expose enough Agent View screen state to implement guarded reads? | Coordinator-supplied read-only `list`, `history --vt`, plain history, process relation, and independent Agent View JSON roster from an existing user-owned cockpit | zmx 0.6.0 / Claude 2.1.210 | Yes for architectural reads: alternate-screen structure and parseable text join to exact roster identities; no mutation/receipt proof | medium-high | research + provider plan + DIS-54 | coordinator made no input/mutation; research worker did not access session |
+| zmx-2 | Does `history` serialize the disposable current internal terminal in all supported formats? | Isolated private zmx session hosting `fake_repl.sh`; assert synthetic markers in plain/VT/HTML | zmx 0.6.0 | Yes for internal terminal/history serialization; no bounded viewport revision or receipt | high | `zmx_snapshot_probe.sh` + tagged source | isolated session/log root removed |
 
 ## Source / Version Ledger
 
@@ -243,6 +251,7 @@ No row remains pending or unknown. Full semantics and citations are in
 | 7 | transport | `tmp/reviews/transport/round-6.json` (replaced with post-correction report) | 5/5 | clean | 0 | cockpit target/lease/revision ordering, receipts, exclusive fallback, loss recovery; zero P0-P3 |
 | 4 | security/product | `tmp/reviews/security-product/round-3.json` (replaced with post-correction report) | 5/5 | clean | 0 | settings isolation, privacy/redaction, same-UID trust, human race and cleanup; zero P0-P3 |
 | 4 | full stack | `tmp/reviews/full-stack/round-3.json` (replaced with post-correction report) | 5/5 | clean | 0 | persistent-owner completion, exact blocked projection, recursive content-free gate, boundary alignment; zero P0-P3 |
+| 5 | full stack | scoped primary-contract/sdist review | 5/5 | clean after one probe fix | 0 | explicit-CR disposable zmx plain/VT/HTML proof, supervisor/zmx/receipt ownership, sdist assets; zero P0-P3 |
 
 ## Verification Log
 
@@ -261,6 +270,8 @@ No row remains pending or unknown. Full semantics and citations are in
 | post-correction focused fixtures | `uv run pytest -q tests/fixtures/test_claude_research.py` | passed | 4 tests: blocker policy/negative evidence, guarded cockpit plan, persistent-owner completion without process exit, exact current preflight nonce |
 | post-correction packet doctor | goal packet plus three current clean reports | passed | prompt 3,994/4,000; all reports 5/5 clean with zero P0-P2 |
 | post-correction repository gate | `just check` | passed | Ruff, format, strict mypy, 696 passed/17 deselected, wheel/sdist and contents after hosted preflight-nonce fix |
+| disposable zmx snapshot | `spikes/claude/zmx_snapshot_probe.sh` | passed | private synthetic target; plain/VT/HTML structural markers; session/log cleanup |
+| sdist research assets | `uv build` + `scripts/check_package_contents.py` | passed | exercised Claude helpers and fixtures now ship beside sdist tests |
 | hosted CI and PR threads | PR #92 | pending | final external closure gate after push |
 
 ## Prompt / Goal Alignment

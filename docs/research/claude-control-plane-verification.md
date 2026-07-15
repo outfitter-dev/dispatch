@@ -142,10 +142,23 @@ identity. A background session can move from its launch cwd into a Claude-manage
 worktree before editing, so effective cwd is observed state, not immutable launch
 metadata.
 
-Human reply is supported through Agent View peek or an attached TUI. Shell
-management is limited to list, attach, logs, stop/kill, respawn, and rm. `logs`
-is diagnostic output. `rm` removes the Agent View entry/worktree but deliberately
-leaves the local conversation resumable; it is not archive or transcript delete.
+The official [Agent View documentation](https://code.claude.com/docs/en/agent-view)
+defines the provider-owned reply path: `Space` opens peek and `Enter` sends its
+reply to the selected session. If an ordinary reply cannot reach the background
+service or send fails, Claude saves it as that session's next prompt; `!` Bash
+replies are the documented exception. A row whose process exited remains
+peekable/replyable/attachable and the supervisor restarts it from saved state.
+These are supervisor product semantics, not a public reply RPC or a Dispatch
+receipt.
+
+`claude agents --json --all` includes completed rows and supplies the roster
+fields used for identity. UI filters (`a:<name>`, `s:<state>`, PR/URL) may help
+navigation but never replace the full UUID join. Agent View is a research preview
+whose UI/shortcuts can change, so the adapter must pin/version-gate every guard.
+Shell management remains limited to list, attach, logs, stop/kill, respawn, and
+rm. `logs` is diagnostic output. `rm` removes the Agent View entry/worktree but
+deliberately leaves the local conversation resumable; it is not archive or
+transcript delete.
 
 ### Ownership and coexistence
 
@@ -249,10 +262,20 @@ The isolated fake target confirmed the primary-source contract:
 - after session kill, raw send printed an unresponsive error and exited zero;
 - successful send therefore proves neither target acceptance nor completion.
 
-zmx also maintains a 256 KiB PTY input queue whose overflow can drop input
-without sender notification. Version 0.6.0 logs PTY input bytes at debug level
-and does not expose a disable/redaction control. Private modes reduce who can
-read the logs but do not satisfy a no-raw-prompt-retention boundary.
+[zmx v0.6.0 source](https://github.com/neurosnap/zmx/blob/v0.6.0/src/main.zig)
+keeps one Ghostty terminal and PTY per session and broadcasts PTY output to all
+clients. `history` serializes that internal terminal as plain text, VT, or HTML;
+it is stronger than a file-tail read but still lacks a bounded viewport and
+monotonic snapshot generation. Input from a nonleader client can transfer the
+leader, which alone controls PTY/Ghostty resize, so automation needs a lease
+around both revision and leader state.
+
+`send` writes an `Input` IPC frame and returns without a daemon acknowledgement.
+The daemon queues at most 256 KiB; overflow drops the new payload without an error
+to the sender, though a local warning is logged. Version 0.6.0 fixes logging at
+debug, records raw PTY input bytes (potentially twice), and exposes file modes but
+no disable/redaction control. Private modes reduce who can read the logs but do
+not satisfy a no-raw-prompt-retention boundary.
 
 ## Lifecycle state machine
 

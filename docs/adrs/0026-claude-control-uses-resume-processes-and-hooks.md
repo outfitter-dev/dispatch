@@ -46,11 +46,18 @@ step. Make payload plus Enter one atomic acknowledged transaction; abort before
 payload if human input changes the VT revision. zmx is terminal transport only,
 not Claude receipt authority.
 
+Claude's documented Agent View behavior owns reply delivery and queuing: Space
+opens peek, Enter submits to the selected session, an ordinary undeliverable
+reply is saved as its next prompt, and replying to an exited row restarts the
+session through the supervisor. zmx owns only the guarded screen/input path into
+that supported UI. Hooks plus owned provider activity remain receipt authority.
+
 This preferred route remains blocked behind DIS-54 until a pinned zmx build
-provides bounded current-screen snapshots, named keys, monotonic revisions,
-conditional atomic input ACK, nonzero loss/overflow errors, and complete input-log
-redaction, and until Agent View exposes aggregate hook settlement plus owned
-provider activity without raw transcript reads.
+provides bounded current-screen snapshots with viewport/generation metadata,
+named keys, monotonic revisions, conditional atomic input ACK, nonzero
+loss/overflow errors, complete input-log redaction, and an automation/human lease
+that fences zmx leader changes, and until Agent View exposes aggregate hook
+settlement plus owned provider activity without raw transcript reads.
 
 Implement the verified headless fallback around one exclusive persistent
 `claude --print --input-format stream-json --output-format stream-json` owner.

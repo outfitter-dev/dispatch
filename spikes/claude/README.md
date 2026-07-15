@@ -400,6 +400,13 @@ printf '%s\n' "$lost_output" | rg -qi 'unresponsive|not found'
 test "$(zmx list --short | rg -c "^$zmx_name$" || true)" -eq 0
 ```
 
+Run `spikes/claude/zmx_snapshot_probe.sh` for the separate content-free read
+probe. It starts only `fake_repl.sh` in a unique private zmx directory, requires
+the same synthetic acceptance/completion markers in zmx's plain, VT, and HTML
+renderings, removes the session/log directory, and emits booleans only. This
+confirms that v0.6.0 serializes its internal terminal in all three formats; it
+does not prove a bounded revisioned viewport, safe input, or Claude receipts.
+
 ## Process-group fixture
 
 Run `uv run python spikes/claude/process_group_probe.py`. It starts

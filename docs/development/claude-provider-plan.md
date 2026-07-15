@@ -214,6 +214,14 @@ UI sequence against real Agent View:
 7. require ordinary Claude acceptance/completion receipts before changing the
    Dispatch attempt state.
 
+The [official Agent View contract](https://code.claude.com/docs/en/agent-view)
+assigns delivery/queueing to Claude's supervisor: Space opens peek, Enter replies
+to that session, an ordinary failed/unreachable reply is retained as its next
+prompt, and an exited row can be replied to and restarted from saved state.
+Therefore a possible payload-plus-Enter write is never automatically retried: it
+may already be live or supervisor-queued. zmx is the guarded UI substrate; hooks
+and owned provider activity decide Dispatch acceptance/completion.
+
 This is UI automation, not an RPC. The console provider must fail closed at every
 screen guard and must never fall back to unguarded raw send.
 
@@ -243,13 +251,15 @@ receipt gates below.
 Required zmx work, all gated by DIS-54:
 
 - render a bounded current VT snapshot separately from scrollback/history;
-- assign a monotonic revision to every screen/input state change;
+- assign viewport metadata and a monotonic generation/revision to every
+  screen/input state change;
 - support named keys and text without shell encoding;
 - serialize and acknowledge a conditional multi-input transaction only after the
   bytes enter the PTY queue;
 - make payload plus Enter one atomic batch;
-- expose a short exclusive automation lease; any human input increments revision
-  and causes a stale transaction to abort before payload;
+- expose a short exclusive automation lease across revision and zmx leader state;
+  any human input or leader transfer increments revision and causes a stale
+  transaction to abort before payload;
 - disable raw-input logging by construction and test that logs contain no input
   bytes;
 - return nonzero typed loss/overflow errors; never silently drop queued input.
