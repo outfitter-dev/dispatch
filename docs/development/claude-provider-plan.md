@@ -1,16 +1,26 @@
 # Claude provider implementation plan
 
-Status: implementation-ready research plan; no production implementation  
+Status: implementation-ready provider boundary and headless fallback;
+Crew-derived Agent View cockpit is the preferred coexistence candidate, blocked
+on DIS-54 zmx/receipt proof; no production implementation
 Evidence: [`claude-control-plane-verification.md`](../research/claude-control-plane-verification.md)  
 Decision: [ADR-0026](../adrs/0026-claude-control-uses-resume-processes-and-hooks.md)
 
 ## Outcome
 
 Add Claude as a fixed second execution provider beneath Dispatch's authored ops.
-The first implementation is a vertical walking skeleton: one Claude lane can be
-created with a chosen UUID, receive serialized messages through fresh resume
-processes, persist structurally corroborated processing/completion receipts, be interrupted,
-survive a Dispatch restart, and receive another message.
+The preferred coexistence target preserves Claude's Agent View background owner
+and drives its guarded quick-reply UI through one persistent zmx-hosted
+`claude agents` cockpit. Humans attach/detach from that same cockpit; Dispatch
+never creates a competing resume owner. zmx supplies terminal snapshots and
+input transactions only. Claude hooks plus owned provider activity remain the
+receipt authority.
+
+Installed zmx 0.6.0 cannot implement that safely as shipped, and Agent View has
+not exposed the required aggregate receipt stream. DIS-54 must add/prove the
+missing primitives before transparent control is enabled. The verified fallback
+is an exclusive persistent stream-JSON headless owner with explicit human
+handoff; it is not seamless coexistence.
 
 This is not a provider plugin framework. Codex remains the default. Unsupported
 Claude semantics are visible capabilities and typed errors, never Codex fallback
@@ -22,22 +32,37 @@ or renamed approximations.
   with Codex and Claude runtimes.
 - Codex continues to use the existing single App Server client. Claude does not
   go through App Server.
-- Claude v1 transport is one serialized `claude --resume <uuid> --print`
-  subprocess per turn. New sessions use `--session-id <uuid>`.
-- Per-invocation `--settings` adds Dispatch hooks without modifying global or
-  project settings. Existing hooks continue to run.
+- Claude's verified headless transport is one exclusive persistent `claude
+  --print` process using stream-JSON input/output. New owners use `--session-id
+  <uuid>`; replacement owners use `--resume <uuid>` only after proven prior-owner
+  exit.
+- Print-mode per-owner `--settings` adds Dispatch hooks without modifying global
+  or project settings. Existing hooks continue to run. Agent View launch did
+  mutate the user settings file despite isolation flags, so automated Agent View
+  launch remains disabled pending a product isolation contract.
 - A `UserPromptSubmit` observation is only submission evidence. Processing is
-  confirmed after every prompt hook settles successfully and the owned CLI
-  stream emits the first assistant/tool activity for that prompt.
+  confirmed after every sibling reaches terminal settlement, none blocks, and
+  the owned CLI stream emits the first assistant/tool activity for that prompt.
+  Terminal nonblocking failures degrade hook health; a missing/nonterminal
+  sibling leaves acceptance unknown.
 - A `Stop` observation is only a stop-cycle boundary. Completion requires the
   final Stop hook set to settle without a continuation, followed by a terminal
-  success result and clean owned-process exit with no intervening activity.
+  per-message success result with no intervening activity. The persistent owner
+  may remain healthy for the next frame.
 - Process/stdin success, stream replay, result text, Agent View logs, PTY
   scrollback, and zmx status are diagnostic only.
-- zmx 0.6.0 is not a production transport because raw send is unacknowledged and
-  raw PTY input is always logged.
-- Agent View is an optional human supervision/attention surface, not the first
-  programmatic send transport.
+- zmx 0.6.0 is not production-ready because raw send is unacknowledged and raw
+  PTY input is always logged. DIS-54 may extend/pin zmx as the persistent cockpit
+  substrate; zmx never becomes Claude receipt authority.
+- Agent View quick reply is the preferred human-coexistent send candidate. Crew
+  proves the guarded UI route, but Dispatch still needs pinned zmx and receipt
+  evidence before capability projection can mark it supported.
+- Ordinary TUI plus external resume and persistent stream owner plus external
+  resume both split history. Agent View rejects resume while its owner lives.
+  Dispatch must never start a second owner merely because the first is idle.
+- Human attach to the Agent View cockpit shares the same background owner. A
+  short revision-checked UI transaction must abort if concurrent human input
+  changes the cockpit state. Headless fallback uses exclusive handoff instead.
 - One provider session has one in-flight Dispatch send. Concurrency is rejected
   or queued before spawning a process.
 - Raw hook payloads and transcripts are not retained by default.
@@ -157,18 +182,75 @@ Each capability reports:
 }
 ```
 
-Reasons are a bounded enum such as `provider_unsupported`, `attached_read_only`,
-`message_in_flight`, `needs_attention`, `hook_unhealthy`, `stale_identity`, or
-`provider_unavailable`. CLI and MCP derive the same structure.
+Reasons are a bounded enum such as `provider_unsupported`, `transport_blocked`,
+  `attached_read_only`, `message_in_flight`, `needs_attention`, `hook_unhealthy`,
+  `stale_identity`, `owner_conflict`, `human_owner`, or `provider_unavailable`.
+CLI and MCP derive the same structure. A research status of `blocked` projects as
+`supported=false`, `available_now=false`, `reason=transport_blocked`; it is not
+collapsed into `provider_unsupported`.
 
 Initial Claude capabilities:
 
-- supported: new, owned resume/send, interrupt, live watch, permission observation,
-  structured print output;
+- supported headlessly: new, exclusive stream send, post-exit resume, interrupt,
+  live watch, permission observation, structured print output;
 - composed/product-gated: queue, interject, history/tail, rename, user-input
-  response, rich input, remote control;
+  response, rich input, remote control, explicit human ownership handoff;
 - unsupported: active-turn steer, Codex context injection, archive/restore,
-  Codex goal mutation.
+  Codex goal mutation; seamless attached-human plus Dispatch send is blocked.
+
+## Agent View cockpit candidate
+
+Crew's `sendClaudeAgentsMessage` and operating lessons establish the target-safe
+UI sequence against real Agent View:
+
+1. resolve the shared cockpit and the target from `claude agents --json` using
+   the full session UUID as authority;
+2. normalize to the Agent View home/list and locate one exact visible row;
+3. select it, open detail, and verify the intended title/session identity;
+4. return to home and verify the same row remains selected;
+5. send a literal text space—not a named Space key—and wait for both `❯ reply`
+   and `space to close`;
+6. atomically type the payload and Enter;
+7. require ordinary Claude acceptance/completion receipts before changing the
+   Dispatch attempt state.
+
+This is UI automation, not an RPC. The console provider must fail closed at every
+screen guard and must never fall back to unguarded raw send.
+
+Dispatch should replace Crew's cmux primitives with a pinned zmx cockpit API:
+
+```python
+class CockpitTransport(Protocol):
+    async def snapshot(self) -> VtSnapshot: ...  # text + monotonic revision
+    async def transact(
+        self,
+        *,
+        expected_revision: int,
+        inputs: Sequence[NamedKey | TextInput],
+        lease: UILease,
+    ) -> InputAck: ...
+    async def attach_info(self) -> AttachState: ...
+```
+
+Required zmx work, all gated by DIS-54:
+
+- render a bounded current VT snapshot separately from scrollback/history;
+- assign a monotonic revision to every screen/input state change;
+- support named keys and text without shell encoding;
+- serialize and acknowledge a conditional multi-input transaction only after the
+  bytes enter the PTY queue;
+- make payload plus Enter one atomic batch;
+- expose a short exclusive automation lease; any human input increments revision
+  and causes a stale transaction to abort before payload;
+- disable raw-input logging by construction and test that logs contain no input
+  bytes;
+- return nonzero typed loss/overflow errors; never silently drop queued input.
+
+An input ACK proves only the cockpit write. It never proves Claude acceptance or
+completion. The installed Agent View path does not yet expose every sibling-hook
+outcome plus owned assistant/tool activity as a content-free stream, so DIS-54
+must settle that receipt source. Transcript mtime/size and Agent View state are
+corroboration only; raw transcript content remains out of bounds.
 
 ## Identity and registry migration
 
@@ -245,15 +327,18 @@ For `new --provider claude`:
 3. persist lane/runtime/message state before spawning;
 4. create an owner-only runtime directory and generated settings file atomically;
 5. spawn with `asyncio.create_subprocess_exec`, an explicit argv, bounded env,
-   cwd, `--session-id UUID`, `--print`, stream JSON, Haiku/default model as
-   configured, permission mode, and settings path;
-6. write one framed message and close stdin;
+   cwd, `--session-id UUID`, `--print`, stream-JSON input/output,
+   Haiku/default model as configured, permission mode, and settings path;
+6. keep stdin open under the daemon's exclusive owner lease and write one framed
+   message only after preflight;
 7. stream bounded structural and hook-settlement events while the Dispatch hook
    provides content-minimized observations;
-8. record process exit independently from provider receipt state.
+8. after per-message completion, retain the healthy owner for the next serialized
+   frame; record owner exit independently from provider receipt state.
 
-For later sends, replace `--session-id` with `--resume UUID`. Never use
-`--continue` for a managed lane.
+Later sends use the same owner. Only after the exact prior owner is proven gone
+may recovery start a new process with `--resume UUID`. Never use `--continue` for
+a managed lane and never use resume as a second writer.
 
 ### Process ownership
 
@@ -276,6 +361,11 @@ is gone after escalation. The opt-in Claude scenario repeats the descendant chec
 against a tool-spawning turn before this provider can be enabled.
 
 Do not signal Agent View supervisor processes or user-launched Claude sessions.
+An idle prompt does not release ownership. A human TUI request must enter an
+explicit handoff state, stop the Dispatch owner, and block all Dispatch sends
+until the operator explicitly returns ownership. Because an unmanaged ordinary
+TUI has no content-free liveness/ownership primitive, hand-back cannot be inferred
+from UUID or transcript state.
 
 ### Restart recovery
 
@@ -285,19 +375,37 @@ App Server supervisor. Claude recovery:
 1. invalidates event nonces from prior daemon generations;
 2. reconciles persisted pid/pgid/start identity without reading transcripts;
 3. marks missing prior processes stopped;
-4. preserves session UUIDs as resumable;
-5. keeps `processing_started` without completion as `completion_unknown`;
-6. resets queued claims but drains only after the runtime is confirmed ready;
-7. never replays an ambiguous message automatically.
+4. classifies a still-live prior Dispatch stream process whose pipes were lost as
+   `detached_owned_generation`, never ready or reattachable;
+5. if that detached identity is exact, terminate its verified process group,
+   preserve any active attempt as indeterminate, await exit, and only then allow
+   a replacement resume owner; if identity cannot be proven, quarantine the lane
+   and do not signal or resume;
+6. preserves session UUIDs as resumable;
+7. keeps `processing_started` without completion as `completion_unknown`;
+8. resets queued claims but drains only after the runtime is confirmed ready;
+9. never replays an ambiguous message automatically.
 
-The next explicit send resumes the UUID in a new generation. A future optional
-Agent View adapter may inspect metadata, but it is not required for v1 recovery.
+Only after recovery proves the old owner gone may the next explicit send resume
+the UUID in a new generation. If an ordinary human owner may exist, state is
+`owner_unknown` and send remains blocked until explicit reconciliation. Agent
+View metadata can prove its background owner exists, but cannot authorize a
+Dispatch send into that owner unless the guarded cockpit capability is enabled.
+
+For the cockpit route, daemon or zmx loss does not stop Agent View background
+workers. Restart the cockpit, re-resolve the full session UUID from the roster,
+and repeat every home/detail/return/reply guard. A UI transaction lost after any
+possible write is `frame_maybe_written`; never replay it. If a human attach or
+keystroke changes the VT revision, abort before payload and return an
+operator-visible `cockpit_changed` conflict.
 
 ## Hook/settings strategy
 
-Generate one owner-only settings file per active process. `--settings` merges it
-above user/project/local settings without modifying them. The file adds command
-hooks for the minimum receipt/attention set:
+For each Dispatch-owned print/stream owner, generate one owner-only settings file.
+On that surface, `--settings` merged it above user/project/local settings without
+modifying them. This observation does not extend to Agent View: its isolated
+launch mutated user settings, so automated Agent View launch remains disabled.
+The print-owner file adds command hooks for the minimum receipt/attention set:
 
 - `SessionStart`, `SessionEnd`;
 - `UserPromptSubmit`;
@@ -394,7 +502,9 @@ Correlation:
 5. each `Stop`/`StopFailure` joins on session + generation + `prompt_id`; repeated
    Stop deliveries are retained as ordered occurrences, not deduplicated;
 6. completion requires the last Stop occurrence, settlement of all hooks for that
-   cycle without a continuation, terminal success result, and clean process exit;
+   cycle without a continuation, and terminal per-message success result; an
+   unexpected owner exit is a separate transport fact, while orderly shutdown
+   must still exit cleanly;
 7. late events from dead generations are retained as diagnostic provider events
    but cannot mutate the active attempt.
 
@@ -421,7 +531,8 @@ scrollback as readiness.
 
 Claude is ready only when:
 
-- no active owned process/attempt exists;
+- exactly one healthy exclusive Dispatch owner exists and no message attempt is
+  active, or a replacement owner can be started after proven prior-owner exit;
 - the last attempt is terminal;
 - no unresolved permission/elicitation attention blocks the lane;
 - hook health meets policy;
@@ -492,7 +603,7 @@ It is not active-turn steer and is not atomic.
 | --- | --- |
 | `new` | supported with explicit UUID and first serialized print process |
 | `attach` | unmanaged ordinary-session attach is unsupported in v1: no content-free metadata validation primitive was proven; human Agent View attach is a separate verified UI |
-| `send` | supported, one process/attempt, durable request ID |
+| `send` | supported headlessly through one exclusive persistent owner; durable request ID; blocked during human/unknown ownership |
 | `steer` | typed unsupported |
 | `queue` | Dispatch-owned, provider-confirmed readiness |
 | `interject` | disabled until product semantics accepted |
@@ -545,8 +656,9 @@ permission_mode = "default"
 hook_timeout_seconds = 5
 ```
 
-Do not add zmx, Remote Control, transcript ingestion, retry, or concurrency knobs
-until a shipping feature needs them.
+DIS-54 may add a pinned zmx cockpit block only after the required VT transaction
+and redaction contract exists. Do not add raw-send, Remote Control, transcript
+ingestion, retry, or general concurrency knobs.
 
 ## Fixtures and tests
 
@@ -574,10 +686,21 @@ deterministic hook calls/events for:
 - permission/elicitation attention;
 - duplicate and late events;
 - process crash before frame write, after possible write, and after processing starts;
-- daemon restart and generation change.
+- daemon restart and generation change;
+- daemon crash leaving a live detached owned generation: exact-group terminate,
+  indeterminate receipt preservation, quarantine on identity mismatch;
+- guarded cockpit home/detail/return/reply transitions, stale-revision abort, and
+  atomic payload-plus-Enter ACK with no raw-input logging.
 
 Use shared provider contract tests against Codex and Claude fakes where semantics
 overlap. Do not bloat the existing App Server fake with Claude methods.
+
+The capability projection test must load
+`spikes/claude/fixtures/capability-policy.json` and report human coexistence as
+`supported=false`, `available_now=false`, `reason=transport_blocked` while its
+research status is `blocked`. Changing that policy requires one pinned live
+artifact that satisfies every one-shared-history check below; separate successful
+resume and attach observations cannot override the shared blocker fixture.
 
 ### Sanitized provider fixtures
 
@@ -591,24 +714,49 @@ A small temp-repo scenario, outside `just check`, uses Haiku and proves:
 
 - explicit UUID and first message;
 - structurally corroborated processing/completion;
-- fresh-process second message;
+- second message through the same persistent owner;
 - interrupt and resume;
 - duplicate request ID does not create a second provider prompt;
-- process cleanup and unchanged live settings hashes.
+- a second resume owner is rejected while the persistent owner lease is live;
+- an ordinary attached TUI coexistence probe is expected to demonstrate the
+  pinned-version split-brain blocker until DIS-54 supplies a safe replacement;
+- process cleanup inside the contained temp profile/settings home; do not open or
+  hash live global/project settings.
+
+The Agent View cockpit scenario remains disabled in this research run because an
+isolated launch mutated the user settings file. DIS-54 may run it only after a
+contained profile/settings-home mechanism makes global mutation structurally
+impossible. It must
+cover human zmx attach/detach, guarded quick reply to one disposable background
+owner, hook/owned-activity receipts, concurrent-human revision abort, cockpit
+restart without worker resume, and cleanup.
 
 Never use existing sessions or global/project settings.
 
+The coexistence gate must not pass from separate “resume completed” and “TUI
+remained alive” facts. It passes only when one shared history proves that:
+
+1. the already attached human observes the Dispatch turn;
+2. the next human turn includes that Dispatch turn in context;
+3. the next Dispatch turn includes the human turn in context; and
+4. all three turns retain ordered aggregate acceptance/completion receipts.
+
+Until that gate passes on the pinned transport/version, capability projection
+reports human coexistence as blocked and the adapter must not claim transparent
+control of existing human sessions.
+
 ## Rollout
 
-1. Ship migration/capability/runtime skeleton behind `providers.claude.enabled =
-   false`.
+1. Ship no enabled Claude transport until DIS-54 resolves or product explicitly
+   accepts exclusive headless handoff; any migration/capability/runtime skeleton
+   remains behind `providers.claude.enabled = false`.
 2. Dogfood with opt-in temp projects and inspect only normalized events.
 3. Enable explicit `new --provider claude`; keep Codex default.
 4. Add provider status/doctor output: executable/version, hook health, active
    process count, last receipt, and cleanup drift—never auth or transcript data.
 5. Expand queue/attention only after receipt/restart telemetry is stable.
-6. Consider Agent View response, Remote Control, rich input, or zmx only through
-   separate evidence/decision issues.
+6. Enable the Agent View cockpit only after its zmx and receipt gates pass;
+   consider Remote Control, rich input, or a worker-TUI zmx mode separately.
 
 Rollback disables new Claude launches, stops only Dispatch-owned active Claude
 processes, preserves provider identities/receipts, and leaves sessions resumable
@@ -617,13 +765,33 @@ new provider columns.
 
 ## Ordered implementation slices
 
-### 1. DIS-50 — Vertical Claude walking skeleton
+### 1. DIS-54 — Safe human-coexistent Claude transport decision
+
+- preserve an already attached human client's coherent view while Dispatch sends;
+- require owned-stream activity plus aggregate hook settlement for acceptance;
+- require repeated Stop-cycle reduction plus terminal per-message result;
+- prove interrupt/restart and explicit owner handoff without transcript reads;
+- implement/prove the preferred persistent zmx-hosted Agent View cockpit using
+  Crew's target-safe quick-reply sequence;
+- add revisioned VT snapshot, named keys, serialized conditional input ACK,
+  atomic payload-plus-Enter, automation lease, nonzero loss/overflow, and complete
+  input-log redaction to a pinned zmx build;
+- keep zmx receipts transport-only and prove aggregate Claude hook settlement
+  plus owned provider activity without raw transcript reads.
+
+Current state: preferred design identified but blocked on implementation/proof.
+Crew proves guarded Agent View quick reply through cmux; Dispatch has not proven
+the route through zmx or the required receipt stream. Claude 2.1.210 ordinary
+resume splits history, and zmx 0.6.0 fails transaction, receipt, and privacy
+requirements. DIS-54 blocks enablement and DIS-50 acceptance.
+
+### 2. DIS-50 — Vertical Claude walking skeleton
 
 One PR, not an abstraction-only precursor:
 
 - lane identity migration and provider-qualified routing;
 - fixed provider manager with existing Codex adapter;
-- Claude runtime launch/resume process owner;
+- exclusive persistent stream runtime plus post-exit resume owner;
 - generated per-process settings and content-minimizing hook with preflight;
 - persisted random request ID and monotonic processing/completion receipt;
 - `new`, `send`, `stop`, watch/status, restart recovery, second message;
@@ -633,37 +801,38 @@ One PR, not an abstraction-only precursor:
 Acceptance: a daemon restart between completed turns preserves the UUID; a later
 send completes; duplicate client request ID creates no second Claude prompt;
 SIGINT proves transport interruption; after processing starts, provider completion
-remains unknown until later evidence or explicit audited abandonment. No raw
-content is retained.
+remains unknown until later evidence or explicit audited abandonment. A human
+attach follows the DIS-54 transport or an explicitly accepted exclusive handoff;
+Dispatch never resumes behind an attached human. No raw content is retained.
 
-### 2. DIS-51 — Receipt and reducer hardening
+### 3. DIS-51 — Receipt and reducer hardening
 
 - attempt table/generation fencing;
 - hook health, StopFailure, late/out-of-order events;
 - provider-scoped dedupe and receipt monotonicity migration;
 - bounded provider event fixtures and privacy tests.
 
-### 3. DIS-52 — Queue and attention
+### 4. DIS-52 — Queue and attention
 
 - provider-confirmed readiness;
 - single in-flight claim and restart reset;
 - permission/notification/elicitation inbox mapping;
 - uncertain-attempt operator recovery.
 
-### 4. DIS-53 — Agent View metadata discovery
+### 5. DIS-53 — Agent View metadata discovery
 
 - provider-qualified unmanaged discovery metadata only;
 - Agent View metadata adapter if still supported;
 - authority policy and effective-worktree metadata;
 - stale identity/cwd recovery.
 
-### 5. DIS-49 — Provider-selection shorthand surfaces
+### 6. DIS-49 — Provider-selection shorthand surfaces
 
 - derived `--claude` / `--codex` CLI shorthands over DIS-50's canonical enum;
 - config/presets/schema/help/completion/skill docs;
 - parity and conflict tests.
 
-### 6. Optional capabilities
+### 7. Optional capabilities
 
 Separate decisions/issues for structured output, history retention, programmatic
 attention response, rename, rich input, Remote Control, and any future zmx build.
@@ -671,9 +840,11 @@ Unsupported operations remain explicit until their issue closes with evidence.
 
 ## Risks and non-goals
 
-Highest risks are wrong-provider routing, stale or same-UID-spoofed hooks, duplicate turns,
-receipt regression, raw-content retention, and accidental signalling of a user
-process. The first slice must test each boundary.
+Highest risks are split-brain ownership, wrong-provider routing, stale or
+same-UID-spoofed hooks, duplicate turns, receipt regression, raw-content
+retention, and accidental signalling of a user process. The first slice must
+test each boundary and cannot be enabled until DIS-54 is resolved or exclusive
+handoff is explicitly accepted.
 
 Non-goals: generalized provider plugins, production zmx, Remote Control server,
 mesh/SSH transport, global Claude settings installation, transcript indexing,

@@ -1,0 +1,15 @@
+{"sequence":1,"event":"target_resolved","full_session_id_verified":true,"roster_source":"claude_agents_json","selector":"synthetic-short-id"}
+{"sequence":2,"event":"home_verified","value":true,"snapshot_revision":10,"target_row_visible":true}
+{"sequence":3,"event":"lease_acquired","lease_id":"00000000-0000-4000-8000-000000000301","at_revision":10,"exclusive":true}
+{"sequence":4,"event":"input_ack","input":"named_key_down","expected_revision":10,"result_revision":11,"lease_id":"00000000-0000-4000-8000-000000000301","serialized":true,"raw_input_logged":false}
+{"sequence":5,"event":"input_ack","input":"named_key_enter","expected_revision":11,"result_revision":12,"lease_id":"00000000-0000-4000-8000-000000000301","serialized":true,"raw_input_logged":false}
+{"sequence":6,"event":"detail_identity_verified","value":true,"snapshot_revision":13,"full_session_id_verified":true,"title_verified":true}
+{"sequence":7,"event":"input_ack","input":"named_key_left","expected_revision":13,"result_revision":14,"lease_id":"00000000-0000-4000-8000-000000000301","serialized":true,"raw_input_logged":false}
+{"sequence":8,"event":"home_selection_reverified","value":true,"snapshot_revision":15,"full_session_id_verified":true}
+{"sequence":9,"event":"input_ack","input":"literal_space","expected_revision":15,"result_revision":16,"lease_id":"00000000-0000-4000-8000-000000000301","serialized":true,"raw_input_logged":false}
+{"sequence":10,"event":"reply_prompt_verified","value":true,"snapshot_revision":17,"input_mode":"quick_reply","target_identity_retained":true}
+{"sequence":11,"event":"input_ack","input":"message_submit","expected_revision":17,"result_revision":18,"lease_id":"00000000-0000-4000-8000-000000000301","serialized":true,"raw_input_logged":false,"atomic_batch":["payload","enter"],"payload_id":"00000000-0000-4000-8000-000000000201"}
+{"sequence":12,"event":"lease_released","lease_id":"00000000-0000-4000-8000-000000000301","at_revision":18}
+{"sequence":13,"event":"lease_acquired","lease_id":"00000000-0000-4000-8000-000000000302","at_revision":20,"exclusive":true}
+{"sequence":14,"event":"concurrent_human_revision_changed","lease_id":"00000000-0000-4000-8000-000000000302","expected_revision":20,"actual_revision":21,"lease_invalidated":true,"action":"abort_before_payload"}
+{"sequence":15,"event":"receipt_blocker","aggregate_hook_settlement":"unproven","owned_provider_activity":"unproven","capability":"blocked"}

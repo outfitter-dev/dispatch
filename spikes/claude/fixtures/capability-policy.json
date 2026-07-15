@@ -1,0 +1,12 @@
+{
+  "human_coexistence": {
+    "status": "blocked",
+    "supported": false,
+    "available_now": false,
+    "reason": "transport_blocked",
+    "negative_evidence": "coexistence-outcomes.jsonl",
+    "candidate": "agent-view-cockpit",
+    "candidate_plan": "agent-view-cockpit-plan.jsonl",
+    "positive_gate": "pinned-live-one-shared-history"
+  }
+}

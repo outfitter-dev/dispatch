@@ -7,12 +7,32 @@ Claude Agent SDK
 
 ## Verdict
 
-Dispatch can support durable, multi-turn Claude sessions without a persistent
-PTY. The smallest trustworthy transport is one owned, serialized
-`claude --resume <uuid> --print` subprocess per message. Dispatch chooses the
-UUID, supplies per-invocation settings, receives structured stream output, and
-combines its content-minimized hook with the owned CLI stream. No individual
-hook, process exit, or output text is acceptance or completion authority.
+Dispatch can support durable, multi-turn **headless** Claude sessions. For
+human-coexistent control, Crew supplies a concrete preferred design: keep the
+Agent View background owner intact, host one persistent `claude agents` cockpit
+in zmx, and drive Claude's own guarded quick-reply UI. zmx is the terminal/VT
+substrate, never the Claude receipt protocol.
+
+That route is not yet verified end to end for Dispatch. Installed zmx 0.6.0 lacks
+revisioned VT snapshots, named-key input, acknowledged/serialized conditional
+writes, and input-log redaction. Agent View also has not exposed aggregate
+sibling-hook settlement plus owned provider activity without raw transcript
+access. DIS-54 owns those blockers and the pinned live proof.
+
+Fresh `claude --resume <uuid> --print` can
+complete while an ordinary TUI remains attached, yet the two processes continue
+from different in-memory histories. The TUI did not display or inherit the
+external turn, and a later fresh resume saw the TUI branch but not the externally
+completed turn. This is split-brain continuity, not a shared session transport.
+
+The recommended fallback headless transport is one Dispatch-owned persistent
+print process using stream-JSON input/output, with exclusive ownership and the
+same aggregate hook receipts. It completed multiple serialized turns on one
+process. Concurrent external resume remained unsafe and invisible to the owner,
+so the runtime must reject or fence every second owner. A human handoff requires
+the Dispatch owner to exit before the TUI starts and an explicit hand-back after
+the TUI exits. It must not displace the Agent View cockpit candidate merely
+because it is simpler.
 
 The installed CLI proved this sequence:
 
@@ -20,22 +40,30 @@ The installed CLI proved this sequence:
 2. observe `UserPromptSubmit` with the same session UUID and a provider-generated
    `prompt_id`, then observe all prompt hooks settle and assistant/tool activity;
 3. observe one or more `Stop` cycles with the same `prompt_id`, settling the final
-   hook set before terminal result success and clean process exit;
-4. start a fresh process with `--resume <uuid>` and complete another message;
+   hook set before terminal per-message result success; require clean exit when
+   the owner process terminates;
+4. send a second message through the same persistent stream owner and complete
+   it; after owner loss, start one fresh `--resume <uuid>` owner;
 5. interrupt an active owned process with SIGINT (exit 130, no `Stop`), then
    resume the same UUID successfully;
 6. correlate concurrent completions by `prompt_id`, while also proving that
    concurrent order and duplicate suppression are not provider guarantees.
 
 Agent View separately proved durable supervisor ownership, attention metadata,
-human attach/reply, detach, stop, respawn, and cleanup. Its shell commands do
-not expose a non-interactive reply primitive, so it is a supervision surface,
-not Dispatch's first message transport.
+human attach/reply, detach, stop, respawn, and cleanup. A live background owner
+rejects fresh `--resume` with exit 1 even when idle and when human-attached; after
+the owner is stopped, resume succeeds. Its shell commands do not expose a
+non-interactive reply primitive, but its cockpit UI does expose guarded quick
+reply. Crew's current implementation normalizes to home, resolves a concrete row,
+opens detail and verifies title, returns and re-verifies selection, opens `❯ reply`
+with a literal-space text send, then types/submits. This is the candidate Dispatch
+send path once zmx and receipt gates are satisfied.
 
-zmx 0.6.0 can persist a PTY, but its raw send has no acknowledgement and can
+zmx 0.6.0 can persist the cockpit PTY, but its raw send has no acknowledgement and can
 return zero after a transport failure. Tagged source also shows that it always
-logs PTY input bytes in recoverable hexadecimal. It is excluded from the first
-implementation slice.
+logs PTY input bytes in recoverable hexadecimal. It is excluded as shipped, not
+rejected as an architecture substrate: DIS-54 may extend/pin it with the required
+VT, transaction, and redaction contract.
 
 ## Evidence rules
 
@@ -50,6 +78,13 @@ implementation slice.
   transcript paths, cwd, tool input/output, and raw transcripts were dropped.
 - Exit status, stream replay, zmx status, and terminal scrollback are never
   treated alone as Claude acceptance or completion receipts.
+- A disposable Agent View launch with explicit per-session settings, empty
+  setting sources, and an empty strict MCP config nevertheless changed the
+  already captured mtime/size/digest metadata of `~/.claude/settings.json` at
+  launch time. Its contents were not inspected or retained, and the file was not
+  restored or edited by the research. This product-side global mutation freezes
+  further Agent View launch probes in this run and is an additional integration
+  risk.
 
 ## Source and version ledger
 
@@ -63,6 +98,7 @@ implementation slice.
 | [Remote Control](https://code.claude.com/docs/en/remote-control) | 2026-07-15 / research preview | outbound Anthropic relay, local execution, multi-device input, reconnection, product constraints | documented |
 | [zmx docs](https://zmx.sh/) and [tagged source](https://github.com/neurosnap/zmx/tree/v0.6.0) | 0.6.0 | PTY ownership, raw send, no ACK, buffer/drop behavior, modes, input logging | primary source + fake target |
 | Installed help and probes in `spikes/claude/` | Claude Code 2.1.210 / zmx 0.6.0 | actual flags, event shapes, identity, lifecycle, interrupt, concurrency, failure, cleanup | observed |
+| Crew `sendClaudeAgentsMessage` and operating lessons | local worktree at `4a24fdb`; committed live quick-reply lesson plus current target-identity hardening | home/row/detail/return/reply guards; literal-space behavior; UI automation is not receipt | implementation + dogfood evidence; Dispatch/zmx proof pending |
 
 The packet's old `/docs/en/cli-reference` URL redirects; the current canonical
 CLI page is `/docs/en/cli-usage`.
@@ -78,9 +114,10 @@ responses, including exit/outcome, while the Dispatch hook independently sends
 content-minimized events to the daemon.
 
 The session UUID is available in the init/result stream and in every captured
-hook. `--session-id` chooses it for a new session. `--resume <uuid>` adds another
-turn from a fresh process. `--fork-session` creates a different UUID with copied
-history.
+hook. `--session-id` chooses it for a new session. `--resume <uuid>` can create a
+new owner after prior-owner exit; using it beside a live ordinary or stream owner
+is unsafe despite apparent success. `--fork-session` creates a different UUID
+with copied history.
 
 ### Agent View
 
@@ -109,6 +146,49 @@ management is limited to list, attach, logs, stop/kill, respawn, and rm. `logs`
 is diagnostic output. `rm` removes the Agent View entry/worktree but deliberately
 leaves the local conversation resumable; it is not archive or transcript delete.
 
+### Ownership and coexistence
+
+Disposable probes covered all supported ownership combinations without reading
+existing sessions:
+
+- **Ordinary TUI plus fresh resume:** the external process completed with normal
+  receipts while the TUI stayed attached, but no external output appeared in the
+  TUI. The next TUI turn reported that the external marker was absent. After the
+  TUI exited, a fresh resume saw the TUI turns and still did not see the external
+  marker. One earlier run also produced `StopFailure`/context-limit failure on the
+  first post-external TUI turn. Process liveness therefore does not imply coherent
+  shared history.
+- **Agent View background plus resume:** the live background pid remained the
+  owner after its turn reached `done/idle`; fresh resume failed with exit 1 and a
+  documented “currently running as a background agent” error. The same rejection
+  occurred while a human TUI was attached. Human input continued normally, and
+  resume succeeded only after explicit Agent View stop.
+- **Persistent stream owner plus resume:** two messages completed serially through
+  one stream owner. A concurrent fresh resume also returned success, but the
+  owner's next turn could not see the external marker. Persistent ownership fixes
+  per-turn startup and preserves headless continuity only when exclusive.
+
+Agent View quick reply is a real UI primitive into the existing background owner.
+Crew proves the guarded navigation shape and the critical literal-space behavior,
+while explicitly warning that UI typing is not delivery proof. Dispatch should
+host this cockpit in zmx so a human and automation observe one Agent View owner,
+then use Claude hooks/owned evidence—not zmx status or scrollback—for receipts.
+
+The installed pieces are still insufficient. zmx 0.6.0 provides no revisioned
+snapshot, conditional atomic input transaction, named keys, send ACK, or input-log
+redaction. Concurrent human keystrokes can invalidate selection between screen
+reads; a safe provider must abort on revision change and atomically submit payload
+plus Enter under a short UI transaction lease. Even after a PTY write ACK,
+acceptance remains blocked until aggregate prompt-hook settlement and owned
+provider activity can be corroborated without reading raw transcripts.
+
+The regression criterion is one coherent history, not two live processes. An
+acceptable future transport must prove that the attached human observes the
+Dispatch turn, the next human turn contains it in context, and the next Dispatch
+turn contains that human turn, all with ordered aggregate receipts. The checked-in
+coexistence fixture encodes the current negative outcomes so liveness cannot be
+mistaken for continuity.
+
 ### Hooks and receipt joins
 
 The observed minimum fields were:
@@ -127,13 +207,17 @@ The observed minimum fields were:
 `UserPromptSubmit` is submission evidence, not acceptance. A sibling prompt hook
 can exit 2 after the Dispatch observer succeeds; the CLI can still emit a success
 result without assistant activity or `Stop`. Processing is confirmed only after
-all prompt hooks settle successfully and the owned stream begins assistant/tool
-activity for the correlated prompt.
+every sibling prompt hook reaches terminal settlement, none blocks, and the owned
+stream begins assistant/tool activity for the correlated prompt. Terminal
+nonblocking exit-1/cancelled outcomes degrade hook health but do not erase that
+owned processing evidence; missing/nonterminal settlement leaves acceptance
+unknown.
 
 `Stop` joins to the same `prompt_id`, but is repeatable: a sibling Stop hook can
 continue the turn, producing later assistant activity and another Stop cycle.
 Completion requires the final Stop hook set to settle without continuation,
-followed by terminal result success and clean owned-process exit. It does not fire
+followed by terminal per-message result success. Clean process exit is required
+when an owner generation terminates, not for each message. `Stop` does not fire
 on user interrupt and does not prove background tasks or session crons quiescent.
 
 Per-invocation settings composed with existing settings: stream output showed
@@ -168,9 +252,10 @@ read the logs but do not satisfy a no-raw-prompt-retention boundary.
 ```mermaid
 stateDiagram-v2
     [*] --> Known: choose UUID and persist lane
-    Known --> Starting: spawn claude --session-id/--resume
-    Starting --> FrameNotWritten: preflight failed before stdin
-    Starting --> FrameMaybeWritten: stdin write began
+    Known --> StartingOwner: spawn claude --session-id/--resume only with exclusive ownership
+    StartingOwner --> OwnerReady: SessionStart preflight settles
+    StartingOwner --> FrameNotWritten: preflight failed before stdin
+    OwnerReady --> FrameMaybeWritten: stdin frame write began
     FrameMaybeWritten --> SubmittedObserved: Dispatch UserPromptSubmit observed
     SubmittedObserved --> ProcessingStarted: hooks settle without block and model/tool activity begins
     FrameMaybeWritten --> AcceptanceUnknown: transport or hook settlement lost
@@ -179,33 +264,36 @@ stateDiagram-v2
     NeedsAttention --> Running: supported human/provider response
     Running --> StopObserved: Stop with matching prompt_id
     StopObserved --> Running: settled sibling hook continues turn
-    StopObserved --> Completed: final hooks settle, result succeeds, process exits cleanly
+    StopObserved --> Completed: final hooks settle and per-message result succeeds
     Running --> CompletionUnknown: owned process lost or interrupted after processing began
     Running --> Failed: StopFailure or process failure
     AcceptanceUnknown --> Failed: explicit operator reconciliation
-    Completed --> Known: process exited; session UUID remains resumable
+    Completed --> OwnerReady: owner remains healthy for next serialized frame
+    OwnerReady --> Known: owner exits cleanly; session UUID remains resumable
     Failed --> Known: explicit recovery decision
 ```
 
-Only one `Starting` through terminal attempt may exist per session. A process
-generation and attempt ID prevent late hooks from a dead process from changing a
-new attempt.
+Only one owner and one nonterminal message attempt may exist per session. A
+process generation and attempt ID prevent late hooks from a dead process from
+changing a new attempt. An idle owner still owns the session.
 
 ## Capability matrix
 
 Every row is resolved. `Verified` may be a direct Claude primitive or a safe
 Dispatch composition; `product-decision` means the primitive exists but the
 cross-provider product semantics must be chosen; `unsupported` means the first
-adapter must return a typed capability error.
+adapter must return a typed capability error; `blocked` means the required
+capability has no acceptable primitive under the pinned versions.
 
 | Capability | Status | Primitive / Dispatch composition | Acceptance and completion | Failure / recovery | Confidence |
 | --- | --- | --- | --- | --- | --- |
 | Durable identity | verified | caller-chosen UUID; Agent View also has separate short ID | UUID matches stream and hooks | resolve UUID in project/worktree scope; never route by mutable name | high, observed 2.1.210 |
-| New | verified | persist UUID, preflight hook channel, spawn `--session-id UUID --print`; optional `--bg` is human-supervised mode | prompt hook settlement + owned activity; final settled Stop cycle + result/exit | retry only when proven no frame write began; otherwise operator reconciliation | high |
-| Owned resume-for-send | verified | Dispatch starts `--resume UUID`; never managed `--continue` | `SessionStart(source=resume)` then ordinary aggregate receipts | stale/wrong-cwd lookup is typed not-found | high |
+| New | verified | headless qualifier: persist UUID, spawn exclusive persistent `--session-id UUID --print` stream owner, settle preflight; optional `--bg` is separate human-supervised mode | prompt hook settlement + owned activity; final settled Stop cycle + terminal per-message result | retry only when proven no frame write began; otherwise operator reconciliation | high |
+| Post-exit resume owner | verified | Dispatch starts one `--resume UUID` stream owner only after proven prior-owner exit; never managed `--continue` | `SessionStart(source=resume)` then ordinary aggregate receipts | stale/wrong-cwd/owner-conflict are typed failures | high |
 | Human Agent View attach | verified | human `claude attach SHORT_ID` to a known disposable Agent View entry | UI and ordinary hooks; not a Dispatch send transport | human supervision only; no shell reply RPC | high |
+| Preserve attached human while Dispatch sends | blocked | preferred candidate: zmx-hosted Agent View cockpit + target-safe quick reply; same background owner remains authoritative | not yet sufficient: guarded PTY write needs aggregate hook settlement + owned provider activity | DIS-54 adds revisioned snapshot/atomic input/redaction and pinned live proof; abort on human revision race | medium-high design confidence; Dispatch proof blocked |
 | Dispatch attach of an unmanaged ordinary session | unsupported | no content-free metadata validation primitive was proven | none | do not register writable authority from UUID alone | high |
-| Send | verified | serialized fresh `--resume UUID --print` process per message | processing after aggregate prompt settlement + activity; completion after final Stop settlement/result/exit | any possible frame write plus loss is indeterminate; never auto-retry | high |
+| Headless send | verified | serialized messages through one exclusive persistent stream-JSON owner; fresh `--resume UUID` creates the next owner only after proven prior-owner exit | processing after aggregate prompt settlement + activity; completion after final Stop settlement/result; process exit is required when the owner terminates | any possible frame write plus loss is indeterminate; never auto-retry; reject second owners | high |
 | Steer active turn | unsupported | no documented print-process steer RPC; TUI input semantics are not equivalent | none | expose unsupported, do not queue under a steer label | high |
 | Durable queue/readiness | product-decision | Dispatch queue + one-writer lease; drain only after terminal attempt, empty background work, and healthy hooks | next aggregate receipt sequence | frame/acceptance/completion uncertainty blocks drain until explicit operator resolution | high evidence, policy open |
 | Interject | product-decision | SIGINT verified owned process group, await exit, then start a new turn | exit proves transport interruption; new prompt needs normal receipts | not atomic; provider completion may remain unknown | high evidence, semantics open |
@@ -220,7 +308,7 @@ adapter must return a typed capability error.
 | User input/elicitation | product-decision | attention hooks + Agent View/attach human response | shared `prompt_id`; later `Stop` | no shell reply RPC; first slice surfaces attention but does not synthesize answers | high |
 | Structured output | verified | print mode `--json-schema` and JSON/stream result | validated structured result + normal Stop | schema failure is typed provider failure; not an interactive-lane default | medium-high, documented/help |
 | Rich input/files/images | product-decision | `--file` addresses provider file resources; Agent View supports human image paste | normal prompt receipt | local file/image stream contract not established; first slice text only | medium |
-| Process restart/recovery | verified | fresh `--resume`; Agent View stop/respawn retained full UUID | `SessionStart(resume)` and later receipts | partition recovery by provider; do not call Codex resume for Claude | high |
+| Process restart/recovery | verified | after proven owner exit, fresh `--resume`; Agent View stop/respawn retained full UUID | `SessionStart(resume)` and later receipts | never resume while an ordinary/stream owner may remain; require explicit ownership reconciliation | high |
 | Duplicate/concurrent send | verified | provider processes both and generates distinct prompt IDs | each turn has independent aggregate receipt cycles | enforce one writer; duplicate request ID returns stored receipt; ambiguous attempt not retried | high |
 | Remote/mesh compatibility | product-decision | Remote Control is Anthropic relay; Dispatch mesh remains owning-daemon execution | provider hooks at owner | no private endpoint or shared remote process; future explicit config/policy | high |
 
@@ -230,18 +318,36 @@ adapter must return a typed capability error.
 | --- | --- | --- | --- |
 | Preflight fails before stdin | no frame write | Claude runtime | fail before submission; bounded retry with same request ID is safe |
 | Transport loss after write begins | frame may have reached Claude; no conclusive receipt | Claude runtime + operator | mark acceptance unknown; block queue; operator can wait, inspect content-free runtime facts, or explicitly abandon ambiguity before a new send |
-| Process dies after processing starts | processing evidence but no final settled Stop/result/exit | Claude runtime + operator | mark completion unknown; never resend automatically; explicit abandonment releases queue but preserves unknown provider fact |
+| Process dies after processing starts | processing evidence but no final settled Stop/per-message result | Claude runtime + operator | mark completion unknown; never resend automatically; explicit abandonment releases queue but preserves unknown provider fact |
 | SIGINT during active turn | exit 130, no new `Stop`; same UUID resumable | Claude runtime | record transport interruption; after processing starts retain completion unknown until operator abandons or later evidence resolves it |
 | Prompt hook block after observer | Dispatch hook succeeds, sibling exits 2, no assistant/Stop, result may say success | hook reducer | submission only; do not mark processing |
-| Stop hook continuation | repeated Stop cycles with same prompt ID | hook reducer | retain each occurrence; only final settled cycle plus result/exit completes |
-| Hook exit 1 | prompt may proceed | hook ingest | mark hook unhealthy/acceptance unknown unless complete aggregate evidence exists |
-| Hook timeout | hook response cancelled/exit 1; prompt proceeds | hook ingest | same as exit 1; never interpret as rejection |
+| Stop hook continuation | repeated Stop cycles with same prompt ID | hook reducer | retain each occurrence; only final settled cycle plus terminal per-message result completes |
+| Hook exit 1 | prompt may proceed | hook ingest | wait for every sibling's terminal settlement; if none blocks and owned activity follows, mark processing with degraded hook health; otherwise acceptance remains unknown |
+| Hook timeout | hook response cancelled/exit 1; prompt proceeds | hook ingest | same terminal-settlement rule as exit 1; never interpret as rejection |
 | Duplicate request | two provider turns if sent twice | Dispatch | dedupe before spawn by durable Dispatch message ID |
 | Concurrent writers | both produced turns; ordering is not launch order | Dispatch | single-writer transaction/lease per session |
+| Fresh resume while ordinary TUI attached | both processes can complete but histories diverge; external turn was absent from the TUI and later resume | Claude runtime + operator | mark ownership conflict; stop sends; explicit human handoff/reconciliation; never claim shared continuity |
+| Fresh resume while stream owner lives | external process can complete but its turn is absent from the continuing owner | Dispatch supervisor | reject second owner by durable lease/process identity; after uncertainty, block until operator resolves ownership |
+| Fresh resume while Agent View owner lives | exit 1, owner remains coherent and human-usable | Agent View | attach for human use or stop owner before a later resume; no Dispatch send during ownership |
+| Cockpit target/detail/reply guard mismatch | Crew path fails closed before payload | cockpit reducer | renormalize home and retry only before any payload write; never fall back to raw send |
+| Human changes cockpit revision | target/input state may have moved | hardened zmx transaction | abort before payload with `cockpit_changed`; reacquire snapshot and re-run every identity guard |
+| Cockpit loss after possible payload write | PTY write/Enter may have reached Agent View | cockpit transport + operator | acceptance indeterminate; no automatic retry; wait for aggregate receipts or explicitly abandon |
+| Cockpit restart | Agent View background owner continues independently | zmx supervisor | restart cockpit only, re-resolve full UUID/row, then re-run guards; never resume the worker |
+| Cockpit hook/activity gap | UI write ACK without aggregate hook settlement and owned provider activity | receipt reducer | keep capability blocked and attempt unaccepted; transcript metadata/roster state cannot promote it |
 | Permission/user input | hooks + Agent View waiting metadata | Dispatch attention reducer + human | durable inbox item; first slice requires attach/Agent View response |
 | Daemon restart | Claude transcript persists; owned process may be gone | Dispatch supervisor | fence old generation, inspect pid, resume only on next explicit send |
 | zmx loss | send may error text and still exit zero | zmx adapter | excluded; if ever enabled, receipts must come only from Claude hooks |
 | Stale session/cwd | resume lookup is project/worktree scoped | selector/runtime | store canonical launch/effective cwd and return typed stale/not-found |
+
+## Transport decision table
+
+| Candidate | Continuity | Delivery correlation | Human coexistence | Interrupt / restart | Privacy / logging | Implementation cost | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Exclusive persistent stream-JSON owner | verified across multiple serialized turns while one owner lives | strongest: owned frames, stream activity, aggregate hooks, prompt IDs | no supported attached TUI; concurrent resume splits history | owned process group; after proven exit, resume UUID as a new owner | no extra PTY logger; retain only normalized events | medium | recommended headless base, but does not satisfy seamless coexistence |
+| Fresh `--resume --print` per turn | verified only with no other live owner | strong per-process stream + aggregate hooks | failed: ordinary TUI/stream owner diverged; Agent View rejected it | simple process lifecycle and restart | no extra PTY logger | low | rejected as the default transport |
+| zmx-hosted Agent View cockpit | preserves the Agent View background owner; Crew proves guarded quick-reply UI route | zmx write ACK is transport-only; Claude aggregate hooks + owned activity still required | preferred: human attaches/detaches from same cockpit; revision race must abort | Agent View supervisor owns workers; zmx cockpit restarts without resuming workers | blocked as shipped: 0.6.0 logs input and lacks conditional atomic writes | high | recommended DIS-54 direction; not enable-ready |
+| zmx-owned worker TUI | one PTY could serialize human and Dispatch input in principle | Claude hooks could confirm after raw injection, but zmx itself has no ACK/order guarantee | possible but duplicates Agent View supervision and attention UI | raw Ctrl-C/loss unconfirmed; persistent process | blocked: 0.6.0 logs raw PTY input and can drop queued bytes | medium-high | fallback investigation, not preferred |
+| Remote Control / Agent View controls | provider-owned multi-device human continuity | no documented local programmable send RPC | human-facing only | provider reconnection/supervisor semantics | Anthropic relay/product policy | high/product | deferred product decision |
 
 ## Security and privacy findings
 
@@ -250,6 +356,10 @@ adapter must return a typed capability error.
 - A hook command is executable configuration. Generate an owner-only settings
   file in Dispatch runtime state, use argv-safe process creation, and never
   interpolate user text into a shell command.
+- `--settings`, `--setting-sources ''`, and strict empty MCP configuration did
+  not prevent Agent View from mutating the user settings file in the observed
+  build. Treat Agent View launch as globally mutating until the product provides
+  a proven isolation contract; do not use it in automated provider tests.
 - Give each process generation a random nonce. The Dispatch hook returns it in
   structured hook output so the owned stream can distinguish that helper and
   reject stale generations. The nonce is a misrouting fence, not authentication

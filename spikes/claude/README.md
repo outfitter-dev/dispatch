@@ -33,16 +33,51 @@ uv run python spikes/claude/assert_probe.py negative-fixtures \
   spikes/claude/fixtures/negative
 uv run python spikes/claude/assert_probe.py receipt \
   spikes/claude/fixtures/tool-only-processing.jsonl
+uv run python spikes/claude/assert_probe.py message-receipt \
+  spikes/claude/fixtures/persistent-owner-completion.jsonl
+uv run python spikes/claude/assert_probe.py coexistence-fixture \
+  spikes/claude/fixtures/coexistence-outcomes.jsonl
+uv run python spikes/claude/assert_probe.py cockpit-plan-fixture \
+  spikes/claude/fixtures/agent-view-cockpit-plan.jsonl
 jq -cf spikes/claude/sanitize_stream.jq \
   spikes/claude/fixtures/whitespace-block-raw.jsonl |
   jq -e '.blocking_decision == true and (has("stdout") | not)'
 ```
+
+`coexistence-outcomes.jsonl` contains only synthetic markers and normalized
+outcomes from disposable sessions. Its assertion deliberately requires
+`shared_coherent_history=false` for ordinary TUI plus resume, Agent View plus
+resume, and persistent stream owner plus resume. A future adapter must not flip
+the public capability from blocked merely because both processes stayed alive or
+both emitted successful results. Replace that negative gate only with a pinned
+live scenario proving the attached human sees the Dispatch turn, the next human
+turn contains it, and the next Dispatch turn contains the human turn, all with
+ordered aggregate receipts.
+
+`agent-view-cockpit-plan.jsonl` is a design fixture derived from Crew's guarded
+Agent View quick-reply route, not a new live Dispatch proof. It requires exact
+roster/row identity, home/detail/return/reply viewport guards, revision-conditional
+serialized input, one atomic payload-plus-Enter batch, and abort on concurrent
+human revision change. It also deliberately retains the receipt blocker:
+Agent View has not yet exposed aggregate sibling-hook settlement plus owned
+provider activity to Dispatch without raw transcript access. `just check` runs
+these fixtures through `tests/fixtures/test_claude_research.py`.
+
+`capability-policy.json` is the machine-readable adapter gate. Repository tests
+keep human coexistence `blocked` until DIS-54 replaces the negative evidence with
+one pinned live one-shared-history proof. The cockpit plan assertion enforces one
+exclusive automation lease, revision-conditional ordered keys, an atomic
+payload-plus-Enter write, content-free logs, and abort-before-payload when a
+human revision invalidates the lease.
 
 ## Safety envelope
 
 - Use Claude Code 2.1.210 and zmx 0.6.0 for these exact claims.
 - Use Haiku, minimal prompts, an explicit UUID, and a temporary Git repository.
 - Never target an existing session or existing Agent View short ID.
+- Do not automate further Agent View launches on 2.1.210: an isolated launch
+  changed `~/.claude/settings.json` despite explicit per-session settings, empty
+  setting sources, and strict empty MCP configuration.
 - Never inspect transcripts, auth, or zmx history for real Claude prompts.
 - Record settings hashes/metadata without printing settings contents.
 - Use a unique prefix and remove every Agent View/zmx entry created.
@@ -128,7 +163,8 @@ correlation only. Processing additionally requires every `UserPromptSubmit` hook
 response to reach a terminal non-blocking outcome and owned-stream assistant/tool
 activity.
 Completion requires the final Stop hook set to settle without continuation,
-terminal result success, and clean process exit.
+and terminal per-message result success. Clean process exit is a separate
+requirement when an owner generation terminates.
 
 ## Hook aggregation and preflight probes
 

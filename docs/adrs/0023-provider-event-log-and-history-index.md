@@ -46,7 +46,8 @@ assistant/tool activity. Exit 1 and timeout are fail-open, degraded-health
 outcomes; exit 2 or a blocking decision prevents processing. Claude assigns a
 `prompt_id` shared by `UserPromptSubmit` and repeatable `Stop` cycles. Completion
 requires the final Stop hook set to settle without continuation, followed by
-terminal result success and clean owned-process exit. Those events are not Codex
+terminal per-message result success. Clean process exit is required when an owner
+generation terminates, not for every message. Those events are not Codex
 `LaneEvent`s, but they map naturally onto provider-neutral event and history
 records.
 
@@ -126,11 +127,18 @@ Claude comes second:
 3. Hook observations are combined with owned structured stream events before
    reduction into the same `message_receipts`,
    `lane_runtime_state`, and attention/inbox semantics used for Codex.
-4. The initial transport is a serialized fresh resume/print subprocess per turn;
-   Claude-specific process details remain adapter-local, not cross-provider
-   history schema.
-5. zmx 0.6.0 is excluded from the initial transport because raw sends are not
-   acknowledged and the installed version always logs PTY input bytes.
+4. The preferred human-coexistent transport is a pinned, hardened zmx-hosted
+   Agent View cockpit using Claude's guarded quick-reply path. It remains blocked
+   behind DIS-54 until one live proof establishes a single coherent history,
+   target-safe revisioned input, and correlated aggregate receipts.
+5. The verified headless fallback is one exclusive persistent stream-JSON owner.
+   A fresh resume process may replace it only after proven owner exit; it is not
+   a per-turn transport and does not claim transparent human coexistence.
+6. zmx 0.6.0 as shipped is excluded because raw sends are not acknowledged and
+   PTY input bytes are always logged. DIS-54 may admit a pinned hardened build
+   with revisioned snapshots, named keys, conditional atomic serialized writes,
+   an automation lease, explicit loss signaling, and input-log redaction. A PTY
+   write acknowledgement is transport evidence, never a Claude receipt.
 
 Storage backend policy:
 

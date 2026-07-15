@@ -49,7 +49,7 @@ def assert_processing(events: list[Event]) -> None:
     )
 
 
-def assert_completed(events: list[Event]) -> None:
+def assert_message_completed(events: list[Event]) -> int:
     assert_processing(events)
     activities = [event["sequence"] for event in events if is_provider_activity(event)]
     last_activity = max(activities)
@@ -69,7 +69,11 @@ def assert_completed(events: list[Event]) -> None:
         and event["sequence"] > stop_settled
     ]
     assert results
-    result_sequence = max(event["sequence"] for event in results)
+    return max(event["sequence"] for event in results)
+
+
+def assert_completed(events: list[Event]) -> None:
+    result_sequence = assert_message_completed(events)
     assert any(
         event.get("type") == "process_exit"
         and event.get("exit_code") == 0
@@ -81,6 +85,10 @@ def assert_completed(events: list[Event]) -> None:
 def assert_structure(mode: str, events: list[Event]) -> None:
     if mode == "receipt":
         assert_completed(events)
+    elif mode == "message-receipt":
+        result_sequence = assert_message_completed(events)
+        assert not any(event.get("type") == "process_exit" for event in events)
+        assert result_sequence == max(event["sequence"] for event in events)
     elif mode == "block-prompt":
         assert_hooks_paired(events)
         assert any(event.get("exit_code") == 2 for event in responses(events, "UserPromptSubmit"))
@@ -167,6 +175,186 @@ def assert_negative_fixtures(directory: Path) -> None:
         raise AssertionError(f"negative fixture unexpectedly completed: {name}")
 
 
+def assert_coexistence_fixture(events: list[Event]) -> None:
+    by_case: dict[str, list[Event]] = {}
+    for event in events:
+        by_case.setdefault(event["case"], []).append(event)
+
+    ordinary = by_case["ordinary_tui"]
+    assert any(
+        event.get("event") == "shared_coherent_history" and event.get("value") is False
+        for event in ordinary
+    )
+    assert any(
+        event.get("actor") == "external_resume" and event.get("event") == "turn_completed"
+        for event in ordinary
+    )
+    assert any(
+        event.get("actor") == "attached_tui"
+        and event.get("event") == "marker_visible"
+        and event.get("marker") == "external"
+        and event.get("value") is False
+        for event in ordinary
+    )
+    assert any(
+        event.get("actor") == "fresh_resume"
+        and event.get("event") == "marker_visible"
+        and event.get("marker") == "external"
+        and event.get("value") is False
+        for event in ordinary
+    )
+
+    agent_view = by_case["agent_view"]
+    assert any(
+        event.get("event") == "shared_coherent_history" and event.get("value") is False
+        for event in agent_view
+    )
+    assert any(
+        event.get("actor") == "external_resume"
+        and event.get("event") == "resume_rejected"
+        and event.get("exit_code") == 1
+        and event.get("owner_alive") is True
+        for event in agent_view
+    )
+    assert any(
+        event.get("actor") == "attached_tui"
+        and event.get("event") == "resume_rejected"
+        and event.get("exit_code") == 1
+        and event.get("owner_alive") is True
+        for event in agent_view
+    )
+    assert any(event.get("event") == "attached_human_turn_completed" for event in agent_view)
+    assert any(event.get("event") == "resume_completed_after_owner_stop" for event in agent_view)
+
+    stream_owner = by_case["persistent_stream_owner"]
+    assert any(
+        event.get("event") == "shared_coherent_history" and event.get("value") is False
+        for event in stream_owner
+    )
+    assert (
+        len([event for event in stream_owner if event.get("event") == "owner_turn_completed"]) >= 2
+    )
+    assert any(
+        event.get("actor") == "owner"
+        and event.get("event") == "marker_visible"
+        and event.get("marker") == "external"
+        and event.get("value") is False
+        for event in stream_owner
+    )
+
+
+def assert_cockpit_plan_fixture(events: list[Event]) -> None:
+    assert [event["sequence"] for event in events] == list(range(1, len(events) + 1))
+    assert [event["event"] for event in events] == [
+        "target_resolved",
+        "home_verified",
+        "lease_acquired",
+        "input_ack",
+        "input_ack",
+        "detail_identity_verified",
+        "input_ack",
+        "home_selection_reverified",
+        "input_ack",
+        "reply_prompt_verified",
+        "input_ack",
+        "lease_released",
+        "lease_acquired",
+        "concurrent_human_revision_changed",
+        "receipt_blocker",
+    ]
+    assert events[0].get("event") == "target_resolved"
+    assert events[0].get("full_session_id_verified") is True
+
+    required_guards = (
+        "home_verified",
+        "detail_identity_verified",
+        "home_selection_reverified",
+        "reply_prompt_verified",
+    )
+    for guard in required_guards:
+        assert any(event.get("event") == guard and event.get("value") is True for event in events)
+    assert events[1].get("target_row_visible") is True
+    assert events[5].get("full_session_id_verified") is True
+    assert events[5].get("title_verified") is True
+    assert events[7].get("full_session_id_verified") is True
+    assert events[9].get("target_identity_retained") is True
+
+    first_lease = events[2]
+    assert first_lease.get("exclusive") is True
+    lease_id = first_lease["lease_id"]
+    current_revision = first_lease["at_revision"]
+    writes: list[Event] = []
+    for event in events[3:12]:
+        if snapshot_revision := event.get("snapshot_revision"):
+            assert snapshot_revision > current_revision
+            current_revision = snapshot_revision
+        if event.get("event") == "input_ack":
+            assert event.get("lease_id") == lease_id
+            assert event.get("expected_revision") == current_revision
+            assert event["result_revision"] > current_revision
+            current_revision = event["result_revision"]
+            writes.append(event)
+
+    assert [event["input"] for event in writes] == [
+        "named_key_down",
+        "named_key_enter",
+        "named_key_left",
+        "literal_space",
+        "message_submit",
+    ]
+    assert all(event.get("serialized") is True for event in writes)
+    assert all(event.get("raw_input_logged") is False for event in writes)
+    assert writes[-1].get("input") == "message_submit"
+    assert writes[-1].get("atomic_batch") == ["payload", "enter"]
+    assert events[11] == {
+        "sequence": 12,
+        "event": "lease_released",
+        "lease_id": lease_id,
+        "at_revision": current_revision,
+    }
+
+    forbidden_content_keys = {
+        "prompt",
+        "text",
+        "payload",
+        "raw",
+        "stdout",
+        "stderr",
+        "log",
+        "input_bytes",
+        "transcript",
+        "message",
+    }
+
+    def assert_content_free(value: Any) -> None:
+        if isinstance(value, dict):
+            assert not forbidden_content_keys.intersection(value)
+            for nested in value.values():
+                assert_content_free(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                assert_content_free(nested)
+
+    assert_content_free(events)
+
+    second_lease = events[12]
+    human_race = events[13]
+    assert second_lease.get("exclusive") is True
+    assert human_race.get("lease_id") == second_lease.get("lease_id")
+    assert human_race.get("expected_revision") == second_lease.get("at_revision")
+    assert human_race["actual_revision"] > human_race["expected_revision"]
+    assert human_race.get("lease_invalidated") is True
+    assert human_race.get("action") == "abort_before_payload"
+    assert not any(
+        event.get("event") == "input_ack" and event.get("lease_id") == second_lease.get("lease_id")
+        for event in events
+    )
+    blocker = next(event for event in events if event.get("event") == "receipt_blocker")
+    assert blocker.get("aggregate_hook_settlement") == "unproven"
+    assert blocker.get("owned_provider_activity") == "unproven"
+    assert blocker.get("capability") == "blocked"
+
+
 def main() -> None:
     if len(sys.argv) < 3:
         raise SystemExit("usage: assert_probe.py MODE PATH [PATH ...]")
@@ -178,6 +366,10 @@ def main() -> None:
         assert_aggregate_fixture(load(paths[0]))
     elif mode == "negative-fixtures":
         assert_negative_fixtures(paths[0])
+    elif mode == "coexistence-fixture":
+        assert_coexistence_fixture(load(paths[0]))
+    elif mode == "cockpit-plan-fixture":
+        assert_cockpit_plan_fixture(load(paths[0]))
     else:
         assert len(paths) == 1
         assert_structure(mode, load(paths[0]))
