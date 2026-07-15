@@ -197,7 +197,7 @@ def provider_capacity_observation(
         reset_credits_available=1,
         reset_credits=[
             ProviderResetCredit(
-                fingerprint="sha256:credit0123456789",
+                fingerprint="sha256:abcdef0123456789",
                 reset_type="codexRateLimits",
                 status="available",
                 granted_at=1783700000,

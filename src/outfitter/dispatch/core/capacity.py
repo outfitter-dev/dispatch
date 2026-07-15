@@ -33,20 +33,25 @@ def _masked_email(value: str) -> str:
     local, separator, domain = value.strip().partition("@")
     if not separator or not local or not domain:
         return "redacted"
-    return f"{local[0]}***@{domain.lower()}"
+    masked = f"{local[0]}***@{domain.lower()}"
+    return masked if len(masked) <= 254 else "redacted"
 
 
 def _bounded(value: str | None, limit: int = 120) -> str | None:
     if value is None:
         return None
     collapsed = " ".join(value.split())
+    if not collapsed:
+        return None
     return collapsed if len(collapsed) <= limit else collapsed[: limit - 1].rstrip() + "…"
 
 
 def _windows(
     snapshot: RateLimitSnapshot, *, fallback_id: str, observed_at: str
 ) -> list[ProviderCapacityWindow]:
-    limit_id = snapshot.limit_id or fallback_id
+    limit_id = _bounded(snapshot.limit_id) or _bounded(fallback_id) or "default"
+    limit_name = _bounded(snapshot.limit_name)
+    reached_type = _bounded(snapshot.rate_limit_reached_type)
     result: list[ProviderCapacityWindow] = []
     for name, window in (("primary", snapshot.primary), ("secondary", snapshot.secondary)):
         if window is None:
@@ -55,13 +60,13 @@ def _windows(
         result.append(
             ProviderCapacityWindow(
                 limit_id=limit_id,
-                limit_name=snapshot.limit_name,
+                limit_name=limit_name,
                 window=name,
                 used_percent=used,
                 remaining_percent=100 - used,
                 duration_minutes=window.window_duration_mins,
                 resets_at=window.resets_at,
-                reached_type=snapshot.rate_limit_reached_type,
+                reached_type=reached_type,
                 observed_at=observed_at,
             )
         )
@@ -70,12 +75,12 @@ def _windows(
         result.append(
             ProviderCapacityWindow(
                 limit_id=limit_id,
-                limit_name=snapshot.limit_name,
+                limit_name=limit_name,
                 window="individual",
                 remaining_percent=remaining,
                 used_percent=100 - remaining,
                 resets_at=snapshot.individual_limit.resets_at,
-                reached_type=snapshot.rate_limit_reached_type,
+                reached_type=reached_type,
                 observed_at=observed_at,
             )
         )
@@ -102,23 +107,23 @@ def _all_windows(
             )
         if base_id not in snapshots:
             result.extend(_windows(base, fallback_id=base_id, observed_at=observed_at))
-        return list({(window.limit_id, window.window): window for window in result}.values())
-    return _windows(limits.rate_limits, fallback_id="default", observed_at=observed_at)
+        return list({(window.limit_id, window.window): window for window in result}.values())[-64:]
+    return _windows(limits.rate_limits, fallback_id="default", observed_at=observed_at)[-64:]
 
 
 def _push_limit_id(
     snapshot: RateLimitSnapshot, existing: ProviderCapacityObservation | None
 ) -> str:
-    if snapshot.limit_id is not None:
-        return snapshot.limit_id
+    limit_id = _bounded(snapshot.limit_id)
+    if limit_id is not None:
+        return limit_id
     if existing is None:
         return "default"
 
-    if snapshot.limit_name is not None:
+    limit_name = _bounded(snapshot.limit_name)
+    if limit_name is not None:
         named_ids = {
-            window.limit_id
-            for window in existing.windows
-            if window.limit_name == snapshot.limit_name
+            window.limit_id for window in existing.windows if window.limit_name == limit_name
         }
         if len(named_ids) == 1:
             return named_ids.pop()
@@ -144,36 +149,65 @@ def _error_state(exc: BaseException) -> ProviderCapacityState:
     return "unavailable"
 
 
+async def _save_account_failure(
+    ctx: Ctx,
+    *,
+    existing: ProviderCapacityObservation | None,
+    state: ProviderCapacityState,
+    observed_at: str,
+    error: str,
+) -> ProviderCapacityObservation:
+    source = list(existing.source) if existing is not None else []
+    if "account/read" not in source:
+        source.append("account/read")
+    source = source[-16:]
+    if existing is not None:
+        return await ctx.registry.upsert_provider_capacity_observation(
+            existing.model_copy(
+                update={
+                    "state": state,
+                    "source": source,
+                    "observed_at": observed_at,
+                    "confidence": 0.0,
+                    "error": error,
+                }
+            )
+        )
+    return await ctx.registry.upsert_provider_capacity_observation(
+        ProviderCapacityObservation(
+            provider="codex",
+            state=state,
+            source=source,
+            observed_at=observed_at,
+            confidence=0.0,
+            error=error,
+        )
+    )
+
+
 async def refresh_codex_capacity(ctx: Ctx) -> ProviderCapacityObservation:
     """Refresh one local Codex observation without retaining raw auth payloads."""
 
     observed_at = ctx.registry.now_iso()
+    existing = await ctx.registry.get_provider_capacity_observation("codex")
     try:
         account = await ctx.client.account_read()
     except ClientError as exc:
         state = _error_state(exc)
-        return await ctx.registry.upsert_provider_capacity_observation(
-            ProviderCapacityObservation(
-                provider="codex",
-                state=state,
-                source=["account/read"],
-                observed_at=observed_at,
-                account_observed_at=observed_at,
-                confidence=0.0,
-                error=f"account/read {state}",
-            )
+        return await _save_account_failure(
+            ctx,
+            existing=existing,
+            state=state,
+            observed_at=observed_at,
+            error=f"account/read {state}",
         )
     except PydanticValidationError:
-        return await ctx.registry.upsert_provider_capacity_observation(
-            ProviderCapacityObservation(
-                provider="codex",
-                state="unavailable",
-                source=["account/read"],
-                observed_at=observed_at,
-                account_observed_at=observed_at,
-                confidence=0.0,
-                error="account/read invalid response",
-            )
+        return await _save_account_failure(
+            ctx,
+            existing=existing,
+            state="unavailable",
+            observed_at=observed_at,
+            error="account/read invalid response",
         )
 
     if account.account is None:
@@ -197,67 +231,134 @@ async def refresh_codex_capacity(ctx: Ctx) -> ProviderCapacityObservation:
     )
     limits = limits_result if isinstance(limits_result, AccountRateLimitsResult) else None
     usage = usage_result if isinstance(usage_result, AccountUsageResult) else None
-    sources = ["account/read"]
+    sources = list(existing.source) if existing is not None else []
+    if "account/read" not in sources:
+        sources.append("account/read")
     errors: list[str] = []
     if limits is not None:
-        sources.append("account/rateLimits/read")
+        if "account/rateLimits/read" not in sources:
+            sources.append("account/rateLimits/read")
     else:
         assert isinstance(limits_result, BaseException)
         errors.append(f"account/rateLimits/read {_error_state(limits_result)}")
     if usage is not None:
-        sources.append("account/usage/read")
+        if "account/usage/read" not in sources:
+            sources.append("account/usage/read")
     else:
         assert isinstance(usage_result, BaseException)
         errors.append(f"account/usage/read {_error_state(usage_result)}")
+    sources = sources[-16:]
 
     email = account.account.email
     snapshots = (
         limits.rate_limits_by_limit_id.values() if limits and limits.rate_limits_by_limit_id else []
     )
-    plan = account.account.plan_type or next(
-        (snapshot.plan_type for snapshot in snapshots if snapshot.plan_type is not None), None
+    snapshot_plans = (_bounded(snapshot.plan_type) for snapshot in snapshots)
+    plan = (
+        _bounded(account.account.plan_type)
+        or next((value for value in snapshot_plans if value is not None), None)
+        or (existing.plan if existing is not None else None)
     )
     credits = limits.rate_limit_reset_credits if limits is not None else None
     credit_rows = credits.credits if credits is not None and credits.credits is not None else []
     base_snapshot = limits.rate_limits if limits is not None else None
     daily = usage.daily_usage_buckets if usage is not None and usage.daily_usage_buckets else []
-    observation = ProviderCapacityObservation(
-        provider="codex",
-        state="ready" if not errors else "partial",
-        account_type=account.account.type,
-        account_fingerprint=_fingerprint(email) if email else None,
-        account_label=_masked_email(email) if email else None,
-        plan=plan,
-        requires_auth=account.requires_openai_auth,
-        windows=_all_windows(limits, observed_at=observed_at) if limits is not None else [],
-        reset_credits_available=credits.available_count if credits is not None else None,
-        reset_credits=[
+    windows = (
+        _all_windows(limits, observed_at=observed_at)
+        if limits is not None
+        else existing.windows
+        if existing is not None
+        else []
+    )
+    reset_credits_available = (
+        credits.available_count
+        if credits is not None
+        else None
+        if limits is not None
+        else existing.reset_credits_available
+        if existing is not None
+        else None
+    )
+    reset_credits = (
+        [
             ProviderResetCredit(
                 fingerprint=_fingerprint(credit.id),
-                reset_type=credit.reset_type,
-                status=credit.status,
+                reset_type=_bounded(credit.reset_type) or "unknown",
+                status=_bounded(credit.status) or "unknown",
                 granted_at=credit.granted_at,
                 expires_at=credit.expires_at,
                 title=_bounded(credit.title),
             )
-            for credit in credit_rows
-        ],
-        usage_summary=_usage_summary(usage) if usage is not None else None,
-        daily_usage=[
+            for credit in credit_rows[:100]
+        ]
+        if credits is not None
+        else []
+        if limits is not None
+        else existing.reset_credits
+        if existing is not None
+        else []
+    )
+    usage_summary = (
+        _usage_summary(usage)
+        if usage is not None
+        else existing.usage_summary
+        if existing is not None
+        else None
+    )
+    daily_usage = (
+        [
             ProviderDailyUsage(start_date=bucket.start_date, tokens=bucket.tokens)
             for bucket in sorted(daily, key=lambda item: item.start_date)[-90:]
-        ],
-        has_credits=base_snapshot.credits.has_credits
-        if base_snapshot is not None and base_snapshot.credits is not None
-        else None,
-        unlimited_credits=base_snapshot.credits.unlimited
-        if base_snapshot is not None and base_snapshot.credits is not None
-        else None,
+        ]
+        if usage is not None
+        else existing.daily_usage
+        if existing is not None
+        else []
+    )
+    observation = ProviderCapacityObservation(
+        provider="codex",
+        state="ready" if not errors else "partial",
+        account_type=_bounded(account.account.type) or "unknown",
+        account_fingerprint=_fingerprint(email) if email else None,
+        account_label=_masked_email(email) if email else None,
+        plan=plan,
+        requires_auth=account.requires_openai_auth,
+        windows=windows,
+        reset_credits_available=reset_credits_available,
+        reset_credits=reset_credits,
+        usage_summary=usage_summary,
+        daily_usage=daily_usage,
+        has_credits=(
+            base_snapshot.credits.has_credits
+            if base_snapshot is not None and base_snapshot.credits is not None
+            else existing.has_credits
+            if existing is not None and limits is None
+            else None
+        ),
+        unlimited_credits=(
+            base_snapshot.credits.unlimited
+            if base_snapshot is not None and base_snapshot.credits is not None
+            else existing.unlimited_credits
+            if existing is not None and limits is None
+            else None
+        ),
         source=sources,
         observed_at=observed_at,
         account_observed_at=observed_at,
-        capacity_observed_at=observed_at if limits is not None else None,
-        usage_observed_at=observed_at if usage is not None else None,
+        capacity_observed_at=(
+            observed_at
+            if limits is not None
+            else existing.capacity_observed_at
+            if existing is not None
+            else None
+        ),
+        usage_observed_at=(
+            observed_at
+            if usage is not None
+            else existing.usage_observed_at
+            if existing is not None
+            else None
+        ),
         confidence=1.0 if not errors else 0.7,
         error="; ".join(errors) if errors else None,
     )
@@ -285,27 +386,25 @@ async def observe_codex_rate_limits(
     source = list(existing.source) if existing is not None else []
     if "account/rateLimits/updated" not in source:
         source.append("account/rateLimits/updated")
-    prior_is_usable = existing is not None and existing.state in {"ready", "partial"}
+    source = source[-16:]
     observation = (
         existing.model_copy(
             update={
-                "state": existing.state if prior_is_usable else "partial",
-                "windows": retained + replacement,
+                "state": existing.state,
+                "windows": (retained + replacement)[-64:],
                 "source": source,
                 "observed_at": observed_at,
                 "capacity_observed_at": observed_at,
-                "plan": snapshot.plan_type or existing.plan,
-                "confidence": max(existing.confidence, 0.8),
-                "error": existing.error
-                if prior_is_usable
-                else "account and historical usage not observed",
+                "plan": _bounded(snapshot.plan_type) or existing.plan,
+                "confidence": existing.confidence,
+                "error": existing.error,
             }
         )
         if existing is not None
         else ProviderCapacityObservation(
             provider="codex",
             state="partial",
-            plan=snapshot.plan_type,
+            plan=_bounded(snapshot.plan_type),
             windows=replacement,
             source=source,
             observed_at=observed_at,

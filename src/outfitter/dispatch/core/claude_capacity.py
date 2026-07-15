@@ -101,13 +101,16 @@ def _masked_email(value: str) -> str:
     local, separator, domain = value.strip().partition("@")
     if not separator or not local or not domain:
         return "redacted"
-    return f"{local[0]}***@{domain.lower()}"
+    masked = f"{local[0]}***@{domain.lower()}"
+    return masked if len(masked) <= 254 else "redacted"
 
 
 def _bounded(value: object, limit: int = 120) -> str | None:
     if not isinstance(value, str):
         return None
     collapsed = " ".join(value.split())
+    if not collapsed:
+        return None
     return collapsed if len(collapsed) <= limit else collapsed[: limit - 1].rstrip() + "…"
 
 
@@ -131,6 +134,7 @@ def _merge_windows(
     existing: list[ProviderCapacityWindow], captured: list[ProviderCapacityWindow]
 ) -> list[ProviderCapacityWindow]:
     merged = {(window.limit_id, window.window): window for window in existing}
+    updated: set[tuple[str, str]] = set()
     for window in captured:
         key = (window.limit_id, window.window)
         current = merged.get(key)
@@ -138,7 +142,9 @@ def _merge_windows(
         captured_at = _observed_at(window.observed_at)
         if current_at is None or (captured_at is not None and captured_at > current_at):
             merged[key] = window
-    return [merged[key] for key in sorted(merged)]
+            updated.add(key)
+    ordered = [key for key in sorted(merged) if key not in updated] + sorted(updated)
+    return [merged[key] for key in ordered[-64:]]
 
 
 async def _save_auth_failure(
@@ -151,6 +157,7 @@ async def _save_auth_failure(
     source = list(existing.source) if existing is not None else []
     if "claude auth status --json" not in source:
         source.append("claude auth status --json")
+    source = source[-16:]
     if existing is not None:
         return await ctx.registry.upsert_provider_capacity_observation(
             existing.model_copy(
@@ -228,6 +235,7 @@ async def refresh_claude_capacity(
         source = list(existing.source) if existing is not None else []
         if "claude auth status --json" not in source:
             source.append("claude auth status --json")
+        source = source[-16:]
         if existing is not None:
             return await ctx.registry.upsert_provider_capacity_observation(
                 existing.model_copy(
@@ -347,6 +355,7 @@ async def refresh_claude_capacity(
             source.append(name)
     if statusline_source is not None and statusline_source not in source:
         source.append(statusline_source)
+    source = source[-16:]
     observation = ProviderCapacityObservation(
         provider="claude",
         state="partial" if errors else "ready",

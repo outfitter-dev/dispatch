@@ -17,6 +17,7 @@ from outfitter.dispatch.core import handlers
 from outfitter.dispatch.core.claude_capacity import (
     ClaudeCommandOutputError,
     ClaudeCommandResult,
+    _merge_windows,
     refresh_claude_capacity,
     run_claude_command,
 )
@@ -127,6 +128,93 @@ async def test_refresh_claude_capacity_normalizes_account_and_runtime_without_ro
         "session-secret-1",
     ):
         assert secret not in payload
+
+
+async def test_claude_email_masking_cannot_exceed_persisted_label_bound(
+    store: Registry,
+) -> None:
+    responses = {
+        ("auth", "status", "--json"): ClaudeCommandResult(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "loggedIn": True,
+                    "authMethod": "claude.ai",
+                    "email": f"a@{'x' * 252}",
+                }
+            ),
+        ),
+        ("agents", "--json"): ClaudeCommandResult(returncode=0, stdout="[]"),
+    }
+
+    async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
+        return _command_response(responses, args)
+
+    observation = await refresh_claude_capacity(make_ctx(store, FakeLaneClient()), run_command=run)
+
+    raw_email = f"a@{'x' * 252}"
+    assert observation.account_label == "redacted"
+    assert observation.account_fingerprint is not None
+    assert raw_email not in observation.model_dump_json()
+    assert await store.get_provider_capacity_observation("claude") == observation
+
+
+async def test_refresh_claude_capacity_normalizes_whitespace_only_optional_fields(
+    store: Registry,
+) -> None:
+    responses = {
+        ("auth", "status", "--json"): ClaudeCommandResult(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "loggedIn": True,
+                    "authMethod": "   ",
+                    "apiProvider": "   ",
+                    "email": "agent@example.com",
+                    "orgName": "   ",
+                    "subscriptionType": "   ",
+                }
+            ),
+        ),
+        ("agents", "--json"): ClaudeCommandResult(returncode=0, stdout="[]"),
+    }
+
+    async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
+        return _command_response(responses, args)
+
+    observation = await refresh_claude_capacity(make_ctx(store), run_command=run)
+
+    assert observation.state == "ready"
+    assert observation.auth_method is None
+    assert observation.api_provider is None
+    assert observation.organization_label is None
+    assert observation.plan is None
+
+
+def test_merge_windows_keeps_incoming_window_within_observation_bound() -> None:
+    observed_at = "2026-07-14T12:00:00+00:00"
+    existing = [
+        ProviderCapacityWindow(
+            limit_id=f"existing-{index}",
+            window="primary",
+            used_percent=index,
+            observed_at=observed_at,
+        )
+        for index in range(64)
+    ]
+    captured = [
+        ProviderCapacityWindow(
+            limit_id="incoming",
+            window="five_hour",
+            used_percent=50,
+            observed_at="2026-07-14T12:01:00+00:00",
+        )
+    ]
+
+    merged = _merge_windows(existing, captured)
+
+    assert len(merged) == 64
+    assert ("incoming", "five_hour") in {(window.limit_id, window.window) for window in merged}
 
 
 async def test_refresh_claude_capacity_signed_out_skips_runtime_probe(store: Registry) -> None:
@@ -408,6 +496,36 @@ async def test_refresh_claude_capacity_preserves_existing_capacity_windows(
     ]
 
 
+async def test_refresh_claude_capacity_keeps_newest_source_bound(store: Registry) -> None:
+    existing = ProviderCapacityObservation(
+        provider="claude",
+        state="partial",
+        source=[f"legacy-{index}" for index in range(16)],
+        observed_at="2026-07-14T12:00:00+00:00",
+        confidence=0.8,
+    )
+    await store.upsert_provider_capacity_observation(existing)
+    responses = {
+        ("auth", "status", "--json"): ClaudeCommandResult(
+            0,
+            json.dumps({"loggedIn": True, "authMethod": "claude.ai"}),
+        ),
+        ("agents", "--json"): ClaudeCommandResult(0, "[]"),
+    }
+
+    async def run(args: tuple[str, ...]) -> ClaudeCommandResult:
+        return _command_response(responses, args)
+
+    observation = await refresh_claude_capacity(make_ctx(store, FakeLaneClient()), run_command=run)
+
+    assert len(observation.source) == 16
+    assert observation.source[-3:] == [
+        "claude auth status --json",
+        "claude --version",
+        "claude agents --json",
+    ]
+
+
 async def test_refresh_claude_capacity_keeps_account_when_agents_output_is_invalid(
     store: Registry,
 ) -> None:
@@ -462,7 +580,7 @@ async def test_refresh_claude_capacity_sanitizes_auth_command_failure(store: Reg
             provider="claude",
             state="ready",
             account_label="o***@example.com",
-            account_fingerprint="sha256:existing",
+            account_fingerprint="sha256:0123456789abcdef",
             observed_at="2026-07-14T12:00:00+00:00",
             account_observed_at="2026-07-14T12:00:00+00:00",
             confidence=1.0,

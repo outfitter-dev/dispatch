@@ -14,15 +14,18 @@ from outfitter.dispatch.client.models import (
     AccountRateLimitsResult,
     AccountReadResult,
     AccountUsageResult,
+    RateLimitResetCredit,
+    RateLimitResetCreditsSummary,
     RateLimitSnapshot,
     RateLimitWindow,
     SpendControlLimitSnapshot,
 )
 from outfitter.dispatch.core import handlers
-from outfitter.dispatch.core.capacity import refresh_codex_capacity
+from outfitter.dispatch.core.capacity import observe_codex_rate_limits, refresh_codex_capacity
 from outfitter.dispatch.core.models import UsageInput
 from outfitter.dispatch.core.reactor import Reactor
 from outfitter.dispatch.core.triggers import TriggerRunner
+from outfitter.dispatch.registry.models import ProviderCapacityState, ProviderCapacityWindow
 from outfitter.dispatch.registry.store import Registry
 from tests.fakes import FakeLaneClient, make_ctx
 from tests.fixtures import load_json
@@ -110,6 +113,52 @@ async def test_refresh_codex_capacity_deduplicates_base_windows_absent_from_map(
     assert len(keys) == len(set(keys))
 
 
+async def test_refresh_codex_capacity_keeps_newest_window_bound(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.rate_limits_result = AccountRateLimitsResult(
+        rate_limits=RateLimitSnapshot(),
+        rate_limits_by_limit_id={
+            f"limit-{index}": RateLimitSnapshot(
+                limit_id=f"limit-{index}",
+                primary=RateLimitWindow(used_percent=index),
+            )
+            for index in range(65)
+        },
+    )
+
+    observation = await refresh_codex_capacity(make_ctx(store, client))
+
+    assert len(observation.windows) == 64
+    assert all(window.limit_id != "limit-0" for window in observation.windows)
+    assert any(window.limit_id == "limit-64" for window in observation.windows)
+
+
+async def test_refresh_codex_capacity_keeps_newest_source_bound(store: Registry) -> None:
+    existing = provider_capacity_observation().model_copy(
+        update={"source": [f"legacy-{index}" for index in range(16)]}
+    )
+    await store.upsert_provider_capacity_observation(existing)
+    client = FakeLaneClient()
+    client.account_result = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    client.rate_limits_result = AccountRateLimitsResult.model_validate(
+        load_json("app_server", "account_rate_limits", "current.json")
+    )
+    client.usage_result = AccountUsageResult.model_validate(
+        load_json("app_server", "account_usage", "current.json")
+    )
+
+    observation = await refresh_codex_capacity(make_ctx(store, client))
+
+    assert len(observation.source) == 16
+    assert observation.source[-3:] == [
+        "account/read",
+        "account/rateLimits/read",
+        "account/usage/read",
+    ]
+
+
 async def test_refresh_codex_capacity_signed_out_skips_capacity_reads(store: Registry) -> None:
     client = FakeLaneClient()
     client.account_result = AccountReadResult.model_validate(
@@ -158,6 +207,298 @@ async def test_refresh_codex_capacity_marks_unsupported_and_partial_states(
     assert partial.windows == []
 
 
+async def test_refresh_codex_capacity_preserves_components_when_subprobes_fail(
+    store: Registry,
+) -> None:
+    initial_client = FakeLaneClient()
+    initial_client.account_result = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    initial_client.rate_limits_result = AccountRateLimitsResult.model_validate(
+        load_json("app_server", "account_rate_limits", "current.json")
+    )
+    initial_client.usage_result = AccountUsageResult.model_validate(
+        load_json("app_server", "account_usage", "current.json")
+    )
+    initial = await refresh_codex_capacity(make_ctx(store, initial_client))
+
+    class LimitsUnavailableClient(FakeLaneClient):
+        async def account_rate_limits_read(self) -> AccountRateLimitsResult:
+            raise AppServerError(-32000, "temporarily unavailable")
+
+    limits_unavailable = LimitsUnavailableClient()
+    limits_unavailable.account_result = initial_client.account_result
+    limits_unavailable.usage_result = initial_client.usage_result
+    after_limits_failure = await refresh_codex_capacity(make_ctx(store, limits_unavailable))
+
+    assert after_limits_failure.state == "partial"
+    assert after_limits_failure.windows == initial.windows
+    assert after_limits_failure.reset_credits == initial.reset_credits
+    assert after_limits_failure.capacity_observed_at == initial.capacity_observed_at
+    assert "account/rateLimits/read" in after_limits_failure.source
+
+    class UsageUnavailableClient(FakeLaneClient):
+        async def account_usage_read(self) -> AccountUsageResult:
+            raise AppServerError(-32000, "temporarily unavailable")
+
+    usage_unavailable = UsageUnavailableClient()
+    usage_unavailable.account_result = initial_client.account_result
+    usage_unavailable.rate_limits_result = initial_client.rate_limits_result
+    after_usage_failure = await refresh_codex_capacity(make_ctx(store, usage_unavailable))
+
+    assert after_usage_failure.state == "partial"
+    assert after_usage_failure.usage_summary == after_limits_failure.usage_summary
+    assert after_usage_failure.daily_usage == after_limits_failure.daily_usage
+    assert after_usage_failure.usage_observed_at == after_limits_failure.usage_observed_at
+    assert "account/usage/read" in after_usage_failure.source
+
+
+async def test_refresh_codex_capacity_clears_reset_credits_when_success_omits_them(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    client.account_result = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    client.rate_limits_result = AccountRateLimitsResult.model_validate(
+        load_json("app_server", "account_rate_limits", "current.json")
+    )
+    client.usage_result = AccountUsageResult.model_validate(
+        load_json("app_server", "account_usage", "current.json")
+    )
+    initial = await refresh_codex_capacity(make_ctx(store, client))
+    assert initial.reset_credits_available == 2
+    assert initial.reset_credits
+
+    client.rate_limits_result = client.rate_limits_result.model_copy(
+        update={"rate_limit_reset_credits": None}
+    )
+    refreshed = await refresh_codex_capacity(make_ctx(store, client))
+
+    assert refreshed.reset_credits_available is None
+    assert refreshed.reset_credits == []
+
+
+async def test_refresh_codex_capacity_bounds_reset_credit_collection(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    client.rate_limits_result = AccountRateLimitsResult(
+        rate_limits=RateLimitSnapshot(primary=RateLimitWindow(used_percent=10)),
+        rate_limit_reset_credits=RateLimitResetCreditsSummary(
+            available_count=101,
+            credits=[
+                RateLimitResetCredit(
+                    id=f"opaque-credit-{index}",
+                    reset_type="codexRateLimits",
+                    status="available",
+                    granted_at=index,
+                )
+                for index in range(101)
+            ],
+        ),
+    )
+
+    observation = await refresh_codex_capacity(make_ctx(store, client))
+
+    assert observation.reset_credits_available == 101
+    assert len(observation.reset_credits) == 100
+
+
+async def test_codex_plan_normalizes_whitespace_and_preserves_prior_value(
+    store: Registry,
+) -> None:
+    existing = provider_capacity_observation().model_copy(update={"plan": "pro"})
+    await store.upsert_provider_capacity_observation(existing)
+    client = FakeLaneClient()
+    signed_in = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    assert signed_in.account is not None
+    client.account_result = signed_in.model_copy(
+        update={"account": signed_in.account.model_copy(update={"plan_type": "   "})}
+    )
+    client.rate_limits_result = AccountRateLimitsResult(
+        rate_limits=RateLimitSnapshot(plan_type="   ")
+    )
+
+    refreshed = await refresh_codex_capacity(make_ctx(store, client))
+    pushed = await observe_codex_rate_limits(
+        make_ctx(store),
+        RateLimitSnapshot(plan_type="   ", primary=RateLimitWindow(used_percent=10)),
+    )
+
+    assert refreshed.plan == "pro"
+    assert pushed.plan == "pro"
+
+
+async def test_codex_window_and_credit_fields_are_bounded(store: Registry) -> None:
+    client = FakeLaneClient()
+    signed_in = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    client.account_result = signed_in
+    long_name = "x" * 150
+    client.rate_limits_result = AccountRateLimitsResult(
+        rate_limits=RateLimitSnapshot(
+            limit_id="codex",
+            limit_name="   ",
+            rate_limit_reached_type=long_name,
+            primary=RateLimitWindow(used_percent=10),
+        ),
+        rate_limit_reset_credits=RateLimitResetCreditsSummary(
+            available_count=2,
+            credits=[
+                RateLimitResetCredit(
+                    id="opaque-credit-1",
+                    reset_type=long_name,
+                    status="  available  ",
+                    granted_at=1783700000,
+                    title="   ",
+                ),
+                RateLimitResetCredit(
+                    id="opaque-credit-2",
+                    reset_type="   ",
+                    status="available",
+                    granted_at=1783700001,
+                    title="kept out",
+                ),
+            ],
+        ),
+    )
+
+    refreshed = await refresh_codex_capacity(make_ctx(store, client))
+    pushed = await observe_codex_rate_limits(
+        make_ctx(store),
+        RateLimitSnapshot(
+            limit_id="codex",
+            limit_name=long_name,
+            rate_limit_reached_type="   ",
+            primary=RateLimitWindow(used_percent=20),
+        ),
+    )
+
+    assert refreshed.windows
+    assert all(window.limit_name is None for window in refreshed.windows)
+    assert all(
+        window.reached_type is not None and len(window.reached_type) <= 120
+        for window in refreshed.windows
+    )
+    assert len(refreshed.reset_credits) == 2
+    assert refreshed.reset_credits[0].status == "available"
+    assert len(refreshed.reset_credits[0].reset_type) <= 120
+    assert refreshed.reset_credits[0].title is None
+    assert refreshed.reset_credits[1].reset_type == "unknown"
+    assert pushed.windows
+    assert all(
+        window.limit_name is not None and len(window.limit_name) <= 120 for window in pushed.windows
+    )
+    assert all(window.reached_type is None for window in pushed.windows)
+
+
+async def test_codex_normalizes_bounded_window_and_reset_credit_text(store: Registry) -> None:
+    client = FakeLaneClient()
+    client.rate_limits_result = AccountRateLimitsResult(
+        rate_limits=RateLimitSnapshot(
+            limit_id="   ",
+            limit_name="x" * 121,
+            primary=RateLimitWindow(used_percent=10),
+            rate_limit_reached_type="   ",
+        ),
+        rate_limit_reset_credits=RateLimitResetCreditsSummary(
+            available_count=1,
+            credits=[
+                RateLimitResetCredit(
+                    id="opaque-credit",
+                    reset_type="x" * 121,
+                    status="   ",
+                    granted_at=1,
+                )
+            ],
+        ),
+    )
+
+    observation = await refresh_codex_capacity(make_ctx(store, client))
+
+    [window] = observation.windows
+    assert window.limit_id == "default"
+    assert window.limit_name == "x" * 119 + "…"
+    assert window.reached_type is None
+    [credit] = observation.reset_credits
+    assert credit.reset_type == "x" * 119 + "…"
+    assert credit.status == "unknown"
+
+
+async def test_codex_normalizes_account_type(store: Registry) -> None:
+    client = FakeLaneClient()
+    signed_in = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    assert signed_in.account is not None
+    client.account_result = signed_in.model_copy(
+        update={"account": signed_in.account.model_copy(update={"type": "x" * 121})}
+    )
+
+    bounded = await refresh_codex_capacity(make_ctx(store, client))
+
+    assert bounded.account_type == "x" * 119 + "…"
+
+    client.account_result = signed_in.model_copy(
+        update={"account": signed_in.account.model_copy(update={"type": "   "})}
+    )
+    fallback = await refresh_codex_capacity(make_ctx(store, client))
+
+    assert fallback.account_type == "unknown"
+
+
+async def test_codex_email_masking_cannot_exceed_persisted_label_bound(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    signed_in = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    assert signed_in.account is not None
+    client.account_result = signed_in.model_copy(
+        update={"account": signed_in.account.model_copy(update={"email": f"a@{'x' * 252}"})}
+    )
+
+    observation = await refresh_codex_capacity(make_ctx(store, client))
+
+    assert observation.account_label == "redacted"
+
+
+async def test_refresh_codex_capacity_preserves_observation_when_account_probe_fails(
+    store: Registry,
+) -> None:
+    initial_client = FakeLaneClient()
+    initial_client.account_result = AccountReadResult.model_validate(
+        load_json("app_server", "account_read", "signed_in.json")
+    )
+    initial_client.rate_limits_result = AccountRateLimitsResult.model_validate(
+        load_json("app_server", "account_rate_limits", "current.json")
+    )
+    initial_client.usage_result = AccountUsageResult.model_validate(
+        load_json("app_server", "account_usage", "current.json")
+    )
+    initial = await refresh_codex_capacity(make_ctx(store, initial_client))
+
+    class AccountUnavailableClient(FakeLaneClient):
+        async def account_read(self) -> AccountReadResult:
+            raise AppServerError(-32000, "temporarily unavailable")
+
+    failed = await refresh_codex_capacity(make_ctx(store, AccountUnavailableClient()))
+
+    assert failed.state == "unavailable"
+    assert failed.account_fingerprint == initial.account_fingerprint
+    assert failed.windows == initial.windows
+    assert failed.usage_summary == initial.usage_summary
+    assert failed.account_observed_at == initial.account_observed_at
+    assert failed.capacity_observed_at == initial.capacity_observed_at
+    assert failed.usage_observed_at == initial.usage_observed_at
+    assert failed.error == "account/read unavailable"
+
+
 async def test_rate_limit_notification_refreshes_without_polling(store: Registry) -> None:
     client = FakeLaneClient()
     ctx = make_ctx(store, client)
@@ -179,6 +520,40 @@ async def test_rate_limit_notification_refreshes_without_polling(store: Registry
     assert saved.usage_observed_at is None
     assert saved.source == ["account/rateLimits/updated"]
     assert client.calls == []
+
+
+async def test_rate_limit_notification_keeps_observation_window_bound(store: Registry) -> None:
+    observed_at = "2026-07-14T12:00:00+00:00"
+    existing = provider_capacity_observation(observed_at=observed_at).model_copy(
+        update={
+            "windows": [
+                ProviderCapacityWindow(
+                    limit_id=f"limit-{index}",
+                    window="primary",
+                    used_percent=index,
+                    observed_at=observed_at,
+                )
+                for index in range(64)
+            ]
+        }
+    )
+    await store.upsert_provider_capacity_observation(existing)
+
+    saved = await observe_codex_rate_limits(
+        make_ctx(store),
+        RateLimitSnapshot(
+            limit_id="new-limit",
+            primary=RateLimitWindow(used_percent=50),
+        ),
+    )
+
+    assert len(saved.windows) == 64
+    assert ("new-limit", "primary") in {
+        (window.limit_id, window.window) for window in saved.windows
+    }
+    assert ("limit-0", "primary") not in {
+        (window.limit_id, window.window) for window in saved.windows
+    }
 
 
 async def test_rate_limit_notification_preserves_component_freshness(store: Registry) -> None:
@@ -233,6 +608,37 @@ async def test_rate_limit_notification_preserves_component_freshness(store: Regi
     assert after_secondary.observed_at == before_secondary.observed_at
 
 
+@pytest.mark.parametrize(
+    "state",
+    ["ready", "partial", "signed_out", "unsupported", "unavailable", "disabled"],
+)
+async def test_rate_limit_notification_preserves_existing_account_state(
+    store: Registry, state: ProviderCapacityState
+) -> None:
+    existing = provider_capacity_observation().model_copy(
+        update={
+            "state": state,
+            "confidence": 0.4,
+            "error": "account state remains authoritative",
+        }
+    )
+    await store.upsert_provider_capacity_observation(existing)
+
+    observation = await observe_codex_rate_limits(
+        make_ctx(store),
+        RateLimitSnapshot(
+            limit_id="codex",
+            primary=RateLimitWindow(used_percent=20),
+        ),
+    )
+
+    assert observation.state == state
+    assert observation.confidence == 0.4
+    assert observation.error == "account state remains authoritative"
+    assert observation.capacity_observed_at == observation.observed_at
+    assert observation.windows[0].used_percent == 20
+
+
 async def test_idless_rate_limit_notification_reuses_unambiguous_named_limit(
     store: Registry,
 ) -> None:
@@ -277,6 +683,62 @@ async def test_idless_rate_limit_notification_reuses_unambiguous_named_limit(
         if window.limit_id == "codex" and window.window == "secondary"
     )
     assert after_secondary.observed_at == before_secondary.observed_at
+
+
+async def test_whitespace_id_rate_limit_notification_uses_normalized_matching(
+    store: Registry,
+) -> None:
+    observed_at = "2026-07-14T12:00:00+00:00"
+    existing = provider_capacity_observation(observed_at=observed_at).model_copy(
+        update={
+            "windows": [
+                ProviderCapacityWindow(
+                    limit_id="codex",
+                    limit_name="Codex",
+                    window="primary",
+                    used_percent=10,
+                    observed_at=observed_at,
+                ),
+                ProviderCapacityWindow(
+                    limit_id="review",
+                    limit_name="Review",
+                    window="primary",
+                    used_percent=5,
+                    observed_at=observed_at,
+                ),
+            ]
+        }
+    )
+    await store.upsert_provider_capacity_observation(existing)
+
+    matched = await observe_codex_rate_limits(
+        make_ctx(store),
+        RateLimitSnapshot(
+            limit_id="   ",
+            limit_name="Codex",
+            primary=RateLimitWindow(used_percent=20),
+        ),
+    )
+
+    assert {(window.limit_id, window.used_percent) for window in matched.windows} == {
+        ("codex", 20),
+        ("review", 5),
+    }
+
+    unmatched = await observe_codex_rate_limits(
+        make_ctx(store),
+        RateLimitSnapshot(
+            limit_id="   ",
+            limit_name="Other",
+            primary=RateLimitWindow(used_percent=30),
+        ),
+    )
+
+    assert {(window.limit_id, window.used_percent) for window in unmatched.windows} == {
+        ("codex", 20),
+        ("review", 5),
+        ("default", 30),
+    }
 
 
 async def test_idless_rate_limit_notification_reuses_sole_existing_limit(
