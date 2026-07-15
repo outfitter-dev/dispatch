@@ -102,6 +102,11 @@ Refs: `.agents/goals/2026-07-15-claude-control-plane-research/REFS.md`
 - Receipt blocker remains: Agent View quick reply has not exposed all sibling prompt-hook settlements plus owned provider activity to Dispatch without raw transcript access. Transcript mtime/size and cockpit state are corroboration, not acceptance. The preferred design is therefore identified but DIS-54 stays open.
 - No further Agent View process was launched because of the previously observed global-settings mutation. Added a sanitized executable cockpit-plan fixture and repository-gated negative capability test instead.
 
+2026-07-15 - Read-only existing-cockpit evidence supplied by coordinator
+- The coordinator observed an existing user-owned zmx cockpit without sending input or mutating it. zmx reported one attached client with a `claude agents` child; `history --vt` rendered the alternate-screen Agent View structure and plain history produced clean parseable text.
+- Independent `claude agents --json` returned exact short/full identities and states for the blocked rows represented in the cockpit. The UI additionally retained completed rows and the quick-reply footer.
+- This raises confidence in the roster-identity plus guarded-VT composition. It does not prove current-screen revision, atomic/redacted writes, concurrent-human exclusion, Claude receipts, or one shared history; DIS-54 remains blocked and all mutation tests stay disposable-only.
+
 2026-07-15 - Aggregate receipts, transport/security review, and preflight milestone
 - Transport review round 1 scored 2/5 with 3 P1 and 4 P2 findings. Security/product review round 1 scored 2/5 with 4 P1 and 2 P2 findings. Reports are local scratch under `tmp/reviews/transport/round-1.json` and `tmp/reviews/security-product/round-1.json`.
 - Blocking sibling prompt hook: the Dispatch observer completed, a sibling `UserPromptSubmit` hook exited 2, no assistant activity or Stop occurred, yet the CLI emitted result subtype success. Therefore observer success and result success do not prove acceptance; processing requires aggregate prompt-hook settlement plus owned-stream assistant/tool activity.
@@ -145,6 +150,7 @@ Refs: `.agents/goals/2026-07-15-claude-control-plane-research/REFS.md`
 | coexist-3 | Can one persistent stream owner carry multiple turns and share with external resume? | Two framed owner messages, concurrent resume, later owner visibility check | Claude Code 2.1.210 | Multi-turn owner verified; shared ownership failed because external turn was absent from continuing owner | high | coexistence fixture + research doc | owner exited; temp removed |
 | cockpit-1 | Is there a target-safe path into the existing Agent View owner? | Read Crew quick-reply implementation, committed live lessons, and current identity guards | Crew commit `4a24fdb` + dirty worktree | Yes as UI composition: exact row, detail/title, return/reselect, literal-space reply, reply-prompt guard, submit | medium-high; direct Dispatch/zmx proof pending | cockpit plan fixture + provider plan | read-only; no process launch |
 | cockpit-2 | Can installed zmx safely implement the cockpit route? | Compare zmx 0.6.0 help/source/fake failures to Crew console needs | zmx 0.6.0 | No as shipped: lacks revisioned screen, named/conditional atomic input, reliable ACK/errors, and redaction | high | transport table + DIS-54 | no zmx mutation |
+| cockpit-3 | Can zmx expose enough Agent View screen state to implement guarded reads? | Coordinator-supplied read-only `list`, `history --vt`, plain history, process relation, and independent Agent View JSON roster from an existing user-owned cockpit | zmx 0.6.0 / Claude 2.1.210 | Yes for architectural reads: alternate-screen structure and parseable text join to exact roster identities; no mutation/receipt proof | medium-high | research + provider plan + DIS-54 | coordinator made no input/mutation; research worker did not access session |
 
 ## Source / Version Ledger
 
@@ -158,7 +164,8 @@ Refs: `.agents/goals/2026-07-15-claude-control-plane-research/REFS.md`
 | Claude Remote Control | 2026-07-15 research preview | explicit external product boundary | documented only; no live mutation |
 | zmx docs and tagged v0.6.0 source | 2026-07-15 / 0.6.0 | PTY/send/security semantics | reconciled with isolated fake target |
 | Dispatch source/ADRs | commit 06ae574 baseline | provider/storage/handler/selector seams | audited |
-| Crew quick-reply implementation and operating lessons | local `4a24fdb` plus current uncommitted identity hardening | target-safe Agent View UI route and live literal-space behavior; UI send is not receipt | reconciled into DIS-54 candidate; no Dispatch/zmx live proof |
+| Crew quick-reply implementation and operating lessons | local `4a24fdb` plus current uncommitted identity hardening | target-safe Agent View UI route and live literal-space behavior; UI send is not receipt | reconciled into DIS-54 candidate; no Dispatch/zmx live mutation proof |
+| Coordinator-supplied existing-cockpit observation | zmx 0.6.0 / Claude 2.1.210 | alternate-screen VT and parseable text are available; JSON roster supplies exact identities | read-only architectural evidence; no input, receipts, or transcript capture retained |
 
 ## Cleanup Audit
 
@@ -177,7 +184,11 @@ Refs: `.agents/goals/2026-07-15-claude-control-plane-research/REFS.md`
   sources, and strict empty MCP. Contents were not inspected or retained, and
   research did not restore or edit the file. The already captured
   repository-local digest prefix remained 378cd942....
-- Existing Agent View entries and default zmx session were never opened, read, messaged, attached, interrupted, renamed, stopped, or removed.
+- The research worker never opened, read, messaged, attached, interrupted,
+  renamed, stopped, or removed an existing Agent View entry or zmx session. The
+  coordinator later supplied a bounded read-only structural observation of the
+  existing cockpit; no input or mutation occurred and no raw screen/transcript
+  content is retained here.
 - Claude's documented local transcript retention remains provider-owned. The research did not locate, read, or manually delete transcript files; Agent View rm is not transcript delete.
 ```
 

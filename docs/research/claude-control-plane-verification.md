@@ -99,6 +99,7 @@ VT, transaction, and redaction contract.
 | [zmx docs](https://zmx.sh/) and [tagged source](https://github.com/neurosnap/zmx/tree/v0.6.0) | 0.6.0 | PTY ownership, raw send, no ACK, buffer/drop behavior, modes, input logging | primary source + fake target |
 | Installed help and probes in `spikes/claude/` | Claude Code 2.1.210 / zmx 0.6.0 | actual flags, event shapes, identity, lifecycle, interrupt, concurrency, failure, cleanup | observed |
 | Crew `sendClaudeAgentsMessage` and operating lessons | local worktree at `4a24fdb`; committed live quick-reply lesson plus current target-identity hardening | home/row/detail/return/reply guards; literal-space behavior; UI automation is not receipt | implementation + dogfood evidence; Dispatch/zmx proof pending |
+| Coordinator-supplied read-only zmx cockpit observation | 2026-07-15 / zmx 0.6.0 | alternate-screen structure and parseable plain history; Agent View JSON supplies full identities for visible blocked rows | non-content architectural evidence from an existing user-owned session; no input or mutation; not delivery proof |
 
 The packet's old `/docs/en/cli-reference` URL redirects; the current canonical
 CLI page is `/docs/en/cli-usage`.
@@ -174,13 +175,19 @@ while explicitly warning that UI typing is not delivery proof. Dispatch should
 host this cockpit in zmx so a human and automation observe one Agent View owner,
 then use Claude hooks/owned evidence—not zmx status or scrollback—for receipts.
 
-The installed pieces are still insufficient. zmx 0.6.0 provides no revisioned
-snapshot, conditional atomic input transaction, named keys, send ACK, or input-log
-redaction. Concurrent human keystrokes can invalidate selection between screen
-reads; a safe provider must abort on revision change and atomically submit payload
-plus Enter under a short UI transaction lease. Even after a PTY write ACK,
-acceptance remains blocked until aggregate prompt-hook settlement and owned
-provider activity can be corroborated without reading raw transcripts.
+The installed pieces are still insufficient. Coordinator-supplied read-only
+evidence from an existing user-owned cockpit shows that zmx 0.6.0 `history --vt`
+can render Agent View's alternate screen with cursor/style state and that plain
+history is structurally parseable; independent `claude agents --json` supplies
+the exact full session identities for visible blocked rows. This validates the
+API-identity plus VT-choreography composition, but not safe control. zmx still
+provides no bounded current-screen revision, conditional atomic input
+transaction, named keys, send ACK, or input-log redaction. Concurrent human
+keystrokes can invalidate selection between screen reads; a safe provider must
+abort on revision change and atomically submit payload plus Enter under a short
+UI transaction lease. Even after a PTY write ACK, acceptance remains blocked
+until aggregate prompt-hook settlement and owned provider activity can be
+corroborated without reading raw transcripts.
 
 The regression criterion is one coherent history, not two live processes. An
 acceptable future transport must prove that the attached human observes the
@@ -345,7 +352,7 @@ capability has no acceptable primitive under the pinned versions.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Exclusive persistent stream-JSON owner | verified across multiple serialized turns while one owner lives | strongest: owned frames, stream activity, aggregate hooks, prompt IDs | no supported attached TUI; concurrent resume splits history | owned process group; after proven exit, resume UUID as a new owner | no extra PTY logger; retain only normalized events | medium | recommended headless base, but does not satisfy seamless coexistence |
 | Fresh `--resume --print` per turn | verified only with no other live owner | strong per-process stream + aggregate hooks | failed: ordinary TUI/stream owner diverged; Agent View rejected it | simple process lifecycle and restart | no extra PTY logger | low | rejected as the default transport |
-| zmx-hosted Agent View cockpit | preserves the Agent View background owner; Crew proves guarded quick-reply UI route | zmx write ACK is transport-only; Claude aggregate hooks + owned activity still required | preferred: human attaches/detaches from same cockpit; revision race must abort | Agent View supervisor owns workers; zmx cockpit restarts without resuming workers | blocked as shipped: 0.6.0 logs input and lacks conditional atomic writes | high | recommended DIS-54 direction; not enable-ready |
+| zmx-hosted Agent View cockpit | preserves the Agent View background owner; Crew proves guarded quick-reply UI route; read-only evidence confirms zmx renders Agent View alternate-screen/text state while the roster supplies full IDs | zmx write ACK is transport-only; Claude aggregate hooks + owned activity still required | preferred: human attaches/detaches from same cockpit; revision race must abort | Agent View supervisor owns workers; zmx cockpit restarts without resuming workers | blocked as shipped: 0.6.0 lacks a bounded revisioned current screen and conditional atomic/redacted writes | high | recommended DIS-54 direction; not enable-ready |
 | zmx-owned worker TUI | one PTY could serialize human and Dispatch input in principle | Claude hooks could confirm after raw injection, but zmx itself has no ACK/order guarantee | possible but duplicates Agent View supervision and attention UI | raw Ctrl-C/loss unconfirmed; persistent process | blocked: 0.6.0 logs raw PTY input and can drop queued bytes | medium-high | fallback investigation, not preferred |
 | Remote Control / Agent View controls | provider-owned multi-device human continuity | no documented local programmable send RPC | human-facing only | provider reconnection/supervisor semantics | Anthropic relay/product policy | high/product | deferred product decision |
 

@@ -232,6 +232,14 @@ class CockpitTransport(Protocol):
     async def attach_info(self) -> AttachState: ...
 ```
 
+Read-only coordinator evidence confirms the lower half of this seam on zmx
+0.6.0: `history --vt` renders Agent View's alternate screen (cursor, row/status
+groups, quick-reply footer, and styling), plain history is parseable, and
+`claude agents --json` independently supplies full UUID/name/state/cwd roster
+identity. Dispatch must join roster identity to guarded screen state; terminal
+row text alone never becomes authority. This does not satisfy the mutation or
+receipt gates below.
+
 Required zmx work, all gated by DIS-54:
 
 - render a bounded current VT snapshot separately from scrollback/history;
