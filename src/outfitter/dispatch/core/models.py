@@ -25,6 +25,7 @@ from outfitter.dispatch.registry.models import (
     ProviderCapacityState,
     ProviderDailyUsage,
     ProviderResetCredit,
+    ProviderRuntimeSummary,
     ProviderUsageSummary,
     ServerRequestState,
     ServiceTierSource,
@@ -1351,13 +1352,20 @@ class UsageObservationView(BaseModel):
     stale: bool
     freshness_seconds: int | None = None
     account_freshness_seconds: int | None = None
+    runtime_freshness_seconds: int | None = None
     capacity_freshness_seconds: int | None = None
     usage_freshness_seconds: int | None = None
     account_type: str | None = None
     account_fingerprint: str | None = None
     account_label: str | None = None
+    auth_method: str | None = None
+    api_provider: str | None = None
+    organization_fingerprint: str | None = None
+    organization_label: str | None = None
+    cli_version: str | None = None
     plan: str | None = None
     requires_auth: bool | None = None
+    runtime: ProviderRuntimeSummary | None = None
     windows: list[UsageWindowView] = Field(default_factory=list)
     reset_credits_available: int | None = None
     reset_credits: list[ProviderResetCredit] = Field(default_factory=list)

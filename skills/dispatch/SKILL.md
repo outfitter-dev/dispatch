@@ -247,19 +247,25 @@ Use the redacted provider inventory before routing optional work by capacity:
 uv run dispatch usage
 uv run dispatch usage --no-refresh --json
 uv run dispatch usage --provider codex --host local
+uv run dispatch usage --provider claude --host local
 uv run dispatch usage --all-hosts --no-refresh
 uv run dispatch usage --include-daily --stale-after-seconds 300
 uv run dispatch schema usage
 ```
 
-Default `usage` refreshes supported local providers and omits daily buckets.
-Use `--no-refresh` for a database-only read and `--include-daily` only when
-historical detail is needed. The default host is `local`; use `--all-hosts` for
-mesh inventory. Treat `stale: true`, `partial`, `signed_out`,
-`disabled`, `unsupported`, and `unavailable` as explicit routing constraints.
-Capacity, account, usage, and each window have independent freshness. Output is
-masked/fingerprinted and never includes raw email, auth material, balances, or
-reset-credit mutation ids.
+Default `usage` refreshes local Codex and Claude independently and omits daily
+buckets. Claude uses the read-only `claude auth status --json` and `claude
+agents --json` surfaces; Dispatch stores aggregate state counts, never roster
+cwd/name/session/id fields or raw command output. The observation also records
+the bounded semantic version from `claude --version`. Use `--no-refresh` for a
+database-only read and `--include-daily` only when historical detail is needed.
+The default host is `local`; use `--all-hosts` for mesh inventory. Treat `stale:
+true`, `partial`, `signed_out`, `disabled`, `unsupported`, and `unavailable` as
+explicit routing constraints. Runtime, capacity, account, usage, and each
+window have independent freshness. Output is masked/fingerprinted and never
+includes raw email or organization ids, auth material, balances, or
+reset-credit mutation ids. Claude account/runtime can be ready before supported
+statusline capacity snapshots exist.
 
 Attached lanes are existing desktop Codex threads registered by raw thread id:
 

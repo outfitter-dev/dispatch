@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, JsonValue, StrictInt, StrictStr, TypeAdapter
+from pydantic import BaseModel, Field, JsonValue, StrictInt, StrictStr, TypeAdapter, model_validator
 
 from outfitter.dispatch.client.models import (
     ApprovalPolicy,
@@ -227,6 +227,22 @@ class ProviderDailyUsage(BaseModel):
     tokens: int = Field(ge=0)
 
 
+class ProviderRuntimeSummary(BaseModel):
+    total_agents: int = Field(ge=0)
+    active_agents: int = Field(ge=0)
+    state_counts: dict[str, Annotated[int, Field(ge=0)]] = Field(
+        default_factory=dict, max_length=16
+    )
+
+    @model_validator(mode="after")
+    def _valid_counts(self) -> ProviderRuntimeSummary:
+        if self.active_agents > self.total_agents:
+            raise ValueError("active_agents cannot exceed total_agents")
+        if sum(self.state_counts.values()) != self.total_agents:
+            raise ValueError("state_counts must sum to total_agents")
+        return self
+
+
 class ProviderCapacityObservation(BaseModel):
     provider: str
     host_scope: str = "local"
@@ -235,8 +251,14 @@ class ProviderCapacityObservation(BaseModel):
     account_type: str | None = None
     account_fingerprint: str | None = None
     account_label: str | None = None
+    auth_method: str | None = None
+    api_provider: str | None = None
+    organization_fingerprint: str | None = None
+    organization_label: str | None = None
+    cli_version: str | None = None
     plan: str | None = None
     requires_auth: bool | None = None
+    runtime: ProviderRuntimeSummary | None = None
     windows: list[ProviderCapacityWindow] = Field(default_factory=list)
     reset_credits_available: int | None = Field(default=None, ge=0)
     reset_credits: list[ProviderResetCredit] = Field(default_factory=list)
@@ -247,6 +269,7 @@ class ProviderCapacityObservation(BaseModel):
     source: list[str] = Field(default_factory=list)
     observed_at: str
     account_observed_at: str | None = None
+    runtime_observed_at: str | None = None
     capacity_observed_at: str | None = None
     usage_observed_at: str | None = None
     confidence: float = Field(ge=0.0, le=1.0)

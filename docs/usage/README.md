@@ -325,27 +325,40 @@ Inspect provider account and capacity inventory with the authored `usage` read:
 uv run dispatch usage
 uv run dispatch usage --no-refresh --json
 uv run dispatch usage --provider codex --host local
+uv run dispatch usage --provider claude --host local
 uv run dispatch usage --all-hosts --no-refresh
 uv run dispatch usage --include-daily --stale-after-seconds 300
 uv run dispatch schema usage
 ```
 
-`usage` refreshes supported local providers by default, then reads the
-provider-neutral observation store. The default response is compact: account
-type, masked label and fingerprint, plan, capacity windows, reset-credit
-availability, usage summary, source, confidence, and freshness. Daily buckets
-are bounded and opt-in with `--include-daily`. `--no-refresh` makes the command
-a local database read; provider, host, and config-scope filters also work for
-future mesh observations without changing the contract. The default host is
-`local`; use `--all-hosts` to inspect every observed machine.
+`usage` refreshes supported local Codex and Claude providers independently,
+then reads the provider-neutral observation store. One unavailable provider
+does not hide the other. The default response is compact: account type, masked
+label and fingerprint, plan, Claude CLI version, aggregate runtime counts,
+capacity windows,
+reset-credit availability, usage summary, source, confidence, and component
+freshness. Daily buckets are bounded and opt-in with `--include-daily`.
+`--no-refresh` makes the command a local database read; provider, host, and
+config-scope filters also work for future mesh observations without changing
+the contract. The default host is `local`; use `--all-hosts` to inspect every
+observed machine.
+
+Claude refresh uses only `claude auth status --json`, `claude --version`, and
+`claude agents --json`. It persists a masked/fingerprinted account identity and aggregate
+agent state counts, not the roster: cwd values, agent/session ids, agent names,
+raw command output, auth files, cookies, and tokens are excluded. Claude
+capacity windows remain absent until a supported statusline snapshot has been
+captured; account/runtime state can still be `ready` without capacity data.
+Dispatch does not run `claude daemon status` because its free-form output
+includes local paths and operational detail unnecessary for this inventory.
 
 States are explicit: `ready`, `partial`, `signed_out`, `disabled`,
 `unsupported`, and `unavailable`. `stale` is separate from state and is computed
 from component and per-window timestamps using `--stale-after-seconds`; a
 rate-limit push does not make older account or historical usage facts look
-fresh. JSON never includes raw email, tokens, raw auth responses, credit
-balances, or reset-credit mutation ids. Reset credits are inventory only;
-Dispatch does not redeem them.
+fresh. JSON never includes raw email or organization ids, tokens, raw
+auth/roster responses, credit balances, or reset-credit mutation ids. Reset
+credits are inventory only; Dispatch does not redeem them.
 
 Use `--goal` to create a native App Server goal before the initial message is sent.
 Slash commands in `--text` are not interpreted by dispatch; `--text "/goal ..."`
