@@ -4,7 +4,7 @@ slug: single-daemon-over-one-app-server
 title: Single Daemon over One App Server
 status: accepted
 created: 2026-06-02
-updated: 2026-06-09
+updated: 2026-07-15
 owners: ['[galligan](https://github.com/galligan)']
 ---
 
@@ -19,6 +19,12 @@ dispatch drives many lanes (Codex threads), reacts to their live events for trig
 Run one long-lived **daemon** (`dispatchd`) that spawns and owns **one** `codex app-server --listen stdio://` (sharing `CODEX_HOME=~/.codex` so it sees existing desktop lanes). A message router demuxes the single connection by request id / `threadId` into per-lane event streams. The daemon hosts the core and executes all op handlers, and exposes a Unix-socket control API — the canonical projection surfaces render. The CLI is a thin **sync** client; MCP (`dispatch mcp`) is a stdio server routing to the same control API.
 
 We drive the App Server binary directly; the `openai-codex` SDK has lagged the installed CLI before, so adopting it would require a fresh bundled-binary check.
+
+This decision governs the Codex runtime, not the number of execution providers.
+`dispatchd` remains the single operation/control authority, while a fixed
+provider manager may also own provider-specific runtimes such as the Claude
+resume-process supervisor in ADR-0026. Claude sessions never go through or spawn
+another Codex App Server.
 
 ## Consequences
 
@@ -40,4 +46,4 @@ We drive the App Server binary directly; the `openai-codex` SDK has lagged the i
 
 ## References
 
-- `docs/development/design.md`; `docs/research/app-server-verification.md`; `.claude/rules/client.md`
+- `docs/development/design.md`; `docs/research/app-server-verification.md`; `.claude/rules/client.md`; [ADR-0026](0026-claude-control-uses-resume-processes-and-hooks.md)

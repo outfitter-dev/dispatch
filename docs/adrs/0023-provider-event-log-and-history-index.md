@@ -4,7 +4,7 @@ slug: provider-event-log-and-history-index
 title: Provider Event Log and History Index
 status: proposed
 created: 2026-07-01
-updated: 2026-07-11
+updated: 2026-07-15
 owners: ['[galligan](https://github.com/galligan)']
 ---
 
@@ -36,12 +36,17 @@ This is a useful v0 compromise, but it leaves important product goals awkward:
 - future semantic search over thread history, summaries, tool results, and
   operator notes.
 
-Recent Claude hook research also points at the same shape. Claude can emit
+Direct Claude Code 2.1.210 verification now confirms the same shape. Claude emits
 structured lifecycle and attention events such as `UserPromptSubmit`,
 `Notification`, `PermissionRequest`, `Elicitation`, `ElicitationResult`, `Stop`,
-`StopFailure`, `SessionStart`, and `SessionEnd`. `UserPromptSubmit` can act as a
-delivery-acceptance receipt when correlated with a Dispatch message marker, and
-`Stop` can act as a turn-completion signal. Those events are not Codex
+`StopFailure`, `SessionStart`, and `SessionEnd`. A Dispatch `UserPromptSubmit`
+observation is submission evidence only. Processing requires every sibling
+prompt hook to reach a terminal non-blocking outcome plus first owned-stream
+assistant/tool activity. Exit 1 and timeout are fail-open, degraded-health
+outcomes; exit 2 or a blocking decision prevents processing. Claude assigns a
+`prompt_id` shared by `UserPromptSubmit` and repeatable `Stop` cycles. Completion
+requires the final Stop hook set to settle without continuation, followed by
+terminal result success and clean owned-process exit. Those events are not Codex
 `LaneEvent`s, but they map naturally onto provider-neutral event and history
 records.
 
@@ -118,10 +123,14 @@ Claude comes second:
 1. Dispatch-created Claude sessions add per-session hooks where possible rather
    than mutating global Claude settings.
 2. Claude hook events are ingested into `provider_events`.
-3. Hook events are reduced into the same `message_receipts`,
+3. Hook observations are combined with owned structured stream events before
+   reduction into the same `message_receipts`,
    `lane_runtime_state`, and attention/inbox semantics used for Codex.
-4. Claude-specific transport details such as zmx remain provider adapter details,
-   not cross-provider history schema.
+4. The initial transport is a serialized fresh resume/print subprocess per turn;
+   Claude-specific process details remain adapter-local, not cross-provider
+   history schema.
+5. zmx 0.6.0 is excluded from the initial transport because raw sends are not
+   acknowledged and the installed version always logs PTY input bytes.
 
 Storage backend policy:
 
@@ -165,8 +174,8 @@ Retention and privacy policy:
   on the design.
 - CLI, MCP, triggers, inbox, subscriptions, and future remote surfaces can read
   the same derived state.
-- Message receipts can distinguish "transport accepted input", "provider accepted
-  prompt", and "turn completed".
+- Message receipts can distinguish possible transport submission, observed
+  submission, provider processing, Stop cycles, and structurally completed turns.
 - `needs-attention` can become a normalized state across Codex approvals and
   Claude permission/elicitation hooks.
 - History search can become fast, scriptable, and filterable by stable fields.
@@ -217,6 +226,7 @@ Retention and privacy policy:
 - [ADR-0021: Lane Inbox and Delivery](0021-lane-inbox-and-delivery.md)
 - [ADR-0022: Event Subscriptions](0022-event-subscriptions.md)
 - [Claude Code hooks reference](https://code.claude.com/docs/en/hooks)
+- [ADR-0026: Claude Control Uses Resume Processes and Hooks](0026-claude-control-uses-resume-processes-and-hooks.md)
 - [Turso AI and embeddings](https://docs.turso.tech/features/ai-and-embeddings)
 - [Turso libSQL overview](https://docs.turso.tech/libsql)
 - [Turso Python quickstart](https://docs.turso.tech/sdk/python/quickstart)

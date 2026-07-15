@@ -1,0 +1,6 @@
+{"sequence":1,"type":"system","subtype":"hook_started","hook_event":"UserPromptSubmit","hook_id":"00000000-0000-4000-8000-000000000101"}
+{"sequence":2,"type":"assistant"}
+{"sequence":3,"type":"system","subtype":"hook_started","hook_event":"Stop","hook_id":"00000000-0000-4000-8000-000000000102"}
+{"sequence":4,"type":"system","subtype":"hook_response","hook_event":"Stop","hook_id":"00000000-0000-4000-8000-000000000102","exit_code":0,"outcome":"success"}
+{"sequence":5,"type":"result","subtype":"success"}
+{"sequence":6,"type":"process_exit","exit_code":0}

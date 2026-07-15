@@ -34,3 +34,4 @@ Files are `NNNN-slug.md`. Copy [`template.md`](template.md) to start one. Keep t
 | [0023](0023-provider-event-log-and-history-index.md) | Provider Event Log and History Index | Proposed |
 | [0024](0024-provider-thread-topology-is-independent-of-lane-authority.md) | Provider Thread Topology Is Independent of Lane Authority | Accepted |
 | [0025](0025-provider-capacity-observations-are-latest-value-snapshots.md) | Provider Capacity Observations Are Latest-Value Snapshots | Accepted |
+| [0026](0026-claude-control-uses-resume-processes-and-hooks.md) | Claude Control Uses Resume Processes and Hooks | Proposed |

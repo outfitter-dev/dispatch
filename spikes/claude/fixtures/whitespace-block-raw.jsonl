@@ -1,0 +1,1 @@
+{"type":"system","subtype":"hook_response","hook_event":"Stop","hook_id":"00000000-0000-4000-8000-000000000141","exit_code":0,"outcome":"success","stdout":"{ \"decision\": \"block\", \"reason\": \"synthetic\" }"}
