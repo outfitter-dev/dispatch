@@ -1,4 +1,4 @@
-{"sequence":1,"event":"target_resolved","full_session_id_verified":true,"roster_source":"claude_agents_json","selector":"synthetic-short-id"}
+{"sequence":1,"event":"target_resolved","cockpit_scope":"global_unscoped","cockpit_command":"claude agents","roster_source":"claude_agents_json_all_unscoped","roster_command":"claude agents --json --all","provider":"claude","full_session_id_verified":true,"cwd_worktree_verified":true,"visible_row_match_count":1,"target_join":["provider","full_session_id","cwd_worktree","visible_row"],"per_repo_cockpit":false,"selector":"synthetic-short-id"}
 {"sequence":2,"event":"home_verified","value":true,"snapshot_revision":10,"target_row_visible":true}
 {"sequence":3,"event":"lease_acquired","lease_id":"00000000-0000-4000-8000-000000000301","at_revision":10,"exclusive":true}
 {"sequence":4,"event":"input_ack","input":"named_key_down","expected_revision":10,"result_revision":11,"lease_id":"00000000-0000-4000-8000-000000000301","serialized":true,"raw_input_logged":false}
@@ -12,4 +12,5 @@
 {"sequence":12,"event":"lease_released","lease_id":"00000000-0000-4000-8000-000000000301","at_revision":18}
 {"sequence":13,"event":"lease_acquired","lease_id":"00000000-0000-4000-8000-000000000302","at_revision":20,"exclusive":true}
 {"sequence":14,"event":"concurrent_human_revision_changed","lease_id":"00000000-0000-4000-8000-000000000302","expected_revision":20,"actual_revision":21,"lease_invalidated":true,"action":"abort_before_payload"}
-{"sequence":15,"event":"receipt_blocker","aggregate_hook_settlement":"unproven","owned_provider_activity":"unproven","capability":"blocked"}
+{"sequence":15,"event":"ambiguous_target_rejected","visible_row_match_count":2,"action":"abort_before_input","per_repo_fallback":false}
+{"sequence":16,"event":"receipt_blocker","aggregate_hook_settlement":"unproven","owned_provider_activity":"unproven","capability":"blocked"}

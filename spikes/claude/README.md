@@ -56,9 +56,14 @@ ordered aggregate receipts.
 
 `agent-view-cockpit-plan.jsonl` is a design fixture derived from Crew's guarded
 Agent View quick-reply route, not a new live Dispatch proof. It requires exact
-roster/row identity, home/detail/return/reply viewport guards, revision-conditional
-serialized input, one atomic payload-plus-Enter batch, and abort on concurrent
-human revision change. It also deliberately retains the receipt blocker:
+global-roster/row identity using provider + full session UUID + cwd/worktree +
+one visible row, fail-closed duplicate/ambiguity handling,
+home/detail/return/reply viewport guards, revision-conditional serialized input,
+one atomic payload-plus-Enter batch, and abort on concurrent human revision
+change. The production topology is one unscoped `claude agents` cockpit with
+unscoped `claude agents --json --all` discovery; `--cwd` below is only a
+disposable-test/cleanup filter. The fixture also deliberately retains the
+receipt blocker:
 Agent View has not yet exposed aggregate sibling-hook settlement plus owned
 provider activity to Dispatch without raw transcript access. `just check` runs
 these fixtures through `tests/fixtures/test_claude_research.py`.

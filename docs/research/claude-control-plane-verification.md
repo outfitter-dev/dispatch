@@ -10,8 +10,11 @@ Claude Agent SDK
 Dispatch can support durable, multi-turn **headless** Claude sessions. For
 human-coexistent control, Crew supplies a concrete preferred design: keep the
 Agent View background owner intact, host one persistent `claude agents` cockpit
-in zmx, and drive Claude's own guarded quick-reply UI. zmx is the terminal/VT
-substrate, never the Claude receipt protocol.
+in zmx, and drive Claude's own guarded quick-reply UI. Production uses one
+global unscoped cockpit, not one cockpit per repository; the unscoped output of
+`claude agents --json --all` is the global identity roster, with cwd/worktree
+retained as routing metadata. zmx is the terminal/VT substrate, never the Claude
+receipt protocol.
 
 That route is not yet verified end to end for Dispatch. Installed zmx 0.6.0 lacks
 revisioned VT snapshots, named-key input, acknowledged/serialized conditional
@@ -151,9 +154,13 @@ peekable/replyable/attachable and the supervisor restarts it from saved state.
 These are supervisor product semantics, not a public reply RPC or a Dispatch
 receipt.
 
-`claude agents --json --all` includes completed rows and supplies the roster
-fields used for identity. UI filters (`a:<name>`, `s:<state>`, PR/URL) may help
-navigation but never replace the full UUID join. Agent View is a research preview
+Unscoped `claude agents --json --all` includes completed rows and supplies the
+global roster fields used for identity. Production starts one unscoped cockpit
+with `claude agents`. `--cwd` is a disposable-test or explicit operator filter,
+not a default topology or authority boundary. UI filters (`a:<name>`, `s:<state>`,
+PR/URL) may help navigation but never replace the provider-qualified full UUID +
+current cwd/worktree + visible-row join. Zero or multiple matches fail closed
+before input. Agent View is a research preview
 whose UI/shortcuts can change, so the adapter must pin/version-gate every guard.
 Shell management remains limited to list, attach, logs, stop/kill, respawn, and
 rm. `logs` is diagnostic output. `rm` removes the Agent View entry/worktree but
@@ -185,8 +192,10 @@ existing sessions:
 Agent View quick reply is a real UI primitive into the existing background owner.
 Crew proves the guarded navigation shape and the critical literal-space behavior,
 while explicitly warning that UI typing is not delivery proof. Dispatch should
-host this cockpit in zmx so a human and automation observe one Agent View owner,
-then use Claude hooks/owned evidence—not zmx status or scrollback—for receipts.
+host one global unscoped cockpit in zmx so a human and automation observe one
+Agent View owner across repositories, then use Claude hooks/owned evidence—not
+zmx status or scrollback—for receipts. Per-repository cockpit proliferation would
+fragment supervision and is outside the recommended topology.
 
 The installed pieces are still insufficient. Coordinator-supplied read-only
 evidence from an existing user-owned cockpit shows that zmx 0.6.0 `history --vt`
@@ -321,7 +330,7 @@ capability has no acceptable primitive under the pinned versions.
 | New | verified | headless qualifier: persist UUID, spawn exclusive persistent `--session-id UUID --print` stream owner, settle preflight; optional `--bg` is separate human-supervised mode | prompt hook settlement + owned activity; final settled Stop cycle + terminal per-message result | retry only when proven no frame write began; otherwise operator reconciliation | high |
 | Post-exit resume owner | verified | Dispatch starts one `--resume UUID` stream owner only after proven prior-owner exit; never managed `--continue` | `SessionStart(source=resume)` then ordinary aggregate receipts | stale/wrong-cwd/owner-conflict are typed failures | high |
 | Human Agent View attach | verified | human `claude attach SHORT_ID` to a known disposable Agent View entry | UI and ordinary hooks; not a Dispatch send transport | human supervision only; no shell reply RPC | high |
-| Preserve attached human while Dispatch sends | blocked | preferred candidate: zmx-hosted Agent View cockpit + target-safe quick reply; same background owner remains authoritative | not yet sufficient: guarded PTY write needs aggregate hook settlement + owned provider activity | DIS-54 adds revisioned snapshot/atomic input/redaction and pinned live proof; abort on human revision race | medium-high design confidence; Dispatch proof blocked |
+| Preserve attached human while Dispatch sends | blocked | preferred candidate: one global unscoped zmx-hosted Agent View cockpit + target-safe quick reply; global `--json --all` roster joins provider/session + cwd/worktree + one visible row | not yet sufficient: guarded PTY write needs aggregate hook settlement + owned provider activity | DIS-54 adds revisioned snapshot/atomic input/redaction and pinned live proof; abort on human revision race or ambiguous row | medium-high design confidence; Dispatch proof blocked |
 | Dispatch attach of an unmanaged ordinary session | unsupported | no content-free metadata validation primitive was proven | none | do not register writable authority from UUID alone | high |
 | Headless send | verified | serialized messages through one exclusive persistent stream-JSON owner; fresh `--resume UUID` creates the next owner only after proven prior-owner exit | processing after aggregate prompt settlement + activity; completion after final Stop settlement/result; process exit is required when the owner terminates | any possible frame write plus loss is indeterminate; never auto-retry; reject second owners | high |
 | Steer active turn | unsupported | no documented print-process steer RPC; TUI input semantics are not equivalent | none | expose unsupported, do not queue under a steer label | high |
@@ -359,7 +368,8 @@ capability has no acceptable primitive under the pinned versions.
 | Fresh resume while ordinary TUI attached | both processes can complete but histories diverge; external turn was absent from the TUI and later resume | Claude runtime + operator | mark ownership conflict; stop sends; explicit human handoff/reconciliation; never claim shared continuity |
 | Fresh resume while stream owner lives | external process can complete but its turn is absent from the continuing owner | Dispatch supervisor | reject second owner by durable lease/process identity; after uncertainty, block until operator resolves ownership |
 | Fresh resume while Agent View owner lives | exit 1, owner remains coherent and human-usable | Agent View | attach for human use or stop owner before a later resume; no Dispatch send during ownership |
-| Cockpit target/detail/reply guard mismatch | Crew path fails closed before payload | cockpit reducer | renormalize home and retry only before any payload write; never fall back to raw send |
+| Cockpit target/detail/reply guard mismatch | Crew path fails closed before payload | cockpit reducer | refresh global roster, renormalize home, and retry only before any payload write; never fall back to raw send |
+| Duplicate/ambiguous global cockpit row | provider/session + cwd/worktree does not join to exactly one visible row | cockpit reducer | return typed routing conflict before input; do not filter into or create a per-repo cockpit |
 | Human changes cockpit revision | target/input state may have moved | hardened zmx transaction | abort before payload with `cockpit_changed`; reacquire snapshot and re-run every identity guard |
 | Cockpit loss after possible payload write | PTY write/Enter may have reached Agent View | cockpit transport + operator | acceptance indeterminate; no automatic retry; wait for aggregate receipts or explicitly abandon |
 | Cockpit restart | Agent View background owner continues independently | zmx supervisor | restart cockpit only, re-resolve full UUID/row, then re-run guards; never resume the worker |
@@ -375,7 +385,7 @@ capability has no acceptable primitive under the pinned versions.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Exclusive persistent stream-JSON owner | verified across multiple serialized turns while one owner lives | strongest: owned frames, stream activity, aggregate hooks, prompt IDs | no supported attached TUI; concurrent resume splits history | owned process group; after proven exit, resume UUID as a new owner | no extra PTY logger; retain only normalized events | medium | recommended headless base, but does not satisfy seamless coexistence |
 | Fresh `--resume --print` per turn | verified only with no other live owner | strong per-process stream + aggregate hooks | failed: ordinary TUI/stream owner diverged; Agent View rejected it | simple process lifecycle and restart | no extra PTY logger | low | rejected as the default transport |
-| zmx-hosted Agent View cockpit | preserves the Agent View background owner; Crew proves guarded quick-reply UI route; read-only evidence confirms zmx renders Agent View alternate-screen/text state while the roster supplies full IDs | zmx write ACK is transport-only; Claude aggregate hooks + owned activity still required | preferred: human attaches/detaches from same cockpit; revision race must abort | Agent View supervisor owns workers; zmx cockpit restarts without resuming workers | blocked as shipped: 0.6.0 lacks a bounded revisioned current screen and conditional atomic/redacted writes | high | recommended DIS-54 direction; not enable-ready |
+| Global unscoped zmx-hosted Agent View cockpit | preserves the Agent View background owner across repositories; global `--json --all` roster joins provider/session + cwd/worktree to one guarded visible row | zmx write ACK is transport-only; Claude aggregate hooks + owned activity still required | preferred: human attaches/detaches from the same global cockpit; revision/ambiguity races abort | Agent View supervisor owns workers; zmx cockpit restarts without resuming workers | blocked as shipped: 0.6.0 lacks a bounded revisioned current screen and conditional atomic/redacted writes | high | recommended DIS-54 direction; no per-repo cockpits; not enable-ready |
 | zmx-owned worker TUI | one PTY could serialize human and Dispatch input in principle | Claude hooks could confirm after raw injection, but zmx itself has no ACK/order guarantee | possible but duplicates Agent View supervision and attention UI | raw Ctrl-C/loss unconfirmed; persistent process | blocked: 0.6.0 logs raw PTY input and can drop queued bytes | medium-high | fallback investigation, not preferred |
 | Remote Control / Agent View controls | provider-owned multi-device human continuity | no documented local programmable send RPC | human-facing only | provider reconnection/supervisor semantics | Anthropic relay/product policy | high/product | deferred product decision |
 
@@ -407,8 +417,10 @@ capability has no acceptable primitive under the pinned versions.
   as content-bearing. They are outside default receipt ingestion.
 - Do not enable Remote Control automatically. It changes external routing,
   authentication, availability, and policy boundaries.
-- Session names, short IDs, titles, and cwd are selectors/metadata, never
-  authorization. Route on `(provider, full session UUID)` plus local lane key.
+- Session names, short IDs, titles, and cwd/worktree are selectors/metadata,
+  never authorization. Route on `(provider, full session UUID)` plus local lane
+  key, then require current cwd/worktree and exactly one visible global-cockpit
+  row before UI input.
 
 ## Contradictions and confidence limits
 

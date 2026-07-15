@@ -260,9 +260,22 @@ def assert_cockpit_plan_fixture(events: list[Event]) -> None:
         "lease_released",
         "lease_acquired",
         "concurrent_human_revision_changed",
+        "ambiguous_target_rejected",
         "receipt_blocker",
     ]
     assert events[0].get("event") == "target_resolved"
+    assert events[0].get("cockpit_scope") == "global_unscoped"
+    assert events[0].get("cockpit_command") == "claude agents"
+    assert events[0].get("roster_command") == "claude agents --json --all"
+    assert events[0].get("target_join") == [
+        "provider",
+        "full_session_id",
+        "cwd_worktree",
+        "visible_row",
+    ]
+    assert events[0].get("cwd_worktree_verified") is True
+    assert events[0].get("visible_row_match_count") == 1
+    assert events[0].get("per_repo_cockpit") is False
     assert events[0].get("full_session_id_verified") is True
 
     required_guards = (
@@ -336,6 +349,11 @@ def assert_cockpit_plan_fixture(events: list[Event]) -> None:
                 assert_content_free(nested)
 
     assert_content_free(events)
+
+    assert events[14].get("event") == "ambiguous_target_rejected"
+    assert events[14].get("visible_row_match_count") == 2
+    assert events[14].get("action") == "abort_before_input"
+    assert events[14].get("per_repo_fallback") is False
 
     second_lease = events[12]
     human_race = events[13]

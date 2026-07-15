@@ -38,13 +38,22 @@ that cockpit for Dispatch.
 
 ## Decision
 
-Prefer one persistent zmx-hosted `claude agents` cockpit for human-coexistent
-control while Agent View retains background-worker ownership. Port Crew's guarded
-quick-reply route onto revisioned VT snapshots and serialized conditional input.
-Require exact roster/session identity and screen guards before every navigation
-step. Make payload plus Enter one atomic acknowledged transaction; abort before
-payload if human input changes the VT revision. zmx is terminal transport only,
-not Claude receipt authority.
+Prefer one persistent, unscoped zmx-hosted `claude agents` cockpit for
+human-coexistent control while Agent View retains background-worker ownership.
+This is one global shared cockpit per local Claude runtime, not one cockpit per
+repository. Production launches omit `--cwd`; that flag is reserved for
+disposable tests or an explicit operator filter. Treat the unscoped global
+roster from `claude agents --json --all` as identity input and cwd/worktree as
+mutable routing metadata, not a cockpit boundary.
+
+Port Crew's guarded quick-reply route onto revisioned VT snapshots and serialized
+conditional input. Resolve a target by joining provider-qualified full session
+UUID, current cwd/worktree metadata, and exactly one visible row. A missing,
+duplicate, or ambiguous join fails closed before input. Require exact
+roster/session identity and screen guards before every navigation step. Make
+payload plus Enter one atomic acknowledged transaction; abort before payload if
+human input changes the VT revision. zmx is terminal transport only, not Claude
+receipt authority.
 
 Claude's documented Agent View behavior owns reply delivery and queuing: Space
 opens peek, Enter submits to the selected session, an ordinary undeliverable
@@ -131,7 +140,9 @@ There is no silent fallback or forced Codex semantic parity.
 ### Positive
 
 - Uses supported direct CLI/Agent View primitives without private endpoints;
-  the coexistence candidate adds one explicit persistent cockpit PTY.
+  the coexistence candidate adds one explicit global persistent cockpit PTY.
+- Preserves cross-repository visibility and each session's cwd/worktree routing
+  metadata without proliferating per-repository cockpits.
 - Durable UUID and provider prompt ID give stable routing and exact cycle joins.
 - Persistent stream ownership preserves coherent headless multi-turn state and
   avoids the observed per-turn resume split when a second owner is present.

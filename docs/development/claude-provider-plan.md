@@ -11,10 +11,11 @@ Decision: [ADR-0026](../adrs/0026-claude-control-uses-resume-processes-and-hooks
 Add Claude as a fixed second execution provider beneath Dispatch's authored ops.
 The preferred coexistence target preserves Claude's Agent View background owner
 and drives its guarded quick-reply UI through one persistent zmx-hosted
-`claude agents` cockpit. Humans attach/detach from that same cockpit; Dispatch
-never creates a competing resume owner. zmx supplies terminal snapshots and
-input transactions only. Claude hooks plus owned provider activity remain the
-receipt authority.
+unscoped `claude agents` cockpit. This is one global shared cockpit per local
+Claude runtime, never one cockpit per repository. Humans attach/detach from that
+same cockpit; Dispatch never creates a competing resume owner. zmx supplies
+terminal snapshots and input transactions only. Claude hooks plus owned provider
+activity remain the receipt authority.
 
 Installed zmx 0.6.0 cannot implement that safely as shipped, and Agent View has
 not exposed the required aggregate receipt stream. DIS-54 must add/prove the
@@ -57,6 +58,13 @@ or renamed approximations.
 - Agent View quick reply is the preferred human-coexistent send candidate. Crew
   proves the guarded UI route, but Dispatch still needs pinned zmx and receipt
   evidence before capability projection can mark it supported.
+- The production cockpit launches as unscoped `claude agents`, and identity
+  discovery uses unscoped `claude agents --json --all`. `--cwd` is only a
+  disposable-test or explicit operator filter; Dispatch does not create
+  per-repository cockpits.
+- Cwd/worktree is routing metadata. Target selection joins provider-qualified
+  full session UUID, current cwd/worktree, and exactly one visible Agent View
+  row; zero or multiple matches fail closed before any input.
 - Ordinary TUI plus external resume and persistent stream owner plus external
   resume both split history. Agent View rejects resume while its owner lives.
   Dispatch must never start a second owner merely because the first is idle.
@@ -203,15 +211,18 @@ Initial Claude capabilities:
 Crew's `sendClaudeAgentsMessage` and operating lessons establish the target-safe
 UI sequence against real Agent View:
 
-1. resolve the shared cockpit and the target from `claude agents --json` using
-   the full session UUID as authority;
-2. normalize to the Agent View home/list and locate one exact visible row;
-3. select it, open detail, and verify the intended title/session identity;
-4. return to home and verify the same row remains selected;
-5. send a literal text space—not a named Space key—and wait for both `❯ reply`
+1. resolve the one global shared cockpit and obtain the global identity roster
+   from unscoped `claude agents --json --all`;
+2. join the provider-qualified full session UUID and current cwd/worktree
+   metadata to exactly one visible row; fail closed on missing, duplicate, or
+   ambiguous matches;
+3. normalize to the Agent View home/list and locate that exact visible row;
+4. select it, open detail, and verify the intended title/session identity;
+5. return to home and verify the same row remains selected;
+6. send a literal text space—not a named Space key—and wait for both `❯ reply`
    and `space to close`;
-6. atomically type the payload and Enter;
-7. require ordinary Claude acceptance/completion receipts before changing the
+7. atomically type the payload and Enter;
+8. require ordinary Claude acceptance/completion receipts before changing the
    Dispatch attempt state.
 
 The [official Agent View contract](https://code.claude.com/docs/en/agent-view)
@@ -243,9 +254,11 @@ class CockpitTransport(Protocol):
 Read-only coordinator evidence confirms the lower half of this seam on zmx
 0.6.0: `history --vt` renders Agent View's alternate screen (cursor, row/status
 groups, quick-reply footer, and styling), plain history is parseable, and
-`claude agents --json` independently supplies full UUID/name/state/cwd roster
-identity. Dispatch must join roster identity to guarded screen state; terminal
-row text alone never becomes authority. This does not satisfy the mutation or
+unscoped `claude agents --json --all` independently supplies the global full
+UUID/name/state/cwd roster. Dispatch must join provider/session identity and
+current cwd/worktree metadata to exactly one guarded visible row; terminal row
+text or cwd alone never becomes authority. Duplicate/ambiguous rows return a
+typed routing conflict before input. This does not satisfy the mutation or
 receipt gates below.
 
 Required zmx work, all gated by DIS-54:
@@ -411,11 +424,13 @@ View metadata can prove its background owner exists, but cannot authorize a
 Dispatch send into that owner unless the guarded cockpit capability is enabled.
 
 For the cockpit route, daemon or zmx loss does not stop Agent View background
-workers. Restart the cockpit, re-resolve the full session UUID from the roster,
-and repeat every home/detail/return/reply guard. A UI transaction lost after any
-possible write is `frame_maybe_written`; never replay it. If a human attach or
-keystroke changes the VT revision, abort before payload and return an
-operator-visible `cockpit_changed` conflict.
+workers. Restart the one global unscoped cockpit, refresh the global `claude
+agents --json --all` roster, re-resolve the full session UUID plus current
+cwd/worktree to exactly one visible row, and repeat every
+home/detail/return/reply guard. A UI transaction lost after any possible write
+is `frame_maybe_written`; never replay it. If a human attach or keystroke changes
+the VT revision, abort before payload and return an operator-visible
+`cockpit_changed` conflict.
 
 ## Hook/settings strategy
 
@@ -791,6 +806,10 @@ new provider columns.
 - prove interrupt/restart and explicit owner handoff without transcript reads;
 - implement/prove the preferred persistent zmx-hosted Agent View cockpit using
   Crew's target-safe quick-reply sequence;
+- launch one global unscoped `claude agents` cockpit, use unscoped global-roster
+  identity discovery via `claude agents --json --all`, and prove
+  provider/session + cwd/worktree + visible-row joins fail closed on duplicate
+  or ambiguous rows;
 - add revisioned VT snapshot, named keys, serialized conditional input ACK,
   atomic payload-plus-Enter, automation lease, nonzero loss/overflow, and complete
   input-log redaction to a pinned zmx build;
