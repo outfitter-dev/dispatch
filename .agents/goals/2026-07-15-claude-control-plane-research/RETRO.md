@@ -1,8 +1,8 @@
 # Execution Retro: Claude Control-Plane Research
 
 Date started: 2026-07-15
-Date finalized: pending hosted CI and PR thread closure
-Status: Local gates and post-correction reviews clean; hosted closure pending
+Date finalized: 2026-07-15
+Status: Complete; ready research PR open and unmerged
 Spec: `.agents/goals/2026-07-15-claude-control-plane-research/SPEC.md`
 Goal: `.agents/goals/2026-07-15-claude-control-plane-research/GOAL.md`
 Prompt: `.agents/goals/2026-07-15-claude-control-plane-research/PROMPT.md`
@@ -272,7 +272,7 @@ No row remains pending or unknown. Full semantics and citations are in
 | post-correction repository gate | `just check` | passed | Ruff, format, strict mypy, 696 passed/17 deselected, wheel/sdist and contents after hosted preflight-nonce fix |
 | disposable zmx snapshot | `spikes/claude/zmx_snapshot_probe.sh` | passed | private synthetic target; plain/VT/HTML structural markers; session/log cleanup |
 | sdist research assets | `uv build` + `scripts/check_package_contents.py` | passed | exercised Claude helpers and fixtures now ship beside sdist tests |
-| hosted CI and PR threads | PR #92 | pending | final external closure gate after push |
+| hosted CI and PR threads | PR #92 at `830b105` | passed | repository check, CodeQL actions/python, CodeQL aggregate, Graphite, and Cursor passed; zero unresolved threads; Codex packaging P2 fixed/replied/resolved before usage limit |
 
 ## Prompt / Goal Alignment
 
@@ -283,7 +283,7 @@ No row remains pending or unknown. Full semantics and citations are in
 
 | Item | State | Notes |
 | --- | --- | --- |
-| DIS-9 | In Progress | Description corrected to aggregate receipt findings; implementation order comment added; close only after ready research PR |
+| DIS-9 | Done | Research closure comment records verdict, primary-source/zmx proof, gates, cleanup, ordered implementation, and unmerged PR |
 | DIS-48 | Todo | Adjacent usage-capture lifecycle; not messaging transport |
 | DIS-49 | Todo | Provider selector/CLI shorthand issue retained; blocked by DIS-50 and related to later slices |
 | DIS-50 | Backlog | High-priority exclusive-headless walking skeleton; blocked by DIS-1/2/3 and DIS-54 |
@@ -306,8 +306,10 @@ No row remains pending or unknown. Full semantics and citations are in
 - Review summary: post-coexistence transport round 7, security/product round 4,
   and full-stack round 4 are each 5/5 clean with zero P0-P3.
 - Verification summary: packet, fixture, lint/type, sanitizer privacy,
-  process-group, negative receipt checks, and post-correction local `just check`
-  pass with 696 tests; hosted PR CI and thread closure are pending.
+  process-group, negative receipt checks, isolated zmx snapshot serialization,
+  sdist contents, and post-correction local `just check` pass with 696 tests.
+  Hosted checks pass on the final research commit and all review threads are
+  resolved.
 - Cleanup audit: research-created Agent View/zmx/process/temp resources removed;
   repository-local settings unchanged; Claude's Agent View launch mutated the
   user settings file despite isolation flags, and research neither read nor
