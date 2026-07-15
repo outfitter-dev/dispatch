@@ -240,7 +240,9 @@ uv run python "$spike_root/assert_probe.py" preflight \
 
 Require one successful response carrying the current nonce before writing any
 prompt frame. Do not persist other hook stdout: sibling SessionStart hooks may
-return content. A missing nonce is safe failure-before-submission. After any
+return content. The sanitizer parses stdout only in-flight and compares the
+returned nonce with `DISPATCH_CLAUDE_PREFLIGHT_NONCE`; a marker alone or a stale
+nonce cannot pass. A missing nonce is safe failure-before-submission. After any
 possible stdin write, loss is indeterminate and must never auto-retry.
 
 ## Interrupt, duplicate, and hook-failure probes

@@ -247,9 +247,9 @@ No row remains pending or unknown. Full semantics and citations are in
 | repository gate attempt 1 | `just check` | 691 passed, 1 timing failure | focused supervisor test immediately passed; unrelated tracked code unchanged |
 | repository gate attempt 2 | `just check` | 692 tests passed; package-content step raced | concurrent review gate rebuilt `dist`; standalone package check passed |
 | pre-correction repository gate | `just check` | full-stack reviewer passed | 692 tests plus build/package; superseded by post-correction gate |
-| post-correction focused fixtures | `uv run pytest -q tests/fixtures/test_claude_research.py` | passed | 3 tests: blocker policy/negative evidence, guarded cockpit plan, persistent-owner completion without process exit |
+| post-correction focused fixtures | `uv run pytest -q tests/fixtures/test_claude_research.py` | passed | 4 tests: blocker policy/negative evidence, guarded cockpit plan, persistent-owner completion without process exit, exact current preflight nonce |
 | post-correction packet doctor | goal packet plus three current clean reports | passed | prompt 3,994/4,000; all reports 5/5 clean with zero P0-P2 |
-| post-correction repository gate | `just check` | passed | Ruff, format, strict mypy, 695 passed/17 deselected, wheel/sdist and contents |
+| post-correction repository gate | `just check` | passed | Ruff, format, strict mypy, 696 passed/17 deselected, wheel/sdist and contents after hosted preflight-nonce fix |
 | hosted CI and PR threads | PR #92 | pending | final external closure gate after push |
 
 ## Prompt / Goal Alignment
@@ -285,7 +285,7 @@ No row remains pending or unknown. Full semantics and citations are in
   and full-stack round 4 are each 5/5 clean with zero P0-P3.
 - Verification summary: packet, fixture, lint/type, sanitizer privacy,
   process-group, negative receipt checks, and post-correction local `just check`
-  pass with 695 tests; hosted PR CI and thread closure are pending.
+  pass with 696 tests; hosted PR CI and thread closure are pending.
 - Cleanup audit: research-created Agent View/zmx/process/temp resources removed;
   repository-local settings unchanged; Claude's Agent View launch mutated the
   user settings file despite isolation flags, and research neither read nor

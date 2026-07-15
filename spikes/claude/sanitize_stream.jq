@@ -1,5 +1,6 @@
 # Reduce Claude stream JSON immediately. Never retain message/model/tool content.
-if .subtype == "hook_started" or .subtype == "hook_response" then
+(env.DISPATCH_CLAUDE_PREFLIGHT_NONCE // "") as $expected_preflight_nonce
+| if .subtype == "hook_started" or .subtype == "hook_response" then
   {
     sequence: input_line_number,
     type,
@@ -10,7 +11,11 @@ if .subtype == "hook_started" or .subtype == "hook_response" then
     hook_name,
     exit_code,
     outcome,
-    dispatch_preflight: ((.stdout // "") | contains("_dispatch_preflight")),
+    dispatch_preflight: (
+      $expected_preflight_nonce != ""
+      and (((.stdout // "") | fromjson? // {})._dispatch_preflight.nonce // "")
+        == $expected_preflight_nonce
+    ),
     blocking_decision: (
       ((.stdout // "") | fromjson? // {})
       | .decision == "block"
