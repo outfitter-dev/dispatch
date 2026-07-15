@@ -51,6 +51,12 @@ def config_path() -> Path:
     return Path(override) if override else _base() / "config.toml"
 
 
+def claude_statusline_snapshot_path() -> Path:
+    """Normalized Claude statusline capacity snapshot."""
+
+    return _base() / "providers" / "claude" / "statusline.json"
+
+
 def ensure_base() -> Path:
     base = _base()
     base.mkdir(parents=True, exist_ok=True)

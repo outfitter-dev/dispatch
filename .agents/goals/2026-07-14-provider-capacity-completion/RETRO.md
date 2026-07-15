@@ -12,12 +12,12 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 
 - Objective: Complete DIS-34's remaining Claude provider account/capacity foundation.
 - Completion horizon: `ready-pr`.
-- Authority used: Packet preparation, scoped Linear mutation, DIS-36 branch creation, implementation, tests, docs, and isolated read-only Claude smoke.
-- Outcome: DIS-36 implementation is locally green and cleanly reviewed, awaiting draft PR/CI.
-- Tracker/PR/source-control state: DIS-34 and DIS-36 In Progress; DIS-40 blocked by DIS-37; branch `dis-36-add-claude-account-and-runtime-probes`; no PR yet.
-- Verification: Existing baseline passed 75 tests; post-review focused provider/store suite passed 93 tests; `just check` passed 631 tests plus package build; isolated live Claude smoke passed.
-- Review state: Standing and privacy gates are clean at 5/5 with zero open P0-P2 after three rounds.
-- Remaining risks: Claude CLI drift and stale DIS-38 history wording.
+- Authority used: Packet preparation, scoped Linear mutation, Graphite branching/PR publication, implementation, tests, docs, and isolated read-only provider smokes.
+- Outcome: DIS-36 is ready at PR #88; DIS-37 is locally green and cleanly reviewed, awaiting draft PR/CI.
+- Tracker/PR/source-control state: DIS-34/DIS-36/DIS-37 In Progress; PR #88 ready and CI-green; DIS-40 blocked by DIS-37; current stacked branch `dis-37-capture-claude-capacity-from-statusline-snapshots`.
+- Verification: DIS-36 full gate passed 631 tests; DIS-37 full gate passed 645 tests plus package build; both isolated smokes passed.
+- Review state: DIS-36 standing/privacy and DIS-37 standing/statusline gates are clean at 5/5 with zero open P0-P2.
+- Remaining risks: Statusline payload/schema drift, wrapper setup ergonomics, and stale DIS-38 history wording.
 
 ## Readiness
 
@@ -27,13 +27,14 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 - Verification blockers: none known.
 - Tracker blockers: DIS-38 contract needs reconciliation against ADR-0023.
 - Authority blockers: merge/release/publish and live Claude config mutation are not authorized.
-- Next action: push the DIS-36 draft PR and wait for CI.
+- Next action: publish the DIS-37 draft PR, wait for CI/remote review, then begin DIS-38 reconciliation.
 
 ## Goal Amendments
 
 | Time | Change | Reason | Approved By |
 | --- | --- | --- | --- |
 | 2026-07-14 preparation | Sequence DIS-38 reconciliation after DIS-36/DIS-37 while allowing minimal model extensions in DIS-36 | Audit found most DIS-38 storage/surface work already shipped in PRs #79/#80 | Coordinator within existing scope |
+| 2026-07-14 DIS-37 | Fingerprint the statusline session id instead of retaining the raw id | Correlation is preserved while the packet privacy boundary excludes raw session identifiers from disk and usage output | Coordinator within existing scope; divergence to be documented on DIS-37 |
 
 ## Execution Log
 
@@ -82,6 +83,42 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 - Blockers: None.
 ```
 
+```text
+2026-07-14 execution - DIS-37 statusline capacity capture
+- Changed: Added an opt-in standalone stdin helper, bounded normalized snapshot schema, atomic owner-only writes beneath DISPATCH_HOME, decimal Claude windows, monotonic merge into provider observations, stale rendering, and manual non-clobbering wrapper docs.
+- Verified: Focused statusline/provider/store suite 107 passed; surface suite 58 passed; just check 645 passed; wheel/sdist build passed; isolated capture-to-usage smoke returned both windows and excluded raw session/path/model identifiers.
+- Result: Supported Claude.ai five-hour/seven-day capacity is available without editing Claude settings or calling the private OAuth endpoint; missing limits and older snapshots do not erase newer capacity.
+- Next: Commit, standing and targeted atomicity/privacy reviews, draft PR, and CI.
+- Blockers: Review pending.
+```
+
+```text
+2026-07-14 execution - DIS-37 first-round review fixes
+- Changed: Merged windows independently in both the snapshot file and provider observation, added per-window timestamps, serialized writers with a file lock, rejected older captures monotonically, and fsynced the containing directory after rename.
+- Verified: Focused statusline/provider/store suite 112 passed; surface suite 58 passed; just check 650 passed; wheel/sdist build passed.
+- Result: All standing and targeted round-one P1/P2 findings are addressed with both-direction partial-window, older-capture, and directory-fsync regression tests.
+- Next: Same-reviewer recheck, fix commit, draft PR, and CI.
+- Blockers: Review recheck pending.
+```
+
+```text
+2026-07-14 execution - DIS-37 second-round review fix
+- Changed: Added an explicit current `rate_limits_available` fact while retaining the last valid per-window values/timestamps when a newer statusline event has no rate-limit fields.
+- Verified: Focused statusline/provider/store suite 113 passed; just check 651 passed; wheel/sdist build passed.
+- Result: Current unavailability remains observable without destructive cache loss or fabricated window freshness.
+- Next: Same-reviewer round-three recheck, fix commit, draft PR, and CI.
+- Blockers: Review recheck pending.
+```
+
+```text
+2026-07-14 execution - DIS-37 third-round review fix
+- Changed: Provider refresh now imports retained snapshot windows even when the newest event says rate limits are currently unavailable, while keeping the partial/error signal separate.
+- Verified: Focused statusline/provider/store suite 114 passed; surface suite 58 passed; just check 652 passed; wheel/sdist build passed.
+- Result: A fresh registry receives the last valid timestamped windows plus explicit current unavailability; no cache loss or freshness fabrication remains.
+- Next: Same-reviewer round-four recheck, fix commit, draft PR, and CI.
+- Blockers: Review recheck pending.
+```
+
 ## Review Log
 
 | Round | Scope | Report | Score | State | Open P0-P2 | Notes |
@@ -95,6 +132,14 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | 3 | Standing DIS-36 diff review | `tmp/reviews/standing/dis-36-round-3.json` | 5/5 | clean | 0 | All standing findings closed; exact focused, surface, type, lint, format, and diff checks passed. |
 | 3 | Claude privacy/resilience review | `tmp/reviews/privacy/dis-36-round-3.json` | 5/5 | clean | 0 | Component cache semantics and all earlier privacy/subprocess/isolation findings verified closed. |
 | remote | Cursor Bugbot on PR #88 | GitHub review thread `discussion_r3582064305` | not scored | changes requested | 1 | Signed-out refresh retained stale runtime/version; fixed by clearing account-dependent runtime facts. |
+| 1 | Standing DIS-37 incremental review | `tmp/reviews/standing/dis-37-round-1.json` | 3/5 | changes requested | 1 | Partial snapshots must replace by window key without erasing the independently absent window. |
+| 1 | Statusline atomicity/privacy review | `tmp/reviews/statusline/dis-37-round-1.json` | 2/5 | changes requested | 3 | Also serialize/monotonically order captures and fsync the containing directory. |
+| 2 | Standing DIS-37 incremental review | `tmp/reviews/standing/dis-37-round-2.json` | 5/5 | clean | 0 | Keyed merge, original per-window freshness, installed entrypoint, file mode, privacy, and checks verified. |
+| 2 | Statusline atomicity/privacy review | `tmp/reviews/statusline/dis-37-round-2.json` | 3/5 | changes requested | 1 | Locking/durability/partial merge fixed; both-absent input still erased cached windows. |
+| 3 | Standing DIS-37 incremental review | `tmp/reviews/standing/dis-37-round-3.json` | 3/5 | changes requested | 1 | File retained unavailable cache, but first registry refresh ignored those windows. |
+| 3 | Statusline atomicity/privacy review | `tmp/reviews/statusline/dis-37-round-3.json` | 3/5 | changes requested | 1 | Same downstream gate lost retained windows on an empty registry. |
+| 4 | Standing DIS-37 incremental review | `tmp/reviews/standing/dis-37-round-4.json` | 5/5 | clean | 0 | Empty-registry recovery, partial/unavailable state, timestamps, focused/surface/type/lint checks verified. |
+| 4 | Statusline atomicity/privacy review | `tmp/reviews/statusline/dis-37-round-4.json` | 5/5 | clean | 0 | Exact two-window unavailable sequence, staleness, raw-id exclusion, locking/durability/bounds all verified. |
 
 ## Verification Log
 
@@ -110,6 +155,16 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | `uv run pytest tests/core/test_claude_capacity.py tests/core/test_capacity.py tests/registry/test_store.py -q` | Post-review provider/store behavior | passed | 93 passed. |
 | `uv run pytest tests/surfaces/test_derive_cli.py tests/surfaces/test_derive_mcp.py tests/surfaces/test_mcp_routing.py tests/surfaces/test_parity.py -q` | Post-review derived CLI/MCP parity | passed | 58 passed. |
 | `just check` | Post-review full repository and package gate | passed | Ruff, format, strict mypy, 631 tests, sdist/wheel, package contents. |
+| `uv run pytest tests/core/test_claude_statusline.py tests/core/test_claude_capacity.py tests/core/test_capacity.py tests/registry/test_store.py -q` | DIS-37 capture/merge/provider behavior | passed | 107 passed. |
+| `uv run pytest tests/surfaces/test_derive_cli.py tests/surfaces/test_derive_mcp.py tests/surfaces/test_mcp_routing.py tests/surfaces/test_parity.py -q` | DIS-37 derived CLI/MCP parity | passed | 58 passed. |
+| `just check` | DIS-37 full repository and package gate | passed | Ruff, format, strict mypy, 645 tests, sdist/wheel, package contents. |
+| isolated `dispatch-claude-statusline` to `dispatch usage --provider claude --json` | DIS-37 end-to-end privacy/freshness smoke | passed | Decimal five-hour/seven-day windows fresh; raw session, cwd, transcript, and model id absent; temporary daemon/home removed after plugin-clone cleanup race. |
+| `uv run pytest tests/core/test_claude_statusline.py tests/core/test_claude_capacity.py tests/core/test_capacity.py tests/registry/test_store.py -q` | Post-review DIS-37 capture/merge/provider behavior | passed | 112 passed. |
+| `just check` | Post-review DIS-37 full repository and package gate | passed | Ruff, format, strict mypy, 650 tests, sdist/wheel, package contents. |
+| `uv run pytest tests/core/test_claude_statusline.py tests/core/test_claude_capacity.py tests/core/test_capacity.py tests/registry/test_store.py -q` | DIS-37 unavailable-with-cache behavior | passed | 113 passed. |
+| `just check` | DIS-37 second-review full repository and package gate | passed | Ruff, format, strict mypy, 651 tests, sdist/wheel, package contents. |
+| `uv run pytest tests/core/test_claude_statusline.py tests/core/test_claude_capacity.py tests/core/test_capacity.py tests/registry/test_store.py -q` | DIS-37 empty-registry unavailable-cache behavior | passed | 114 passed. |
+| `just check` | DIS-37 third-review full repository and package gate | passed | Ruff, format, strict mypy, 652 tests, sdist/wheel, package contents. |
 
 ## Prompt / Goal Alignment
 
@@ -123,8 +178,8 @@ Refs: `.agents/goals/2026-07-14-provider-capacity-completion/REFS.md`
 | Item | State | Notes |
 | --- | --- | --- |
 | DIS-34 | In Progress | Assigned to Matt; Codex children done and Claude sequence active. |
-| DIS-36 | In Progress | Assigned to Matt; implementation locally green on issue branch. |
-| DIS-37 | Backlog | Second stacked branch. |
+| DIS-36 | In Progress | PR #88 ready for review; CI/CodeQL green; 5/5 standing and privacy review gates. |
+| DIS-37 | In Progress | Assigned to Matt; second stacked branch locally green and awaiting review. |
 | DIS-38 | Backlog | Substantially shipped; reconcile remaining fields/TTL and stale history criterion. |
 | DIS-40 | Backlog, blocked by DIS-37 | Explicitly deferred private endpoint spike until supported statusline evidence exists. |
 

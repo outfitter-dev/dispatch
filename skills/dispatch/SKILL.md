@@ -267,6 +267,16 @@ includes raw email or organization ids, auth material, balances, or
 reset-credit mutation ids. Claude account/runtime can be ready before supported
 statusline capacity snapshots exist.
 
+Claude capacity snapshots are opt-in. `dispatch-claude-statusline` reads the
+supported statusline JSON from stdin, emits no display text, and atomically
+writes bounded normalized rate-limit facts beneath `DISPATCH_HOME`. It never
+edits Claude settings. If an operator already has a statusline, tell them to
+manually wrap it so the same stdin is passed to the capture helper and then to
+their existing renderer. `rate_limits` appears only for supported Claude.ai
+subscriber sessions after the first API response; missing or stale snapshots
+must not erase the last valid capacity windows. Never use the private OAuth
+usage endpoint as a fallback.
+
 Attached lanes are existing desktop Codex threads registered by raw thread id:
 
 ```bash

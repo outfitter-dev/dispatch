@@ -9,11 +9,17 @@ import re
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import cast
 
 from outfitter.dispatch.contracts.context import Ctx
+from outfitter.dispatch.core.claude_statusline import (
+    read_claude_statusline_snapshot,
+    statusline_capacity_windows,
+)
 from outfitter.dispatch.registry.models import (
     ProviderCapacityObservation,
+    ProviderCapacityWindow,
     ProviderRuntimeSummary,
 )
 
@@ -111,6 +117,28 @@ def _agent_state(agent: dict[str, object]) -> str:
         return "unknown"
     normalized = value.strip().lower()
     return normalized if normalized in _AGENT_STATES else "unknown"
+
+
+def _observed_at(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _merge_windows(
+    existing: list[ProviderCapacityWindow], captured: list[ProviderCapacityWindow]
+) -> list[ProviderCapacityWindow]:
+    merged = {(window.limit_id, window.window): window for window in existing}
+    for window in captured:
+        key = (window.limit_id, window.window)
+        current = merged.get(key)
+        current_at = _observed_at(current.observed_at) if current is not None else None
+        captured_at = _observed_at(window.observed_at)
+        if current_at is None or (captured_at is not None and captured_at > current_at):
+            merged[key] = window
+    return [merged[key] for key in sorted(merged)]
 
 
 async def _save_auth_failure(
@@ -290,6 +318,26 @@ async def refresh_claude_capacity(
             runtime_error = "claude agents returned invalid JSON"
     if runtime_error is not None:
         errors.append(runtime_error)
+    windows = existing.windows if existing is not None else []
+    capacity_observed_at = existing.capacity_observed_at if existing is not None else None
+    statusline = await asyncio.to_thread(read_claude_statusline_snapshot)
+    statusline_source: str | None = None
+    if statusline is not None:
+        statusline_source = "claude statusline snapshot"
+        captured_windows = statusline_capacity_windows(statusline)
+        if captured_windows:
+            windows = _merge_windows(windows, captured_windows)
+            latest_window = max(
+                windows,
+                key=lambda window: (
+                    _observed_at(window.observed_at) or datetime.min.replace(tzinfo=UTC)
+                ),
+            )
+            capacity_observed_at = latest_window.observed_at
+            if cli_version is None:
+                cli_version = statusline.claude_code_version
+        if not statusline.rate_limits_available:
+            errors.append("claude statusline rate limits unavailable")
     email = auth.get("email")
     org_id = auth.get("orgId")
     organization = auth.get("orgName")
@@ -297,6 +345,8 @@ async def refresh_claude_capacity(
     for name in ("claude auth status --json", "claude --version", "claude agents --json"):
         if name not in source:
             source.append(name)
+    if statusline_source is not None and statusline_source not in source:
+        source.append(statusline_source)
     observation = ProviderCapacityObservation(
         provider="claude",
         state="partial" if errors else "ready",
@@ -311,7 +361,7 @@ async def refresh_claude_capacity(
         plan=_bounded(auth.get("subscriptionType")),
         requires_auth=not bool(auth.get("loggedIn")),
         runtime=runtime,
-        windows=existing.windows if existing is not None else [],
+        windows=windows,
         reset_credits_available=existing.reset_credits_available if existing is not None else None,
         reset_credits=existing.reset_credits if existing is not None else [],
         usage_summary=existing.usage_summary if existing is not None else None,
@@ -322,7 +372,7 @@ async def refresh_claude_capacity(
         observed_at=observed_at,
         account_observed_at=observed_at,
         runtime_observed_at=runtime_observed_at,
-        capacity_observed_at=existing.capacity_observed_at if existing is not None else None,
+        capacity_observed_at=capacity_observed_at,
         usage_observed_at=existing.usage_observed_at if existing is not None else None,
         confidence=0.7 if errors else 1.0,
         error="; ".join(errors) if errors else None,

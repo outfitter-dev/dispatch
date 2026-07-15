@@ -1334,8 +1334,8 @@ class UsageWindowView(BaseModel):
     limit_id: str
     limit_name: str | None = None
     window: str
-    used_percent: int | None = None
-    remaining_percent: int | None = None
+    used_percent: float | None = None
+    remaining_percent: float | None = None
     duration_minutes: int | None = None
     resets_at: int | None = None
     reached_type: str | None = None
