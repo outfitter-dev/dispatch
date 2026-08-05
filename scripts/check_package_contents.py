@@ -39,6 +39,14 @@ def _check_sdist(path: Path) -> None:
         "plugins/dispatch/skills/dm/SKILL.md",
         "plugins/dispatch/README.md",
         "plugins/dispatch/.mcp.json",
+        "spikes/claude/assert_probe.py",
+        "spikes/claude/sanitize_stream.jq",
+        "spikes/claude/zmx_snapshot_probe.sh",
+        "spikes/claude/fixtures/capability-policy.json",
+        "spikes/claude/fixtures/agent-view-cockpit-plan.jsonl",
+        "spikes/claude/fixtures/coexistence-outcomes.jsonl",
+        "spikes/claude/fixtures/persistent-owner-completion.jsonl",
+        "spikes/claude/fixtures/preflight-nonce-raw.jsonl",
     }
     missing = sorted(required - names)
     if missing:

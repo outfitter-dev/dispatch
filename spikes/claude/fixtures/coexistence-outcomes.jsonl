@@ -1,0 +1,17 @@
+{"case":"ordinary_tui","sequence":1,"actor":"attached_tui","event":"turn_completed","marker":"initial"}
+{"case":"ordinary_tui","sequence":2,"actor":"external_resume","event":"turn_completed","marker":"external","exit_code":0}
+{"case":"ordinary_tui","sequence":3,"actor":"attached_tui","event":"marker_visible","marker":"external","value":false}
+{"case":"ordinary_tui","sequence":4,"actor":"attached_tui","event":"turn_completed","marker":"human_after_external"}
+{"case":"ordinary_tui","sequence":5,"actor":"fresh_resume","event":"marker_visible","marker":"external","value":false}
+{"case":"ordinary_tui","sequence":6,"actor":"reducer","event":"shared_coherent_history","value":false,"reason":"divergent_histories"}
+{"case":"agent_view","sequence":1,"actor":"background_owner","event":"turn_completed","state":"done","status":"idle","owner_alive":true}
+{"case":"agent_view","sequence":2,"actor":"external_resume","event":"resume_rejected","exit_code":1,"owner_alive":true}
+{"case":"agent_view","sequence":3,"actor":"attached_tui","event":"resume_rejected","exit_code":1,"owner_alive":true}
+{"case":"agent_view","sequence":4,"actor":"attached_tui","event":"attached_human_turn_completed"}
+{"case":"agent_view","sequence":5,"actor":"external_resume","event":"resume_completed_after_owner_stop","exit_code":0}
+{"case":"agent_view","sequence":6,"actor":"reducer","event":"shared_coherent_history","value":false,"reason":"no_programmatic_send_while_owner_alive"}
+{"case":"persistent_stream_owner","sequence":1,"actor":"owner","event":"owner_turn_completed","marker":"first"}
+{"case":"persistent_stream_owner","sequence":2,"actor":"owner","event":"owner_turn_completed","marker":"second"}
+{"case":"persistent_stream_owner","sequence":3,"actor":"external_resume","event":"turn_completed","marker":"external","exit_code":0}
+{"case":"persistent_stream_owner","sequence":4,"actor":"owner","event":"marker_visible","marker":"external","value":false}
+{"case":"persistent_stream_owner","sequence":5,"actor":"reducer","event":"shared_coherent_history","value":false,"reason":"external_resume_diverged"}

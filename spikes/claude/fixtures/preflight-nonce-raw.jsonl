@@ -1,0 +1,2 @@
+{"type":"system","subtype":"hook_response","hook_event":"SessionStart","hook_id":"00000000-0000-4000-8000-000000000351","exit_code":0,"outcome":"success","stdout":"{\"_dispatch_preflight\":{\"nonce\":\"preflight-stale\"}}"}
+{"type":"system","subtype":"hook_response","hook_event":"SessionStart","hook_id":"00000000-0000-4000-8000-000000000352","exit_code":0,"outcome":"success","stdout":"{\"_dispatch_preflight\":{\"nonce\":\"preflight-current\"}}"}
