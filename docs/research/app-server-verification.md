@@ -4,6 +4,13 @@ Verifies the "Codex App Server Technical Report (§1–15)" against the actually
 
 ## Ground truth on this machine
 
+Schema refreshed 2026-08-16 against the pinned binary `codex-cli 0.147.0` — the
+latest stable release (published 2026-08-07) and the version the local managed
+daemon reports for both `cliVersion` and `appServerVersion`. The pin tracks
+stable rather than the alpha line so the manifest describes what actually runs.
+The behavioral probes below were **not** re-run for this refresh — they remain
+0.144-era empirical findings.
+
 Refreshed 2026-07-09:
 
 - `/Applications/ChatGPT.app/Contents/Resources/codex` reports
@@ -45,9 +52,9 @@ Regenerate any time (read-only, no network):
 codex app-server generate-json-schema --out <DIR>                # stable
 codex app-server generate-json-schema --experimental --out <DIR> # + gated
 ```
-Current 0.144.0 generated schema files: stable = 267, experimental = 337.
-Current method counts: stable client requests = 87, experimental client requests
-= 122, server requests = 10, server notifications = 68. Protocol is namespaced
+Current 0.147.0 generated schema files: stable = 285, experimental = 361.
+Current method counts: stable client requests = 95, experimental client requests
+= 133, server requests = 10, server notifications = 70. Protocol is namespaced
 `v1/` (just Initialize) + `v2/` (everything else). Initialize is still v1 and
 returns `{codexHome, platformFamily, platformOs, userAgent}`. The compact,
 generated inventory is checked in at
@@ -123,6 +130,44 @@ Lifecycle/threads/turns: `thread/start resume fork read list loaded/list archive
 - Stable account usage/workspace-message methods and permanent `thread/delete`
   exist, but Dispatch does not yet expose them. Credits and permanent deletion
   need explicit product/policy decisions rather than implicit pass-throughs.
+
+### 0.144.0 → 0.147.0 deltas (schema-only; not behaviorally probed)
+
+Adopted:
+
+- `account/rateLimits/read` snapshots gained `spendControlReached`, a nullable
+  backend-reported boolean. It is distinct from `rateLimitReachedType`, whose
+  enum covers only rate limits, credits, and usage limits. `null` means
+  unavailable, **not** "not reached". Dispatch models it on `RateLimitSnapshot`;
+  the capacity projection still derives its `individual` window from
+  `individualLimit`, so a reached spend control with no `individualLimit` is not
+  yet surfaced as a window.
+
+Recorded but not adopted (each needs its own op + product decision; the
+manifest test pins the version they appeared in):
+
+- **Thread sections** — stable `threadSection/{create,delete,list,update}` and
+  `thread/section/move`, plus `Thread.section` / `Thread.sectionEnteredAt` and
+  an experimental `thread/list` `sectionId` filter. A `ThreadSection` is
+  `{id, name, appearance?}` with a stable UUIDv7 identity across renames. This
+  overlaps dispatch's own ref/handle labeling and should not be mirrored
+  without deciding which layer owns grouping.
+- **App registry** — stable `app/installed` and `app/read` join the existing
+  `app/list`.
+- **Audio input** — `turn/start` and `turn/steer` `UserInput` unions gained
+  `audio` and `localAudio` variants. Dispatch remains text/image-only; the
+  data-URL constraint verified for images has not been checked for audio.
+- **Environment notifications** — `thread/environment/connected` and
+  `thread/environment/disconnected`, with experimental `environment/status`.
+  `project_notification` ignores unknown methods, so these are inert today.
+- **Model catalog** — `model/list` rows gained `modelSpecialty`. The unreleased
+  0.148 alpha line adds `multiAgentVersion` and an experimental
+  `server/diagnostics`; those two are the *entire* delta from 0.147.0 to
+  `0.148.0-alpha.9`, which is why the pin stays on stable.
+- Experimental additions: `plugin/search`, `server/diagnostics`,
+  `thread/searchOccurrences`, and `itemsBackwardsCursor` /
+  `turnsBackwardsCursor` on the `thread/resume` result.
+- Stable `externalAgentConfig/import/recordHistory`.
 
 ### Account and capacity reads (0.144)
 
@@ -239,7 +284,7 @@ Two WS clients (A, B), one `ws://` server. **Earlier "partial fan-out" was wrong
 - Lifecycle: initialize → initialized → thread/start → turn/start → stream → resume.
 - Approval responder: reply `{id,result:{decision}}`; watch `waitingOnApproval` flag + `serverRequest/resolved`; correlate file diffs by `itemId`.
 - Sandbox: thread `sandbox:"read-only|workspace-write|danger-full-access"`; turn `sandboxPolicy:{type:"readOnly|workspaceWrite|externalSandbox|dangerFullAccess"}`.
-- Schema: regenerate per binary; current 0.144.0 generated 267 stable / 337
+- Schema: regenerate per binary; current 0.147.0 generated 285 stable / 361
   experimental schema files. The checked-in compact manifest makes drift
   reviewable without committing hundreds of generated schema files.
 

@@ -85,8 +85,10 @@ def _run(command: list[str], *args: str) -> str:
 
 
 def build_manifest(command: list[str]) -> dict[str, object]:
-    installed_version = _run(command, "--version").removeprefix("codex-cli ")
-    version = installed_version.partition("-")[0]
+    # Record the exact reported version, prerelease suffix included: dispatch
+    # pins prerelease builds, and truncating to the release line would claim a
+    # stable version that may not exist yet (e.g. 0.148.0-alpha.9 -> "0.148.0").
+    version = _run(command, "--version").removeprefix("codex-cli ")
     with tempfile.TemporaryDirectory(prefix="dispatch-app-server-schema-") as tmp:
         root = Path(tmp)
         stable = root / "stable"

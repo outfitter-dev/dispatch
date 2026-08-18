@@ -80,16 +80,19 @@ def test_app_server_protocol_fixtures_validate_against_wire_models() -> None:
     assert account.account is not None and account.account.plan_type == "pro"
     assert signed_out.account is None
     assert rate_limits.rate_limit_reset_credits is not None
+    assert rate_limits.rate_limits.spend_control_reached is False
+    # Absent on the partial fixture: unavailable, not "not reached".
+    assert partial_limits.rate_limits.spend_control_reached is None
     assert usage.summary.lifetime_tokens == 123456
     assert partial_limits.rate_limits.primary is None
     assert partial_usage.daily_usage_buckets is None
 
 
-def test_app_server_protocol_manifest_tracks_v0144_capabilities() -> None:
+def test_app_server_protocol_manifest_tracks_v0147_capabilities() -> None:
     manifest = cast(dict[str, Any], load_json("app_server", "protocol_manifest", "current.json"))
 
-    assert manifest["codex_cli_version"] == "0.144.0"
-    assert len(manifest["client_requests"]["stable"]) == 87
+    assert manifest["codex_cli_version"] == "0.147.0"
+    assert len(manifest["client_requests"]["stable"]) == 95
     assert "account/usage/read" in manifest["client_requests"]["stable"]
     assert "thread/delete" in manifest["client_requests"]["stable"]
     assert "thread/items/list" in manifest["client_requests"]["experimental_only"]
@@ -148,6 +151,42 @@ def test_app_server_protocol_manifest_tracks_v0144_capabilities() -> None:
     assert {"data", "nextCursor", "backwardsCursor"} == set(
         manifest["selected_shapes"]["thread_items_page_fields"]
     )
+
+
+def test_app_server_protocol_manifest_records_v0147_additions() -> None:
+    """Capabilities that arrived between the 0.144.0 and 0.147.0 pins.
+
+    Dispatch does not consume the thread-section, app-registry, or audio-input
+    surfaces yet; these assertions pin *when* they appeared so the follow-up work
+    in ``docs/research/app-server-verification.md`` stays anchored to a version.
+    """
+
+    manifest = cast(dict[str, Any], load_json("app_server", "protocol_manifest", "current.json"))
+    stable = set(manifest["client_requests"]["stable"])
+    experimental = set(manifest["client_requests"]["experimental_only"])
+
+    assert {
+        "app/installed",
+        "app/read",
+        "thread/section/move",
+        "threadSection/create",
+        "threadSection/delete",
+        "threadSection/list",
+        "threadSection/update",
+    } <= stable
+    assert {"environment/status", "plugin/search", "thread/searchOccurrences"} <= experimental
+    assert {"thread/environment/connected", "thread/environment/disconnected"} <= set(
+        manifest["server_notifications"]
+    )
+    assert {"section", "sectionEnteredAt"} <= set(manifest["selected_shapes"]["thread_fields"])
+    assert "sectionId" in manifest["selected_shapes"]["thread_list_experimental_fields"]
+    assert "modelSpecialty" in manifest["selected_shapes"]["model_fields"]
+    assert "spendControlReached" in manifest["selected_shapes"]["rate_limit_snapshot_fields"]
+    assert {"itemsBackwardsCursor", "turnsBackwardsCursor"} <= set(
+        manifest["selected_shapes"]["thread_resume_result_experimental_fields"]
+    )
+    for shape in ("turn_start_user_input_types", "turn_steer_user_input_types"):
+        assert {"audio", "localAudio"} <= set(manifest["selected_shapes"][shape])
 
 
 def test_history_v2_fixture_summarizes_tools_files_and_subagents() -> None:

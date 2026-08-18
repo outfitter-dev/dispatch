@@ -2,7 +2,7 @@
 
 A local control plane for orchestrating Codex agent lanes (threads) over the Codex App Server: create/attach lanes, send work or context, queue delivery, stop active turns, and automate pings on time- and event-based triggers. One authored contract per operation is projected onto multiple surfaces — CLI now, MCP now, remote control later — with no drift.
 
-Status: approved design, implemented through v0 and updated for dispatch-local refs / flat thread CLI. Companion research (schema refreshed against `codex-cli 0.144.0`): [`docs/research/app-server-verification.md`](../research/app-server-verification.md) and [`docs/research/orchestration-thesis.md`](../research/orchestration-thesis.md). Decisions: [`docs/adrs/`](../adrs/). Execution ledger: [`../../.agents/plans/v0/RETRO.md`](../../.agents/plans/v0/RETRO.md).
+Status: approved design, implemented through v0 and updated for dispatch-local refs / flat thread CLI. Companion research (schema refreshed against `codex-cli 0.147.0`): [`docs/research/app-server-verification.md`](../research/app-server-verification.md) and [`docs/research/orchestration-thesis.md`](../research/orchestration-thesis.md). Decisions: [`docs/adrs/`](../adrs/). Execution ledger: [`../../.agents/plans/v0/RETRO.md`](../../.agents/plans/v0/RETRO.md).
 
 ## Naming
 
@@ -237,4 +237,4 @@ The client classifies command/file/permission approvals, user input, MCP elicita
 
 - **Cross-process contention** (dispatch vs desktop app-server on one thread) — resolved for v0 by ADR-0005/0018: attached lanes are turn-write locked, while metadata/lifecycle actions are explicit.
 - **MCP transport** — stdio first; SSE/streamable-HTTP later (mirrors Codex/Trails MCP status).
-- **App-server version drift** — pin/record the binary; the current compatibility manifest was generated from `codex-cli 0.144.0`. The public Python SDK still pins an older binary, so we drive the installed CLI directly and regenerate the compact manifest before relying on new fields.
+- **App-server version drift** — pin/record the binary; the current compatibility manifest was generated from `codex-cli 0.147.0`, the latest stable release. The pin tracks stable so the manifest describes what the managed daemon actually speaks; the manifest records the exact reported version string, prerelease suffix included, if a prerelease is ever pinned. The public Python SDK still pins an older binary, so we drive the installed CLI directly and regenerate the compact manifest before relying on new fields.
