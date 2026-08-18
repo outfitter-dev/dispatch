@@ -87,9 +87,9 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 2026-08-18 - Durable goal packet
 - Changed: wrote executable plan, goal prompt, references, and retro on `codex/dispatch-back-on-track-goal`.
 - Verified: packet records branch order, dependency map, validation ladder, stop rules, and approval boundaries.
-- Result: safe non-live execution can continue without chat history.
-- Next: review/fix PR #95, then ask for merge and live-provider approvals separately.
-- Blockers: none for review/fix work.
+- Result: committed/pushed at `6e52c26`; fresh packet audit scored 5/5 with no findings and confirmed standalone execution without chat history.
+- Next: ask for merge and live-provider approvals as separate ceremonies.
+- Blockers: explicit merge approval; live-provider authorization is a later gate.
 ```
 
 ## Local Review Log
@@ -100,6 +100,7 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 | 1 | PR #95 launch side effects, identity, privacy, bounds | agent report, 2026-08-18 | one P1, 3/5 | fix assigned; no live Claude invocation |
 | 2 | PR #95 at `6cc6ca`, indeterminate timeout/output fix | agent report, 2026-08-18 | one P1, 3/5 | exit-0 zero/multiple-ID outcome still ordinary; fixed at `f51e95e` |
 | 3 | PR #95 at `f51e95e` | agent report, 2026-08-18 | clean, 5/5 | 33 focused tests; `git diff --check`; both prior P1s closed |
+| packet | Goal/plan/references/retro at `6e52c26` | agent report, 2026-08-18 | clean, 5/5 | tracked/pushed; exact integration and approval gates; live PR state consistent |
 
 ## Verification Log
 
@@ -111,6 +112,7 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 | `just check` | PR #95 pre-P1 fix | pass | 722 passed, 17 deselected; package gate pass |
 | `just check` | PR #95 first P1 fix `6cc6ca` | pass | 727 passed, 17 deselected; package gate pass |
 | `just check` | PR #95 candidate `f51e95e` | pass | 729 passed, 17 deselected; package gate pass |
+| `git diff --cached --check` | coordination packet before `6e52c26` | pass | four tracked files, no whitespace errors |
 | `just test-int` | merged main | pending | run after merge; temporary CODEX_HOME and ephemeral lanes; record any auth/tool-dependent skips |
 | live Claude launch | DIS-57 | approval gated | settings metadata/hash snapshot and disposable cleanup required |
 
@@ -159,7 +161,8 @@ source-control ownership rule.
 - PR state: open, non-draft, merge-clean, and review-clean at all three recorded tips.
 - Source-control host lag: none known at recorded heads; re-read before mutation.
 - Tracker state: partially reconciled; final post-merge update pending.
-- Local review state: PRs #93/#94 5/5; PR #95 round 3 is 5/5 with no findings.
+- Local review state: PRs #93/#94 5/5; PR #95 round 3 is 5/5 with no findings;
+  coordination packet audit is 5/5 with no findings.
 - Remote review state: all three PRs green at recorded heads with zero unresolved threads.
 - Remote review scores: local scores recorded; hosted bot summaries recorded above.
 - Verification: branch checks pass; merged-main/integration proof pending.
