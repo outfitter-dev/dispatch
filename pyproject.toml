@@ -1,6 +1,6 @@
 [project]
 name = "outfitter-dispatch"
-version = "0.10.0"
+version = "0.11.0"
 description = "Local control plane for orchestrating Codex agent lanes over the Codex App Server."
 readme = "README.md"
 requires-python = ">=3.13"
