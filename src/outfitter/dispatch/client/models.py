@@ -23,7 +23,7 @@ ThreadSandbox = Literal["read-only", "workspace-write", "danger-full-access"]
 ApprovalPolicy = Literal["never", "untrusted", "on-request"]
 ApprovalsReviewer = Literal["user", "auto_review", "guardian_subagent"]
 SandboxPolicyType = Literal["readOnly", "workspaceWrite", "externalSandbox", "dangerFullAccess"]
-# App Server 0.144 advertises model-defined efforts rather than a closed enum.
+# App Server 0.147 still advertises model-defined efforts rather than a closed enum.
 Effort = str
 ReasoningSummary = Literal["auto", "concise", "detailed", "none"]
 Personality = Literal["none", "friendly", "pragmatic"]
@@ -114,6 +114,10 @@ class RateLimitSnapshot(WireModel):
     credits: CreditsSnapshot | None = None
     individual_limit: SpendControlLimitSnapshot | None = None
     rate_limit_reached_type: str | None = None
+    # Backend-reported spend-control state (App Server 0.147). Distinct from
+    # ``rate_limit_reached_type``, whose enum covers rate limits and credits.
+    # ``None`` means unavailable, not "not reached".
+    spend_control_reached: bool | None = None
 
 
 class RateLimitResetCredit(WireModel):

@@ -4,11 +4,13 @@
       "collaborationMode/list",
       "environment/add",
       "environment/info",
+      "environment/status",
       "fuzzyFileSearch/sessionStart",
       "fuzzyFileSearch/sessionStop",
       "fuzzyFileSearch/sessionUpdate",
       "memory/reset",
       "mock/experimentalMethod",
+      "plugin/search",
       "process/kill",
       "process/resizePty",
       "process/spawn",
@@ -34,6 +36,7 @@
       "thread/realtime/start",
       "thread/realtime/stop",
       "thread/search",
+      "thread/searchOccurrences",
       "thread/settings/update",
       "thread/turns/list"
     ],
@@ -47,7 +50,9 @@
       "account/sendAddCreditsNudgeEmail",
       "account/usage/read",
       "account/workspaceMessages/read",
+      "app/installed",
       "app/list",
+      "app/read",
       "command/exec",
       "command/exec/resize",
       "command/exec/terminate",
@@ -62,6 +67,7 @@
       "externalAgentConfig/detect",
       "externalAgentConfig/import",
       "externalAgentConfig/import/readHistories",
+      "externalAgentConfig/import/recordHistory",
       "feedback/upload",
       "fs/copy",
       "fs/createDirectory",
@@ -116,10 +122,15 @@
       "thread/read",
       "thread/resume",
       "thread/rollback",
+      "thread/section/move",
       "thread/shellCommand",
       "thread/start",
       "thread/unarchive",
       "thread/unsubscribe",
+      "threadSection/create",
+      "threadSection/delete",
+      "threadSection/list",
+      "threadSection/update",
       "turn/interrupt",
       "turn/start",
       "turn/steer",
@@ -127,10 +138,10 @@
       "windowsSandbox/setupStart"
     ]
   },
-  "codex_cli_version": "0.144.0",
+  "codex_cli_version": "0.147.0",
   "schema_files": {
-    "experimental": 337,
-    "stable": 267
+    "experimental": 361,
+    "stable": 285
   },
   "selected_shapes": {
     "account_result_fields": [
@@ -154,6 +165,7 @@
       "inputModalities",
       "isDefault",
       "model",
+      "modelSpecialty",
       "serviceTiers",
       "supportedReasoningEfforts",
       "supportsPersonality",
@@ -187,7 +199,8 @@
       "planType",
       "primary",
       "rateLimitReachedType",
-      "secondary"
+      "secondary",
+      "spendControlReached"
     ],
     "reset_credit_fields": [
       "description",
@@ -214,6 +227,8 @@
       "path",
       "preview",
       "recencyAt",
+      "section",
+      "sectionEnteredAt",
       "sessionId",
       "source",
       "status",
@@ -258,6 +273,7 @@
       "modelProviders",
       "parentThreadId",
       "searchTerm",
+      "sectionId",
       "sortDirection",
       "sortKey",
       "sourceKinds",
@@ -295,6 +311,7 @@
       "cwd",
       "initialTurnsPage",
       "instructionSources",
+      "itemsBackwardsCursor",
       "model",
       "modelProvider",
       "multiAgentMode",
@@ -302,7 +319,8 @@
       "runtimeWorkspaceRoots",
       "sandbox",
       "serviceTier",
-      "thread"
+      "thread",
+      "turnsBackwardsCursor"
     ],
     "thread_start_experimental_fields": [
       "allowProviderModelFallback",
@@ -404,7 +422,9 @@
       "original"
     ],
     "turn_start_user_input_types": [
+      "audio",
       "image",
+      "localAudio",
       "localImage",
       "mention",
       "skill",
@@ -417,7 +437,9 @@
       "original"
     ],
     "turn_steer_user_input_types": [
+      "audio",
       "image",
+      "localAudio",
       "localImage",
       "mention",
       "skill",
@@ -480,6 +502,8 @@
     "thread/closed",
     "thread/compacted",
     "thread/deleted",
+    "thread/environment/connected",
+    "thread/environment/disconnected",
     "thread/goal/cleared",
     "thread/goal/updated",
     "thread/name/updated",
