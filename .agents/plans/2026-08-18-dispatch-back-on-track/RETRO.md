@@ -27,10 +27,10 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 
 | Order | Issue | Branch | PR | Status | Notes |
 | --- | --- | --- | --- | --- | --- |
-| 1 | [DIS-65](https://linear.app/outfitter/issue/DIS-65) | `codex/recover-studio-bridge-20260818` | [PR #93](https://github.com/outfitter-dev/dispatch/pull/93) | Merge-ready, approval gated | 5/5 local review; CI green |
-| 2 | [DIS-64](https://linear.app/outfitter/issue/DIS-64) | `dis-64-enforce-a-minimum-supported-codex-build-instead-of-an-unenforced-exact` | [PR #94](https://github.com/outfitter-dev/dispatch/pull/94) | Merge-ready after PR #93, approval gated | 5/5 combined review; CI green |
-| independent | [DIS-57](https://linear.app/outfitter/issue/DIS-57) | `dis-57-launch-claude-background-sessions-through-the-supported-cli` | [PR #95](https://github.com/outfitter-dev/dispatch/pull/95) | Merge-ready, approval gated | 5/5 review; hosted gates green at `f51e95e` |
-| independent | [DIS-66](https://linear.app/outfitter/issue/DIS-66) | `dis-66-remediate-open-dependabot-runtime-alerts-without-taking-mcp` | [PR #96](https://github.com/outfitter-dev/dispatch/pull/96) | Draft, readiness/merge approval gated | 5/5; local/full/hosted gates green |
+| 1 | [DIS-65](https://linear.app/outfitter/issue/DIS-65) | `codex/recover-studio-bridge-20260818` | [PR #93](https://github.com/outfitter-dev/dispatch/pull/93) | Merged at `e63b538` | 5/5 local review; CI green |
+| 2 | [DIS-64](https://linear.app/outfitter/issue/DIS-64) | `dis-64-enforce-a-minimum-supported-codex-build-instead-of-an-unenforced-exact` | [PR #94](https://github.com/outfitter-dev/dispatch/pull/94) | Restacked and merged at `260f77c` | 5/5 combined review; rerun CI/CodeQL/Graphite green |
+| independent | [DIS-57](https://linear.app/outfitter/issue/DIS-57) | `dis-57-launch-claude-background-sessions-through-the-supported-cli` | [PR #95](https://github.com/outfitter-dev/dispatch/pull/95) | Merged at `1b6fc3f`; live proof pending | 5/5 review; hosted gates green at `f51e95e` |
+| independent | [DIS-66](https://linear.app/outfitter/issue/DIS-66) | `dis-66-remediate-open-dependabot-runtime-alerts-without-taking-mcp` | [PR #96](https://github.com/outfitter-dev/dispatch/pull/96) | Merged at `ea4b731`; alert indexing pending | 5/5; local/full/hosted gates green |
 | coordination | none | `codex/dispatch-back-on-track-goal` | none | In progress | Durable packet only |
 
 ## Planning Discoveries
@@ -150,6 +150,13 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 - Result: the internal Claude launch primitive is on trunk; the independent five-package security remediation is at its final authorized merge gate.
 - Next: merge PR #96 through Graphite, verify all four hosted PRs and new main, then begin post-merge local/runtime/alert proof.
 - Blockers: none.
+
+2026-08-18 - All four PRs merged and trunk verified
+- Changed: merged PR #96 through Graphite at `ea4b731`; fast-forwarded the clean primary checkout from `276413e` to live `origin/main` at `ea4b731`; synchronized the locked environment to the five patched dependency versions.
+- Verified: all four PRs report MERGED with merge commits `e63b538`, `260f77c`, `1b6fc3f`, and `ea4b731`. On merged main, both CLI help smokes passed; exact `just check` passed Ruff/format/strict mypy, 748 tests with 17 deselected, sdist/wheel build, and package-content validation; `just test-int` passed 17/17 with 748 deselected in 256.02s, including daemon and lifecycle end-to-end cases with no skips.
+- Result: landed code, local build/package/CLI, and isolated runtime-readiness are proven on the actual merged tree. The Dependabot API still reports nine open alerts immediately after merge despite every locked version meeting the fix floors, so DIS-66 remains open pending authoritative re-indexing.
+- Next: poll Dependabot to closure, reconcile DIS-65/DIS-64 immediately, keep DIS-57 pending its authorized live Claude proof, and keep DIS-66 pending API closure.
+- Blockers: GitHub Dependabot indexing lag only for DIS-66 completion.
 ```
 
 ## Local Review Log
@@ -180,6 +187,10 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 | `just check` | PR #96 | pass | 696 passed, 17 deselected; build/package-content pass |
 | `just test-int` | PR #94 at `142c58a` | pass | 17 passed, 715 deselected in 231.65s; isolated App Server, daemon, and lifecycle coverage |
 | `just test-int` | PR #96 at `8659ee2` | pass | 17 passed, 696 deselected in 236.94s; patched dependency graph under isolated App Server coverage |
+| `uv sync --locked` + CLI help smokes | merged `main` at `ea4b731` | pass | exact five patched dependency versions installed; both entry points load |
+| `just check` | merged `main` at `ea4b731` | pass | Ruff/format/mypy; 748 passed, 17 deselected; build/package-content pass |
+| `just test-int` | merged `main` at `ea4b731` | pass | 17 passed, 748 deselected in 256.02s; no skips |
+| Dependabot open-alert query | merged `main` at `ea4b731` | pending | nine alerts still reported open immediately after merge; version floors are satisfied, so await authoritative re-index |
 | `just test-int` | merged main | pending | run after merge; temporary CODEX_HOME and ephemeral lanes; record any auth/tool-dependent skips |
 | live Claude launch | DIS-57 | approval gated | settings metadata/hash snapshot and disposable cleanup required |
 
@@ -229,8 +240,8 @@ source-control ownership rule.
 - Goal completion condition: not met; execution resumed with both required
   authorization gates open.
 - Graphite / branch state: compatibility stack ordered PR #93 -> PR #94; PR #95 independent.
-- PR state: PRs #93-#95 open/non-draft/merge-clean/review-clean; PR #96 open,
-  draft, merge-clean, and locally/hosted-check clean.
+- PR state: PRs #93-#96 merged in the authorized order with live merge commits
+  recorded above.
 - Source-control host lag: none known at recorded heads; re-read before mutation.
 - Tracker state: partially reconciled; final post-merge update pending.
 - Local review state: PRs #93/#94 5/5; PR #95 round 3 is 5/5; PR #96 is
@@ -238,8 +249,8 @@ source-control ownership rule.
 - Remote review state: PRs #93-#95 green at recorded heads; PR #96 CI/CodeQL
   green at `8659ee2`; zero unresolved threads at audit.
 - Remote review scores: local scores recorded; hosted bot summaries recorded above.
-- Verification: branch checks and pre-merge real integration pass; merged-main
-  repeat and alert-closure proof remain pending.
+- Verification: merged-main full gate and real integration pass; only Dependabot
+  API closure and the separately authorized live Claude/host ceremonies remain.
 - Skipped checks: `just test-int` pending merge; opt-in `just scenario` excluded;
   live Claude proof pending authorization.
 - Remaining P3s / risks: provider CLI behavior may drift; settings mutation risk must be measured.
