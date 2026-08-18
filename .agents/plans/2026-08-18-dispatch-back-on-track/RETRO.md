@@ -136,6 +136,13 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 - Result: no P0/P1/P2, CI, topology, or mergeability blocker remains. The only non-green signal is Graphite's expected downstack ordering sentinel, which the authorized `gt merge` operation is designed to satisfy.
 - Next: run `gt merge --no-interactive` from the PR #94 stack tip, verify both hosted PRs merged in order, then merge independent PRs #95 and #96 only after refreshing their live gates against the new main.
 - Blockers: none.
+
+2026-08-18 - Compatibility stack merged; Claude launch checkpoint
+- Changed: executed the authorized Graphite stack merge. PR #93 merged first at `e63b538`; Graphite retargeted/restacked PR #94 from `142c58a` to `682a849`, reran CI/CodeQL/Graphite successfully, and merged it at `260f77c`. Synchronized existing PR #95 to Graphite metadata without code changes.
+- Verified: live `origin/main` is `260f77c`; PRs #93 and #94 report merged in the correct order. PR #95 remains at reviewed head `f51e95e`, GitHub reports CLEAN, all hosted checks are green, unresolved threads are zero, and a fresh `gt merge --dry-run` reports its one-branch stack ready.
+- Result: recovered Studio compatibility and minimum-version work are on trunk with no duplicated stack diff. The independent Claude launch primitive is ready for its authorized merge.
+- Next: run Graphite merge for PR #95, verify the new main, then independently refresh and merge PR #96.
+- Blockers: none.
 ```
 
 ## Local Review Log
