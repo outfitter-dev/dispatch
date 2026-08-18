@@ -84,7 +84,8 @@
   697 passed / 17 deselected; local review 5/5.
 - [PR #94](https://github.com/outfitter-dev/dispatch/pull/94): `just check`,
   715 passed / 17 deselected; combined compatibility review
-  5/5; hosted CI green and zero unresolved threads at the recorded head.
+  5/5; hosted CI green and zero unresolved threads at the recorded head;
+  `just test-int` passed 17/17 real isolated App Server tests in 231.65s.
 - [PR #95](https://github.com/outfitter-dev/dispatch/pull/95): `just check`,
   729 passed / 17 deselected at `f51e95e`; hosted CI,
   CodeQL, and Graphite are green with zero unresolved review threads; fresh local
@@ -92,4 +93,5 @@
   indeterminate-outcome gaps, both fixed with focused regression tests.
 - [PR #96](https://github.com/outfitter-dev/dispatch/pull/96): locked sync and CLI
   smokes pass; 20 focused MCP tests; exact `just check` with 696 passed / 17
-  deselected; independent lock review 5/5; CI/CodeQL green; draft approval gated.
+  deselected; `just test-int` passed 17/17 in 236.94s; independent lock review
+  5/5; CI/CodeQL green; draft approval gated.

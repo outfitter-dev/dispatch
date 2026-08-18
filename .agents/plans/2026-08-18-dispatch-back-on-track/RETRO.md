@@ -101,6 +101,13 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 - Result: clean independent security slice; no alert is reachable through the current stdio-only MCP imports, but all are release debt until merge closes them.
 - Next: receive readiness/merge approval, land, then confirm all nine alerts close before completing DIS-66.
 - Blockers: explicit readiness and merge approval.
+
+2026-08-18 - Pre-merge isolated App Server integration
+- Changed: no source changes; ran the exact real integration suite on the compatibility stack tip and the patched dependency tip, then recorded the evidence on both PRs.
+- Verified: PR #94 at `142c58a` passed 17/17 in 231.65s; PR #96 at `8659ee2` passed 17/17 in 236.94s. Both harnesses used temporary isolated CODEX_HOME state and ephemeral lanes; daemon and lifecycle end-to-end cases passed.
+- Result: no auth/tool skips and no live user-thread pollution; opt-in `just scenario` remained excluded.
+- Next: repeat `just test-int` on merged `main` after the approved merge ceremony.
+- Blockers: explicit readiness/merge approval.
 ```
 
 ## Local Review Log
@@ -129,6 +136,8 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 | `uv sync --locked` + CLI help smokes | PR #96 | pass | exact five patched package versions installed |
 | focused MCP routing/derive/parity tests | PR #96 | pass | 20 passed |
 | `just check` | PR #96 | pass | 696 passed, 17 deselected; build/package-content pass |
+| `just test-int` | PR #94 at `142c58a` | pass | 17 passed, 715 deselected in 231.65s; isolated App Server, daemon, and lifecycle coverage |
+| `just test-int` | PR #96 at `8659ee2` | pass | 17 passed, 696 deselected in 236.94s; patched dependency graph under isolated App Server coverage |
 | `just test-int` | merged main | pending | run after merge; temporary CODEX_HOME and ephemeral lanes; record any auth/tool-dependent skips |
 | live Claude launch | DIS-57 | approval gated | settings metadata/hash snapshot and disposable cleanup required |
 
@@ -137,9 +146,9 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 | Time | PR | CI State | Review State | Scores / Signals | Unresolved P0/P1/P2 | Action |
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-08-18 | [PR #93](https://github.com/outfitter-dev/dispatch/pull/93) | green | zero threads | local 5/5 | none | await merge approval |
-| 2026-08-18 | [PR #94](https://github.com/outfitter-dev/dispatch/pull/94) | green | two prior Cursor threads fixed/replied/resolved | local stack 5/5 | none | await PR #93 then merge approval |
+| 2026-08-18 | [PR #94](https://github.com/outfitter-dev/dispatch/pull/94) | green | two prior Cursor threads fixed/replied/resolved; integration proof [comment](https://github.com/outfitter-dev/dispatch/pull/94#issuecomment-5331466658) | local stack 5/5 | none | await PR #93 then merge approval |
 | 2026-08-18 | [PR #95](https://github.com/outfitter-dev/dispatch/pull/95) | green at `f51e95e` | zero unresolved threads | local round 3: 5/5; CI/CodeQL/Graphite green | none | await merge approval |
-| 2026-08-18 | [PR #96](https://github.com/outfitter-dev/dispatch/pull/96) | CI/CodeQL green at `8659ee2` | zero unresolved threads at audit | local 5/5 | none | keep draft; await readiness/merge approval |
+| 2026-08-18 | [PR #96](https://github.com/outfitter-dev/dispatch/pull/96) | CI/CodeQL green at `8659ee2` | zero unresolved threads; integration proof [comment](https://github.com/outfitter-dev/dispatch/pull/96#issuecomment-5331466800) | local 5/5 | none | keep draft; await readiness/merge approval |
 
 All three PRs were already non-draft before this packet began. This packet did
 not perform or authorize a readiness transition.
@@ -186,7 +195,8 @@ source-control ownership rule.
 - Remote review state: PRs #93-#95 green at recorded heads; PR #96 CI/CodeQL
   green at `8659ee2`; zero unresolved threads at audit.
 - Remote review scores: local scores recorded; hosted bot summaries recorded above.
-- Verification: branch checks pass; merged-main/integration proof pending.
+- Verification: branch checks and pre-merge real integration pass; merged-main
+  repeat and alert-closure proof remain pending.
 - Skipped checks: `just test-int` pending merge; opt-in `just scenario` excluded;
   live Claude proof pending authorization.
 - Remaining P3s / risks: provider CLI behavior may drift; settings mutation risk must be measured.
