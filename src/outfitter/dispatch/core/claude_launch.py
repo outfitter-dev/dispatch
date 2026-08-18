@@ -1,19 +1,28 @@
-"""Internal Claude background-session launch and identity reconciliation."""
+"""Internal Claude background-session launch and argv projection."""
 
 from __future__ import annotations
 
-import asyncio
-import json
 import os
 import re
-import uuid
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Literal, cast
+from collections.abc import Mapping, Sequence
 
-_MAX_OUTPUT_BYTES = 1024 * 1024
-_COMMAND_TIMEOUT_SECONDS = 10.0
+from outfitter.dispatch.core.claude_launch_types import (
+    ClaudeLaunchAmbiguousError,
+    ClaudeLaunchArgvLimitError,
+    ClaudeLaunchCommandError,
+    ClaudeLaunchEnvelope,
+    ClaudeLaunchError,
+    ClaudeLaunchObservation,
+    ClaudeLaunchOutputError,
+    ClaudeLaunchOutputLimitError,
+    ClaudeLaunchTimeoutError,
+    ClaudeLaunchValidationError,
+    ClaudeProcessResult,
+    ClaudeProcessRunner,
+)
+from outfitter.dispatch.core.claude_process import run_claude_process
+from outfitter.dispatch.core.claude_roster import reconcile_claude_launch
+
 _ARGV_HEADROOM_BYTES = 4096
 _SHORT_ID = re.compile(r"^[0-9a-fA-F]{8}$")
 _SUPPORTED_EFFORTS = frozenset({"low", "medium", "high", "max"})
@@ -21,141 +30,6 @@ _SUPPORTED_PERMISSION_MODES = frozenset(
     {"acceptEdits", "bypassPermissions", "default", "delegate", "dontAsk", "plan"}
 )
 _SUPPORTED_SETTING_SOURCES = frozenset({"user", "project", "local"})
-
-
-class ClaudeLaunchError(Exception):
-    """Base for internal launch failures with content-free messages."""
-
-
-class ClaudeLaunchValidationError(ClaudeLaunchError):
-    """The canonical launch envelope is unsupported or conflicting."""
-
-
-class ClaudeLaunchArgvLimitError(ClaudeLaunchError):
-    """The encoded argv and environment would exceed the platform limit."""
-
-
-class ClaudeLaunchTimeoutError(ClaudeLaunchError):
-    """A bounded Claude CLI invocation timed out."""
-
-
-class ClaudeLaunchOutputLimitError(ClaudeLaunchError):
-    """A Claude CLI stream exceeded its bounded read limit."""
-
-
-class ClaudeLaunchCommandError(ClaudeLaunchError):
-    """The Claude CLI rejected a launch or roster query."""
-
-
-class ClaudeLaunchOutputError(ClaudeLaunchError):
-    """The Claude CLI returned incompatible launch or roster output."""
-
-
-class ClaudeLaunchAmbiguousError(ClaudeLaunchError):
-    """The provisional launch matched more than one roster row."""
-
-
-@dataclass(frozen=True)
-class ClaudeLaunchEnvelope:
-    """Canonical immutable input for the disabled-by-default Claude launcher."""
-
-    cwd: Path
-    initial_text: str = field(repr=False)
-    provider: Literal["claude"] = "claude"
-    display_name: str | None = None
-    agent: str | None = None
-    model: str | None = None
-    effort: str | None = None
-    permission_mode: str | None = None
-    settings: str | None = None
-    setting_sources: tuple[str, ...] | None = None
-    mcp_config: str | None = None
-    strict_mcp_config: bool = False
-    plugin_dirs: tuple[Path, ...] = ()
-    additional_dirs: tuple[Path, ...] = ()
-    worktree: bool | str = False
-
-
-@dataclass(frozen=True)
-class ClaudeLaunchObservation:
-    """Content-free launch metadata safe to retain as a provider observation."""
-
-    provider: Literal["claude"]
-    reconciliation: Literal["reconciled", "pending"]
-    short_id: str
-    provider_session_id: str | None
-    launch_cwd: str
-    observed_cwd: str | None = None
-    observed_name: str | None = None
-    observed_kind: str | None = None
-    observed_state: str | None = None
-    observed_worktree: str | None = None
-
-
-@dataclass(frozen=True)
-class ClaudeProcessResult:
-    returncode: int
-    stdout: str
-    stderr: str = ""
-
-
-ClaudeProcessRunner = Callable[
-    [tuple[str, ...], Path, Mapping[str, str]], Awaitable[ClaudeProcessResult]
-]
-
-
-async def _read_bounded(stream: asyncio.StreamReader) -> bytes:
-    data = bytearray()
-    while chunk := await stream.read(64 * 1024):
-        data.extend(chunk)
-        if len(data) > _MAX_OUTPUT_BYTES:
-            raise ClaudeLaunchOutputLimitError("Claude CLI output exceeded the safe limit")
-    return bytes(data)
-
-
-async def _terminate(process: asyncio.subprocess.Process) -> None:
-    if process.returncode is None:
-        process.kill()
-    await process.wait()
-
-
-async def run_claude_process(
-    argv: tuple[str, ...], cwd: Path, environment: Mapping[str, str]
-) -> ClaudeProcessResult:
-    """Run one Claude CLI command without a shell under fixed resource bounds."""
-
-    process = await asyncio.create_subprocess_exec(
-        *argv,
-        cwd=cwd,
-        env=dict(environment),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        limit=64 * 1024,
-    )
-    assert process.stdout is not None
-    assert process.stderr is not None
-    tasks = [
-        asyncio.create_task(_read_bounded(process.stdout)),
-        asyncio.create_task(_read_bounded(process.stderr)),
-        asyncio.create_task(process.wait()),
-    ]
-    try:
-        results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=_COMMAND_TIMEOUT_SECONDS)
-    except TimeoutError as exc:
-        for task in tasks:
-            task.cancel()
-        await asyncio.shield(_terminate(process))
-        await asyncio.gather(*tasks, return_exceptions=True)
-        raise ClaudeLaunchTimeoutError("Claude CLI command timed out") from exc
-    except BaseException:
-        for task in tasks:
-            task.cancel()
-        await asyncio.shield(_terminate(process))
-        await asyncio.gather(*tasks, return_exceptions=True)
-        raise
-    stdout = cast(bytes, results[0]).decode(errors="replace")
-    stderr = cast(bytes, results[1]).decode(errors="replace")
-    return ClaudeProcessResult(process.returncode or 0, stdout, stderr)
 
 
 def _nonempty(value: str | None, option: str) -> None:
@@ -285,75 +159,6 @@ def _parse_short_id(stdout: str) -> str:
     return unique[0].lower()
 
 
-def _optional_text(row: Mapping[str, object], key: str) -> str | None:
-    value = row.get(key)
-    return value if isinstance(value, str) and value else None
-
-
-def reconcile_claude_launch(
-    *, short_id: str, launch_cwd: Path, roster_output: str
-) -> ClaudeLaunchObservation:
-    """Resolve one provisional short ID to exactly one authoritative provider UUID."""
-
-    try:
-        raw = json.loads(roster_output)
-    except (json.JSONDecodeError, TypeError) as exc:
-        raise ClaudeLaunchOutputError("Claude agent roster returned invalid JSON") from exc
-    if not isinstance(raw, list) or any(not isinstance(row, dict) for row in raw):
-        raise ClaudeLaunchOutputError("Claude agent roster returned incompatible JSON")
-    rows = [
-        cast(dict[str, object], row)
-        for row in raw
-        if isinstance(row.get("id"), str) and str(row["id"]).lower() == short_id.lower()
-    ]
-    if not rows:
-        return ClaudeLaunchObservation(
-            provider="claude",
-            reconciliation="pending",
-            short_id=short_id,
-            provider_session_id=None,
-            launch_cwd=str(launch_cwd),
-        )
-    if len(rows) > 1:
-        raise ClaudeLaunchAmbiguousError("Claude launch matched multiple global roster rows")
-    row = rows[0]
-    kind = row.get("kind")
-    if kind is not None and kind != "background":
-        raise ClaudeLaunchOutputError("Claude roster row is not a background session")
-    session_id = row.get("sessionId")
-    if session_id is None:
-        return ClaudeLaunchObservation(
-            provider="claude",
-            reconciliation="pending",
-            short_id=short_id,
-            provider_session_id=None,
-            launch_cwd=str(launch_cwd),
-            observed_cwd=_optional_text(row, "cwd"),
-            observed_name=_optional_text(row, "name"),
-            observed_kind=_optional_text(row, "kind"),
-            observed_state=_optional_text(row, "state"),
-            observed_worktree=_optional_text(row, "worktree"),
-        )
-    if not isinstance(session_id, str):
-        raise ClaudeLaunchOutputError("Claude roster session identity has an incompatible type")
-    try:
-        provider_session_id = str(uuid.UUID(session_id))
-    except ValueError as exc:
-        raise ClaudeLaunchOutputError("Claude roster session identity is not a full UUID") from exc
-    return ClaudeLaunchObservation(
-        provider="claude",
-        reconciliation="reconciled",
-        short_id=short_id,
-        provider_session_id=provider_session_id,
-        launch_cwd=str(launch_cwd),
-        observed_cwd=_optional_text(row, "cwd"),
-        observed_name=_optional_text(row, "name"),
-        observed_kind=_optional_text(row, "kind"),
-        observed_state=_optional_text(row, "state"),
-        observed_worktree=_optional_text(row, "worktree"),
-    )
-
-
 async def launch_claude_background(
     envelope: ClaudeLaunchEnvelope,
     *,
@@ -389,3 +194,24 @@ async def launch_claude_background(
     return reconcile_claude_launch(
         short_id=short_id, launch_cwd=envelope.cwd, roster_output=roster.stdout
     )
+
+
+__all__ = [
+    "ClaudeLaunchAmbiguousError",
+    "ClaudeLaunchArgvLimitError",
+    "ClaudeLaunchCommandError",
+    "ClaudeLaunchEnvelope",
+    "ClaudeLaunchError",
+    "ClaudeLaunchObservation",
+    "ClaudeLaunchOutputError",
+    "ClaudeLaunchOutputLimitError",
+    "ClaudeLaunchTimeoutError",
+    "ClaudeLaunchValidationError",
+    "ClaudeProcessResult",
+    "launch_claude_background",
+    "preflight_claude_launch",
+    "project_claude_launch_argv",
+    "reconcile_claude_launch",
+    "run_claude_process",
+    "validate_claude_launch",
+]

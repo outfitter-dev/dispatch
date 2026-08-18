@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from outfitter.dispatch.core import claude_launch
+from outfitter.dispatch.core import claude_process
 from outfitter.dispatch.core.claude_launch import (
     ClaudeLaunchAmbiguousError,
     ClaudeLaunchArgvLimitError,
@@ -259,7 +259,7 @@ async def test_process_runner_times_out_and_reaps_child(
     executable = tmp_path / "slow"
     executable.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(30)\n")
     executable.chmod(0o755)
-    monkeypatch.setattr(claude_launch, "_COMMAND_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(claude_process, "_COMMAND_TIMEOUT_SECONDS", 0.01)
 
     with pytest.raises(ClaudeLaunchTimeoutError):
         await run_claude_process((str(executable),), tmp_path, os.environ)
