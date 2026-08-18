@@ -33,9 +33,10 @@
 - [DIS-64](https://linear.app/outfitter/issue/DIS-64) - minimum supported Codex floor.
 - [DIS-57](https://linear.app/outfitter/issue/DIS-57) - supported Claude background launch.
 - [DIS-62](https://linear.app/outfitter/issue/DIS-62) and
-  [DIS-63](https://linear.app/outfitter/issue/DIS-63) - Herdr/cmux evaluations.
+  [DIS-63](https://linear.app/outfitter/issue/DIS-63) - completed Herdr/cmux
+  evaluations with optional-observation/reject-automated-input guidance.
 - [DIS-61](https://linear.app/outfitter/issue/DIS-61) - host abstraction decision,
-  blocked by the two evaluations.
+  now Todo after the two evaluation blockers completed.
 - [DIS-58](https://linear.app/outfitter/issue/DIS-58) ->
   [DIS-59](https://linear.app/outfitter/issue/DIS-59) ->
   [DIS-54](https://linear.app/outfitter/issue/DIS-54) - downstream Claude control chain.
@@ -52,18 +53,17 @@
 ## PRs / Branches
 
 - [PR #93](https://github.com/outfitter-dev/dispatch/pull/93) -
-  `codex/recover-studio-bridge-20260818`, head `1db00be452b0512f51d97bc20ac86b67f847c996`.
+  `codex/recover-studio-bridge-20260818`, merged as `e63b5388d597219a034fa7da618944f7fc3b0d5a`.
 - [PR #94](https://github.com/outfitter-dev/dispatch/pull/94) -
   `dis-64-enforce-a-minimum-supported-codex-build-instead-of-an-unenforced-exact`,
-  stacked on [PR #93](https://github.com/outfitter-dev/dispatch/pull/93), reviewed
-  head `142c58a150c444abf4bac1783b639809949c1fb6`.
+  stacked on [PR #93](https://github.com/outfitter-dev/dispatch/pull/93), restacked
+  by Graphite and merged as `260f77c8fa15d9e6e6fb5ec396399cb2af363f69`.
 - [PR #95](https://github.com/outfitter-dev/dispatch/pull/95) -
   `dis-57-launch-claude-background-sessions-through-the-supported-cli`, independent
-  from the compatibility stack; current reviewed-fix candidate
-  `f51e95e0e16bdb82316270c7625701ef4a98d48f`.
-- [PR #96](https://github.com/outfitter-dev/dispatch/pull/96) - draft, independent
-  lock-only [DIS-66](https://linear.app/outfitter/issue/DIS-66) slice at
-  `8659ee28a895c1796875268ceed9527d855beaa5`; hosted CI/CodeQL green.
+  from the compatibility stack; merged as `1b6fc3ffadf40ff72386297bf9d288e31fbe2bf6`.
+- [PR #96](https://github.com/outfitter-dev/dispatch/pull/96) - independent
+  lock-only [DIS-66](https://linear.app/outfitter/issue/DIS-66) slice, merged as
+  `ea4b7313d6397364e5001ac33f7eb4396dfd7e12`; alert reconciliation pending.
 - `codex/dispatch-back-on-track-goal` - this coordination packet.
 
 ## Validation Commands
@@ -77,6 +77,10 @@
 - `just test-int` (`uv run pytest -m integration`) - real App Server proof through
   the harness's temporary `CODEX_HOME` and ephemeral lanes; auth/tool-dependent
   skips must be recorded. `just scenario` remains excluded absent separate approval.
+- `claude agents --json --all`, `claude stop`, and `claude rm` - contained
+  background-session identity and cleanup proof.
+- `herdr` 0.8.0 and `cmux` 0.64.22 - installed evaluation binaries; both
+  decisions and cleanup evidence are recorded in `RETRO.md` and Linear.
 
 ## Current Verification Baseline
 
@@ -94,4 +98,10 @@
 - [PR #96](https://github.com/outfitter-dev/dispatch/pull/96): locked sync and CLI
   smokes pass; 20 focused MCP tests; exact `just check` with 696 passed / 17
   deselected; `just test-int` passed 17/17 in 236.94s; independent lock review
-  5/5; CI/CodeQL green; draft approval gated.
+  5/5; CI/CodeQL green; merged at `ea4b731`.
+- Merged `main` at `ea4b731`: exact `just check` passed with 748 tests and 17
+  deselected; `just test-int` passed 17/17 with no skips; both CLI smokes and
+  package validation passed.
+- GitHub dependency-graph SBOM reports every patched package version, while the
+  nine Dependabot alert records remain stale/open; [DIS-66](https://linear.app/outfitter/issue/DIS-66)
+  intentionally remains In Review.

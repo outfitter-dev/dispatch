@@ -14,30 +14,30 @@ Claude host work in an explicit dependency order with safe authorization gates.
 
 The goal is complete only when:
 
-- [PR #93](https://github.com/outfitter-dev/dispatch/pull/93), its stacked
-  child [PR #94](https://github.com/outfitter-dev/dispatch/pull/94), and
-  independent [PR #95](https://github.com/outfitter-dev/dispatch/pull/95) have
-  no open P0/P1/P2 review findings and are landed in the correct order after
-  explicit merge approval.
-- Draft [PR #96](https://github.com/outfitter-dev/dispatch/pull/96) is explicitly
-  approved for readiness/merge, landed, and all nine linked Dependabot alerts
-  are confirmed closed before [DIS-66](https://linear.app/outfitter/issue/DIS-66)
-  is completed.
-- local `main` matches `origin/main` and passes `uv sync`, `just check`, package
-  build/content validation, CLI help smoke tests, and the documented isolated
-  App Server integration proof.
-- [DIS-57](https://linear.app/outfitter/issue/DIS-57) has a contained live proof
-  or is explicitly left gated on live-provider authorization, without claiming
-  public enablement.
-- GitHub and Linear agree about delivered work, remaining blockers, and the
-  order of [DIS-62](https://linear.app/outfitter/issue/DIS-62),
-  [DIS-63](https://linear.app/outfitter/issue/DIS-63),
+- [x] [PR #93](https://github.com/outfitter-dev/dispatch/pull/93),
+  [PR #94](https://github.com/outfitter-dev/dispatch/pull/94),
+  [PR #95](https://github.com/outfitter-dev/dispatch/pull/95), and
+  [PR #96](https://github.com/outfitter-dev/dispatch/pull/96) merged in the
+  approved order with no unresolved P0/P1/P2 findings.
+- [ ] All nine Dependabot alerts are fixed/closed without taking MCP 2.0, and
+  [DIS-66](https://linear.app/outfitter/issue/DIS-66) is moved to Done only
+  after the alert API confirms closure.
+- [x] Local `main` matches `origin/main` and passes locked sync, `just check`,
+  package build/content validation, CLI help smoke tests, and isolated App
+  Server integration.
+- [x] [DIS-57](https://linear.app/outfitter/issue/DIS-57) has a contained live
+  Claude launch/reconcile/stop/remove proof.
+- [x] Herdr and cmux have reproducible evaluation evidence and tracker decisions;
+  the next Claude work is dependency-ordered through
   [DIS-61](https://linear.app/outfitter/issue/DIS-61),
+  [DIS-55](https://linear.app/outfitter/issue/DIS-55),
   [DIS-58](https://linear.app/outfitter/issue/DIS-58),
   [DIS-59](https://linear.app/outfitter/issue/DIS-59),
   [DIS-54](https://linear.app/outfitter/issue/DIS-54), and
   [DIS-50](https://linear.app/outfitter/issue/DIS-50).
-- all constraints below remain true and `RETRO.md` contains the final evidence.
+- [x] GitHub and Linear agree apart from the documented stale Dependabot alert
+  state.
+- [ ] `RETRO.md` records alert closure and the packet is archived.
 
 ## Non-Goals
 
