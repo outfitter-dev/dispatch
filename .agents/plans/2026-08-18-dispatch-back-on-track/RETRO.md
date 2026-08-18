@@ -2,7 +2,7 @@
 
 Date started: 2026-08-18
 Date finalized: pending
-Status: In progress
+Status: Blocked
 Plan: `.agents/plans/2026-08-18-dispatch-back-on-track/PLAN.md`
 Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 
@@ -10,8 +10,8 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 
 - Objective: restore reviewed Studio/Codex/Claude work to trunk, prove this
   machine, and leave the remaining Claude path dependency-ordered.
-- Final outcome: in progress; all four slices are review-clean at their recorded
-  tips, and merge/readiness/live-provider gates remain closed.
+- Final outcome: blocked at the explicit readiness/merge and live-provider
+  authorization gates after all safe implementation and verification completed.
 - Final branch / stack tip: PR #94 head `142c58a`; PR #95 head `f51e95e`; draft
   PR #96 head `8659ee2`.
 - Final PR range: [PR #93](https://github.com/outfitter-dev/dispatch/pull/93) through
@@ -108,6 +108,13 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 - Result: no auth/tool skips and no live user-thread pollution; opt-in `just scenario` remained excluded.
 - Next: repeat `just test-int` on merged `main` after the approved merge ceremony.
 - Blockers: explicit readiness/merge approval.
+
+2026-08-18 - Authorization-gate pause
+- Changed: no code or remote state; refreshed `origin/main`, all four PRs, review threads, and all five owned worktrees after the same approval boundary persisted for three consecutive goal turns.
+- Verified: local `main` and `origin/main` remain `276413e`; PRs #93-#96 are open and merge-clean at the recorded heads; PRs #93-#95 remain non-draft, PR #96 remains draft; hosted checks are green; unresolved review threads are 0/0/0/0; every owned worktree is clean and synchronized with its remote.
+- Result: the goal cannot lawfully progress to landing or live-provider proof without direct user approval under repository policy.
+- Next: on resume, re-read live state, then perform only the ceremony or ceremonies explicitly approved by the user.
+- Blockers: explicit readiness/merge authorization; separately, explicit live-Claude/provider authorization.
 ```
 
 ## Local Review Log
@@ -184,7 +191,8 @@ source-control ownership rule.
 
 ## Final State
 
-- Goal completion condition: not yet met.
+- Goal completion condition: not met; blocked on explicit authorization rather
+  than implementation, review, CI, packaging, or isolated-runtime failures.
 - Graphite / branch state: compatibility stack ordered PR #93 -> PR #94; PR #95 independent.
 - PR state: PRs #93-#95 open/non-draft/merge-clean/review-clean; PR #96 open,
   draft, merge-clean, and locally/hosted-check clean.
@@ -203,4 +211,5 @@ source-control ownership rule.
 - Follow-up issues created: none in this packet; existing DIS-62/DIS-63 are sufficient.
 - Forbidden actions confirmation: current audit is clean.
 - Packet archive readiness: not ready.
-- Final transcript proof: pending.
+- Final transcript proof: blocked-state handoff must name both authorization gates
+  and confirm that no prohibited action was taken.
