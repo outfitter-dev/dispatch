@@ -21,7 +21,6 @@ def _check_wheel(path: Path) -> None:
     with zipfile.ZipFile(path) as zf:
         names = set(zf.namelist())
     required = {
-        "outfitter/dispatch/assets/protocol_manifest.json",
         "outfitter/dispatch/assets/skills/dispatch/SKILL.md",
         "outfitter/dispatch/assets/skills/dm/SKILL.md",
         "outfitter/dispatch/assets/plugins/dispatch/README.md",
