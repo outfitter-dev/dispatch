@@ -189,6 +189,7 @@ async def launch_claude_background(
             short_id=short_id,
             provider_session_id=None,
             launch_cwd=str(envelope.cwd),
+            pending_reason="roster_unavailable",
         )
     if roster.returncode != 0:
         return ClaudeLaunchObservation(
@@ -197,6 +198,7 @@ async def launch_claude_background(
             short_id=short_id,
             provider_session_id=None,
             launch_cwd=str(envelope.cwd),
+            pending_reason="roster_unavailable",
         )
     return reconcile_claude_launch(
         short_id=short_id, launch_cwd=envelope.cwd, roster_output=roster.stdout

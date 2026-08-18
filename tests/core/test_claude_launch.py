@@ -40,6 +40,17 @@ def test_launch_argv_omits_defaults_and_keeps_prompt_as_one_argument(tmp_path: P
     assert prompt not in repr(envelope)
 
 
+def test_launch_argv_uses_option_terminator_for_dash_leading_prompt(tmp_path: Path) -> None:
+    prompt = "--model opus"
+
+    assert project_claude_launch_argv(ClaudeLaunchEnvelope(cwd=tmp_path, initial_text=prompt)) == (
+        "claude",
+        "--bg",
+        "--",
+        prompt,
+    )
+
+
 def test_launch_argv_projects_supported_explicit_options(tmp_path: Path) -> None:
     plugin = tmp_path / "plugin"
     additional = tmp_path / "additional"
@@ -104,6 +115,7 @@ def test_launch_argv_projects_supported_explicit_options(tmp_path: Path) -> None
         {"plugin_dirs": (Path("relative"),)},
         {"worktree": ""},
         {"provider": "codex"},
+        {"initial_text": "  \n\t"},
     ],
 )
 def test_launch_validation_rejects_unsupported_options_before_invocation(
@@ -151,7 +163,9 @@ def test_reconcile_absent_or_not_yet_identified_is_pending(tmp_path: Path) -> No
 
     assert absent.reconciliation == "pending"
     assert absent.provider_session_id is None
+    assert absent.pending_reason == "roster_absent"
     assert provisional.reconciliation == "pending"
+    assert provisional.pending_reason == "identity_pending"
     assert provisional.observed_state == "starting"
 
 
@@ -225,6 +239,51 @@ async def test_validation_happens_before_process_invocation(tmp_path: Path) -> N
             run_process=run,
         )
     assert called is False
+
+
+@pytest.mark.parametrize("roster_failure", ["missing", "timeout", "nonzero"])
+async def test_post_launch_roster_failure_preserves_short_id_as_explicit_pending(
+    tmp_path: Path, roster_failure: str
+) -> None:
+    async def run(
+        argv: tuple[str, ...], _cwd: Path, _environment: Mapping[str, str]
+    ) -> ClaudeProcessResult:
+        if argv != ("claude", "agents", "--json", "--all"):
+            return ClaudeProcessResult(0, "518b912b")
+        if roster_failure == "missing":
+            raise FileNotFoundError
+        if roster_failure == "timeout":
+            raise TimeoutError
+        return ClaudeProcessResult(2, "", "private roster failure")
+
+    observation = await launch_claude_background(
+        ClaudeLaunchEnvelope(cwd=tmp_path, initial_text="safe"),
+        run_process=run,
+        environment={},
+        arg_max=100_000,
+    )
+
+    assert observation.reconciliation == "pending"
+    assert observation.pending_reason == "roster_unavailable"
+    assert observation.short_id == "518b912b"
+    assert observation.provider_session_id is None
+
+
+async def test_post_launch_incompatible_roster_still_fails_closed(tmp_path: Path) -> None:
+    async def run(
+        argv: tuple[str, ...], _cwd: Path, _environment: Mapping[str, str]
+    ) -> ClaudeProcessResult:
+        if argv == ("claude", "agents", "--json", "--all"):
+            return ClaudeProcessResult(0, "private malformed roster")
+        return ClaudeProcessResult(0, "518b912b")
+
+    with pytest.raises(ClaudeLaunchOutputError):
+        await launch_claude_background(
+            ClaudeLaunchEnvelope(cwd=tmp_path, initial_text="safe"),
+            run_process=run,
+            environment={},
+            arg_max=100_000,
+        )
 
 
 def test_platform_preflight_accounts_for_argv_and_environment_without_leaking() -> None:

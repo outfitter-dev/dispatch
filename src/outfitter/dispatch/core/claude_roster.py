@@ -43,6 +43,7 @@ def reconcile_claude_launch(
             short_id=short_id,
             provider_session_id=None,
             launch_cwd=str(launch_cwd),
+            pending_reason="roster_absent",
         )
     if len(rows) > 1:
         raise ClaudeLaunchAmbiguousError("Claude launch matched multiple global roster rows")
@@ -58,6 +59,7 @@ def reconcile_claude_launch(
             short_id=short_id,
             provider_session_id=None,
             launch_cwd=str(launch_cwd),
+            pending_reason="identity_pending",
             observed_cwd=_optional_text(row, "cwd"),
             observed_name=_optional_text(row, "name"),
             observed_kind=_optional_text(row, "kind"),

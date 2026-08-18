@@ -70,6 +70,7 @@ class ClaudeLaunchObservation:
     short_id: str
     provider_session_id: str | None
     launch_cwd: str
+    pending_reason: Literal["roster_absent", "identity_pending", "roster_unavailable"] | None = None
     observed_cwd: str | None = None
     observed_name: str | None = None
     observed_kind: str | None = None
