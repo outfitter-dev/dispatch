@@ -199,6 +199,13 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 - Result: code, PRs, and Linear now tell the truth; DIS-66 intentionally remains open until GitHub's alert evaluator catches up.
 - Next: continue bounded polling; never substitute manual dismissal for a fixed-state result.
 - Blockers: GitHub Dependabot alert-state reconciliation only.
+
+2026-08-18 - Final synthetic-state cleanup audit
+- Changed: deleted one leftover isolated Claude evaluation tree and the transient cmux screenshot after a final name/process inventory found that macOS `mktemp -t` had placed the Claude tree under `/var/folders/.../T`, outside the original cleanup trap's `/tmp` allowlist.
+- Verified: no Claude process referenced the exact tree; no evaluation Claude roster row, Herdr named session, cmux process, synthetic cmux restore workspace, or matching temporary path remains. All owned Git worktrees are clean.
+- Result: the missed temporary artifact was corrected transparently; the tree contained only synthetic isolated session state and was not recoverable after exact deletion.
+- Next: retain the broader macOS temporary-path allowlist in future live ceremony cleanup.
+- Blockers: none.
 ```
 
 ## Local Review Log
