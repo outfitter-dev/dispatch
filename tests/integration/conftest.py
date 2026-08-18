@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import sys
 import tempfile
 from collections.abc import AsyncIterator, Iterator
@@ -21,13 +22,24 @@ import pytest_asyncio
 
 from outfitter.dispatch.client.client import AppServerClient
 from outfitter.dispatch.client.transport import StdioTransport
+from outfitter.dispatch.codex_compat import inspect_codex_binary
 
 _REAL_AUTH = Path.home() / ".codex" / "auth.json"
 
 
 def _why_unavailable() -> str | None:
-    if shutil.which("codex") is None:
+    codex = shutil.which("codex")
+    if codex is None:
         return "codex binary not on PATH"
+    try:
+        compatibility = inspect_codex_binary(codex)
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        return f"codex version unavailable: {exc}"
+    if not compatibility.supported:
+        return (
+            f"codex-cli {compatibility.version} at {compatibility.path} is below supported "
+            f"floor {compatibility.minimum_version}"
+        )
     if not _REAL_AUTH.exists():
         return "no ~/.codex/auth.json (model auth) available"
     return None

@@ -92,6 +92,7 @@ def test_app_server_protocol_manifest_tracks_v0147_capabilities() -> None:
     manifest = cast(dict[str, Any], load_json("app_server", "protocol_manifest", "current.json"))
 
     assert manifest["codex_cli_version"] == "0.147.0"
+    assert manifest["minimum_codex_cli_version"] == "0.147.0"
     assert len(manifest["client_requests"]["stable"]) == 95
     assert "account/usage/read" in manifest["client_requests"]["stable"]
     assert "thread/delete" in manifest["client_requests"]["stable"]

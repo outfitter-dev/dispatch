@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import signal
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -14,6 +15,7 @@ import structlog
 
 from outfitter.dispatch.client.client import AppServerClient
 from outfitter.dispatch.client.transport import StdioTransport
+from outfitter.dispatch.codex_compat import inspect_codex_binary
 from outfitter.dispatch.config import capture_policy, runtime_policy
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.core.ops import REGISTRY
@@ -39,11 +41,27 @@ async def _spawn_client() -> AppServerClient:
     return client
 
 
+async def _warn_if_codex_below_floor(log: structlog.stdlib.BoundLogger) -> None:
+    """Warn without blocking startup; the app-server remains forward-compatible by policy."""
+    try:
+        compatibility = await asyncio.to_thread(inspect_codex_binary)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return
+    if not compatibility.supported:
+        log.warning(
+            "dispatchd.codex_version_below_floor",
+            path=compatibility.path,
+            version=compatibility.version,
+            minimum_version=compatibility.minimum_version,
+        )
+
+
 async def run_daemon(socket_path: Path, db_path: Path) -> None:
     """Start the supervised app-server client + registry, then serve the control
     socket until cancelled. The supervisor restarts the app-server on crash."""
     store = await Registry.open(db_path)
     log = structlog.get_logger()
+    await _warn_if_codex_below_floor(log)
     first_client = await _spawn_client()
     # mypy verifies AppServerClient satisfies the LaneClient protocol here.
     ctx = Ctx(

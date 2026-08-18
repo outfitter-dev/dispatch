@@ -17,6 +17,11 @@ from outfitter.dispatch.surfaces.cli import build_cli
 runner = CliRunner()
 
 
+def _write_fake_codex(path: Path, version: str) -> None:
+    path.write_text(f"#!/bin/sh\necho 'codex-cli {version}'\n")
+    path.chmod(0o755)
+
+
 def _create_v3_registry(path: Path) -> None:
     with sqlite3.connect(path) as conn:
         conn.executescript(
@@ -123,6 +128,30 @@ def test_doctor_reports_missing_console_scripts_and_skips_app_server(
     assert checks["codex_binary"].status == "fail"
     assert checks["app_server"].status == "warn"
     assert checks["app_server"].recovery is not None
+
+
+def test_doctor_warns_when_resolved_codex_is_below_supported_floor(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    binary = tmp_path / "codex"
+    _write_fake_codex(binary, "0.146.0")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path / "dispatch-home"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+
+    report = run_doctor(DoctorOptions(app_server=False))
+
+    check = next(item for item in report.checks if item.name == "codex_binary")
+    assert check.status == "warn"
+    assert check.data == {
+        "path": str(binary),
+        "version": "0.146.0",
+        "minimum_version": "0.147.0",
+    }
+    assert "0.146.0" in check.summary
+    assert "0.147.0" in check.summary
+    assert check.detail == f"Resolved binary: {binary}"
+    assert check.recovery is not None and "Update Codex CLI" in check.recovery
 
 
 def test_doctor_warns_for_stale_daemon_files(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
