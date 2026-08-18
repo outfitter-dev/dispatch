@@ -105,3 +105,26 @@
 - GitHub dependency-graph SBOM reports every patched package version, while the
   nine Dependabot alert records remain stale/open; [DIS-66](https://linear.app/outfitter/issue/DIS-66)
   intentionally remains In Review.
+
+## GitHub Support Escalation Packet
+
+Subject: Dependabot alerts remain open after fixed default-branch graph rebuild
+
+- Repository: <https://github.com/outfitter-dev/dispatch>
+- Remediation: [PR #96](https://github.com/outfitter-dev/dispatch/pull/96),
+  merged on `main` as `ea4b7313d6397364e5001ac33f7eb4396dfd7e12`.
+- Automatic dependency graph: [run 32166480161](https://github.com/outfitter-dev/dispatch/actions/runs/32166480161)
+  succeeded for the merged commit at 2026-08-18T17:37:00Z.
+- Current SBOM proof (queried 2026-08-18T18:54:40Z): only `cryptography 50.0.0`,
+  `mcp 1.28.1`, `pydantic-settings 2.14.2`, `python-multipart 0.0.31`, and
+  `starlette 1.3.1`; all meet every alert's first patched version.
+- Supported retry: after more than one hour, **Refresh Dependabot alerts** was
+  invoked exactly once. GitHub advanced the alert-page graph build to the
+  current `ea4b731` commit, proving the rebuild processed current default-branch
+  dependency files.
+- Defect: ten minutes after that rebuild, Dependabot alerts 1-9 still returned
+  `state: open`, `fixed_at: null`, and their original June-August `updated_at`
+  timestamps. No alert was dismissed and no security setting changed.
+- Expected: the nine alerts close as fixed against the patched graph.
+- Tracker: [DIS-66](https://linear.app/outfitter/issue/DIS-66) remains In Review
+  and contains the same evidence.

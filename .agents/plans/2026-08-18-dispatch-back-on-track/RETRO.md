@@ -206,6 +206,13 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 - Result: the missed temporary artifact was corrected transparently; the tree contained only synthetic isolated session state and was not recoverable after exact deletion.
 - Next: retain the broader macOS temporary-path allowlist in future live ceremony cleanup.
 - Blockers: none.
+
+2026-08-18 - Dependabot supported refresh checkpoint
+- Changed: after the successful default-branch dependency-graph run had been complete for more than one hour, invoked GitHub's documented `Refresh Dependabot alerts` action exactly once from the authenticated repository alert menu; no alert was dismissed and no security setting changed.
+- Verified: the Dependabot page advanced from a one-hour-old graph build to `Dependency files checked Aug 18, 2026` for commit `ea4b731`, confirming the background manifest rebuild processed the merged default branch. The live SBOM still reports all five patched versions. A fresh Terra packet audit at coordination commit `ae3e081` scored 5/5 with no findings.
+- Result: GitHub accepted and processed the supported rebuild, but ten minutes later all nine alert records still reported `state: open`, `fixed_at: null`, and their original June-August `updated_at` timestamps. The exact support packet is recorded in `REFS.md` and on DIS-66, which remains In Review.
+- Next: with explicit user authorization, submit the prepared GitHub Support escalation. Do not dismiss alerts, refresh again inside the one-hour rate limit, or manufacture a dependency change.
+- Blockers: GitHub Dependabot alert-state reconciliation only.
 ```
 
 ## Local Review Log
