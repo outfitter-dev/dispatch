@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from outfitter.dispatch import codex_compat
 from outfitter.dispatch.codex_compat import (
     CodexVersion,
     inspect_codex_binary,
@@ -50,3 +51,14 @@ def test_inspect_codex_binary_applies_manifest_floor(
     assert result.version == reported
     assert result.minimum_version == minimum_codex_cli_version()
     assert result.supported is supported
+
+
+def test_minimum_version_rejects_manifest_without_policy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    manifest = tmp_path / "protocol_manifest.json"
+    manifest.write_text("{}")
+    monkeypatch.setattr(codex_compat, "_manifest_path", lambda: manifest)
+
+    with pytest.raises(ValueError, match="minimum_codex_cli_version"):
+        minimum_codex_cli_version()

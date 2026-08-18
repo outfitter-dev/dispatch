@@ -154,6 +154,25 @@ def test_doctor_warns_when_resolved_codex_is_below_supported_floor(
     assert check.recovery is not None and "Update Codex CLI" in check.recovery
 
 
+def test_doctor_structures_invalid_compatibility_manifest(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    binary = tmp_path / "codex"
+    manifest = tmp_path / "protocol_manifest.json"
+    _write_fake_codex(binary, "0.147.0")
+    manifest.write_text("{}")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path / "dispatch-home"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setattr("outfitter.dispatch.codex_compat._manifest_path", lambda: manifest)
+
+    report = run_doctor(DoctorOptions(app_server=False))
+
+    check = next(item for item in report.checks if item.name == "codex_binary")
+    assert check.status == "fail"
+    assert check.detail == "protocol manifest is missing minimum_codex_cli_version"
+
+
 def test_doctor_warns_for_stale_daemon_files(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
     home = tmp_path / "dispatch-home"
     home.mkdir()

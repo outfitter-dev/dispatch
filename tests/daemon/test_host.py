@@ -31,3 +31,20 @@ async def test_daemon_warns_with_structured_below_floor_details(
             "version": "0.146.0",
         }
     ]
+
+
+async def test_daemon_ignores_invalid_compatibility_manifest(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    binary = tmp_path / "codex"
+    manifest = tmp_path / "protocol_manifest.json"
+    binary.write_text("#!/bin/sh\necho 'codex-cli 0.147.0'\n")
+    binary.chmod(0o755)
+    manifest.write_text("{}")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setattr("outfitter.dispatch.codex_compat._manifest_path", lambda: manifest)
+
+    with capture_logs() as logs:
+        await _warn_if_codex_below_floor(structlog.get_logger())
+
+    assert logs == []
