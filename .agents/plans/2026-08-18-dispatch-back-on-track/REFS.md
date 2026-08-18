@@ -24,6 +24,8 @@
   worktree; preserve its ownership and branch.
 - `/Users/mg/.config/codex/worktrees/dispatch-dis-57` - clean PR #95 worktree at
   `f51e95e`; the existing Sol Low implementer owned only its scoped review fixes.
+- `/Users/mg/.config/codex/worktrees/dispatch-dis-66` - clean lock-only security
+  worktree for [DIS-66](https://linear.app/outfitter/issue/DIS-66).
 
 ## Tracker Records
 
@@ -39,6 +41,8 @@
   [DIS-54](https://linear.app/outfitter/issue/DIS-54) - downstream Claude control chain.
 - [DIS-50](https://linear.app/outfitter/issue/DIS-50) - vertical provider slice,
   blocked by DIS-57, DIS-61, and DIS-54.
+- [DIS-66](https://linear.app/outfitter/issue/DIS-66) - High-priority remediation
+  for all nine open runtime dependency alerts; In Review.
 - [#16](https://github.com/outfitter-dev/dispatch/issues/16),
   [#17](https://github.com/outfitter-dev/dispatch/issues/17),
   [#25](https://github.com/outfitter-dev/dispatch/issues/25), and
@@ -57,6 +61,9 @@
   `dis-57-launch-claude-background-sessions-through-the-supported-cli`, independent
   from the compatibility stack; current reviewed-fix candidate
   `f51e95e0e16bdb82316270c7625701ef4a98d48f`.
+- [PR #96](https://github.com/outfitter-dev/dispatch/pull/96) - draft, independent
+  lock-only [DIS-66](https://linear.app/outfitter/issue/DIS-66) slice at
+  `8659ee28a895c1796875268ceed9527d855beaa5`; hosted CI/CodeQL green.
 - `codex/dispatch-back-on-track-goal` - this coordination packet.
 
 ## Validation Commands
@@ -83,3 +90,6 @@
   CodeQL, and Graphite are green with zero unresolved review threads; fresh local
   round 3 scored 5/5 with no findings. Two earlier 3/5 rounds found post-start
   indeterminate-outcome gaps, both fixed with focused regression tests.
+- [PR #96](https://github.com/outfitter-dev/dispatch/pull/96): locked sync and CLI
+  smokes pass; 20 focused MCP tests; exact `just check` with 696 passed / 17
+  deselected; independent lock review 5/5; CI/CodeQL green; draft approval gated.

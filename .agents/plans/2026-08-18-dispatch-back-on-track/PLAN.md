@@ -19,6 +19,10 @@ The goal is complete only when:
   independent [PR #95](https://github.com/outfitter-dev/dispatch/pull/95) have
   no open P0/P1/P2 review findings and are landed in the correct order after
   explicit merge approval.
+- Draft [PR #96](https://github.com/outfitter-dev/dispatch/pull/96) is explicitly
+  approved for readiness/merge, landed, and all nine linked Dependabot alerts
+  are confirmed closed before [DIS-66](https://linear.app/outfitter/issue/DIS-66)
+  is completed.
 - local `main` matches `origin/main` and passes `uv sync`, `just check`, package
   build/content validation, CLI help smoke tests, and the documented isolated
   App Server integration proof.
@@ -44,7 +48,7 @@ The goal is complete only when:
 - No cleanup of preserved Studio history, worktrees, notes, or ignored state.
 - No new readiness transition, merge, package publish, or live-provider exercise
   without the explicit approval required by repository policy. PRs #93-#95
-  inherited non-draft status before this packet began.
+  inherited non-draft status before this packet began; PR #96 remains draft.
 
 ## Source Of Truth
 
@@ -68,6 +72,9 @@ Actions:
   [PR #93](https://github.com/outfitter-dev/dispatch/pull/93).
 - Run scored local review against both compatibility slices and the independent
   Claude launch slice.
+- Isolate the nine default-branch security alerts in one lock-only
+  [DIS-66](https://linear.app/outfitter/issue/DIS-66) slice, hold `mcp` on patched
+  1.x, and verify the unchanged package set and every fixed range.
 - Fix every P0/P1/P2 finding with focused tests, rerun `just check`, and close
   all hosted review threads with an audit-trail reply.
 
@@ -79,7 +86,7 @@ Verification:
 - Local reviewer score at least 4/5 with no open P0/P1/P2.
 
 Done when:
-- all three PR tips satisfy the review contract and the retro records the rounds.
+- all four PR tips satisfy the review contract and the retro records the rounds.
 
 ### Phase 2: Land the stack under an approval gate
 
@@ -93,13 +100,17 @@ Actions:
   and merge [PR #94](https://github.com/outfitter-dev/dispatch/pull/94).
 - Merge independent [PR #95](https://github.com/outfitter-dev/dispatch/pull/95)
   only after its P1 is fixed and re-reviewed.
+- After explicit readiness approval, merge independent lock-only
+  [PR #96](https://github.com/outfitter-dev/dispatch/pull/96) and verify all nine
+  Dependabot alerts close before completing its Linear issue.
 
 Verification:
 - GitHub reports each PR merged at the intended head SHA.
 - `origin/main` contains all intended commits with no accidental merge/rebase loss.
 
 Done when:
-- the three reviewed slices are present on live trunk and Linear reflects reality.
+- the four reviewed slices are present on live trunk, the alerts are closed, and
+  Linear reflects reality.
 
 ### Phase 3: Prove the merged repository
 
@@ -189,7 +200,8 @@ Done when:
 
 - In-goal delivery: [DIS-65](https://linear.app/outfitter/issue/DIS-65),
   [DIS-64](https://linear.app/outfitter/issue/DIS-64), and
-  [DIS-57](https://linear.app/outfitter/issue/DIS-57).
+  [DIS-57](https://linear.app/outfitter/issue/DIS-57), plus security follow-up
+  [DIS-66](https://linear.app/outfitter/issue/DIS-66).
 - Authorized evaluation follow-ups: [DIS-62](https://linear.app/outfitter/issue/DIS-62)
   and [DIS-63](https://linear.app/outfitter/issue/DIS-63).
 - Dependency chain: DIS-62 + DIS-63 -> DIS-61 -> DIS-58 -> DIS-59 -> DIS-54;
@@ -206,8 +218,11 @@ Done when:
 - Order: `codex/recover-studio-bridge-20260818` ->
   `dis-64-enforce-a-minimum-supported-codex-build-instead-of-an-unenforced-exact`.
 - Independent branch: `dis-57-launch-claude-background-sessions-through-the-supported-cli`.
+- Independent security branch:
+  `dis-66-remediate-open-dependabot-runtime-alerts-without-taking-mcp`.
 - Coordination packet branch: `codex/dispatch-back-on-track-goal`.
-- PRs #93-#95 were already non-draft and CI-green before this packet began.
+- PRs #93-#95 were already non-draft and CI-green before this packet began;
+  PR #96 was created as a draft and remains draft while awaiting approval.
   Do not create or change readiness, merge, or publish without explicit approval.
   Re-read live state immediately before every remote mutation.
 - The main agent owns source-control writes after this packet began. Subagents may
