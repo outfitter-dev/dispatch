@@ -122,6 +122,13 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 - Result: authorization gates are open. Merge ceremony will run first so live Claude proof exercises landed code.
 - Next: restore missing local Graphite metadata for the PR #93 -> PR #94 stack, dry-run it, mark draft PR #96 ready, and revalidate all newly triggered gates before merge.
 - Blockers: none; stop on any topology, CI, review, or live-state divergence.
+
+2026-08-18 - Merge topology and readiness checkpoint
+- Changed: restored Graphite tracking metadata for `main` -> PR #93 -> PR #94, synchronized the two existing PRs to Graphite without code rewrites, and marked PR #96 ready under the user's explicit approval.
+- Verified: `gt submit --stack --update-only --no-edit --dry-run` proposed only “Sync to Graphite” and “New parent”; actual submit updated the existing PRs; `gt merge --dry-run` reports the stack ready in bottom-up order. PR #96 remains at `8659ee2`, Graphite mergeability is green, and Cursor readiness review is in progress.
+- Result: stack topology is now authoritative in both local Graphite metadata and hosted PR state; no merge has run yet.
+- Next: wait for PR #96 Cursor review, resolve any actionable findings, re-read all four PR heads/checks/threads, update this retro if needed, then execute the authorized merge.
+- Blockers: PR #96 Cursor readiness review must complete cleanly.
 ```
 
 ## Local Review Log
@@ -182,8 +189,8 @@ not perform or authorize a readiness transition.
 | Action / Constraint | Status | Evidence |
 | --- | --- | --- |
 | No merge without explicit user approval | authorized, not yet exercised | user explicitly approved both ceremonies; PRs #93-#96 remain open at this checkpoint |
-| No new PR readiness transition without explicit user approval | authorized for PR #96, not yet exercised | user explicitly approved both ceremonies |
-| Keep new security PR draft until explicit readiness approval | satisfied through approval checkpoint | PR #96 remains draft until the next recorded action |
+| No new PR readiness transition without explicit user approval | exercised within approval | PR #96 marked ready only after user explicitly approved both ceremonies |
+| Keep new security PR draft until explicit readiness approval | satisfied | PR #96 stayed draft until approval, then moved to ready |
 | No package publish / registry mutation unless authorized | respected | build/package inspection only |
 | No live Claude/provider mutation without separate approval | respected | no live Claude launch ran |
 | No secrets, prompt content, or settings contents exposed | respected | metadata-only plan; fake-runtime tests |
