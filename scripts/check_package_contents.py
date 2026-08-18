@@ -25,6 +25,7 @@ def _check_wheel(path: Path) -> None:
         "outfitter/dispatch/assets/skills/dm/SKILL.md",
         "outfitter/dispatch/assets/plugins/dispatch/README.md",
         "outfitter/dispatch/assets/plugins/dispatch/.mcp.json",
+        "outfitter/dispatch/assets/protocol_manifest.json",
     }
     missing = sorted(required - names)
     if missing:

@@ -89,7 +89,7 @@ def minimum_codex_cli_version() -> str:
     manifest = json.loads(_manifest_path().read_text())
     value = manifest.get("minimum_codex_cli_version")
     if not isinstance(value, str):
-        raise RuntimeError("protocol manifest is missing minimum_codex_cli_version")
+        raise ValueError("protocol manifest is missing minimum_codex_cli_version")
     return value
 
 
