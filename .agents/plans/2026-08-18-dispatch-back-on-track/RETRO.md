@@ -143,6 +143,13 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 - Result: recovered Studio compatibility and minimum-version work are on trunk with no duplicated stack diff. The independent Claude launch primitive is ready for its authorized merge.
 - Next: run Graphite merge for PR #95, verify the new main, then independently refresh and merge PR #96.
 - Blockers: none.
+
+2026-08-18 - Claude launch merged; dependency security checkpoint
+- Changed: merged PR #95 through Graphite at `1b6fc3f`; tracked and synchronized existing PR #96 to Graphite metadata without changing its code.
+- Verified: PR #95 reports merged at reviewed head `f51e95e`; live `origin/main` is `1b6fc3f`. PR #96 remains at `8659ee2`, GitHub reports CLEAN, all CI/CodeQL/Cursor/Graphite checks are green, unresolved threads are zero, and `gt merge --dry-run` reports its one-branch stack ready.
+- Result: the internal Claude launch primitive is on trunk; the independent five-package security remediation is at its final authorized merge gate.
+- Next: merge PR #96 through Graphite, verify all four hosted PRs and new main, then begin post-merge local/runtime/alert proof.
+- Blockers: none.
 ```
 
 ## Local Review Log
