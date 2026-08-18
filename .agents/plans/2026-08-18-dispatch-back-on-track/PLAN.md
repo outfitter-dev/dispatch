@@ -1,7 +1,7 @@
 # Goal Plan: Dispatch Back On Track
 
 Date: 2026-08-18
-Status: In progress; readiness/merge and live-provider ceremonies authorized
+Status: In progress; delivery and live evaluation complete, awaiting Dependabot alert closure
 
 ## Objective
 
@@ -47,8 +47,9 @@ The goal is complete only when:
   unsafe zmx hardening, or use of an existing personal Claude workspace.
 - No cleanup of preserved Studio history, worktrees, notes, or ignored state.
 - No new readiness transition, merge, package publish, or live-provider exercise
-  without the explicit approval required by repository policy. PRs #93-#95
-  inherited non-draft status before this packet began; PR #96 remains draft.
+  without the explicit approval required by repository policy. The user later
+  approved both ceremonies; PR #96 became ready and all four PRs merged only
+  after that approval.
 
 ## Source Of Truth
 
@@ -222,8 +223,10 @@ Done when:
   `dis-66-remediate-open-dependabot-runtime-alerts-without-taking-mcp`.
 - Coordination packet branch: `codex/dispatch-back-on-track-goal`.
 - PRs #93-#95 were already non-draft and CI-green before this packet began;
-  PR #96 was created as a draft and remains draft while awaiting approval.
-  Do not create or change readiness, merge, or publish without explicit approval.
+  PR #96 was created as a draft, then moved to ready and merged only after the
+  explicit approval recorded in `RETRO.md`.
+  Do not create or change any future readiness, merge, or publish state without
+  explicit approval.
   Re-read live state immediately before every remote mutation.
 - The main agent owns source-control writes after this packet began. Subagents may
   inspect/review; the designated existing Sol Low implementer may write only the

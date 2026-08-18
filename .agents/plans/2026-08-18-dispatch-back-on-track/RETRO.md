@@ -11,16 +11,20 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 - Objective: restore reviewed Studio/Codex/Claude work to trunk, prove this
   machine, and leave the remaining Claude path dependency-ordered.
 - Final outcome: resumed after explicit user approval of both the readiness/merge
-  ceremony and the contained live-provider/host-evaluation ceremony.
-- Final branch / stack tip: PR #94 head `142c58a`; PR #95 head `f51e95e`; draft
-  PR #96 head `8659ee2`.
+  ceremony and the contained live-provider/host-evaluation ceremony; all four
+  delivery PRs are merged and the authorized live work is complete.
+- Final branch / stack tip: `main` at `ea4b731`; the coordination packet remains
+  isolated on `codex/dispatch-back-on-track-goal`.
 - Final PR range: [PR #93](https://github.com/outfitter-dev/dispatch/pull/93) through
-  [PR #96](https://github.com/outfitter-dev/dispatch/pull/96), not merged.
-- Final tracker state: DIS-64 Ready to Merge; DIS-65 and DIS-57 In Review at the
-  recorded audit; downstream dependency chain remains blocked.
-- Final verification state: all four local/full/hosted gates are green at the
-  recorded tips; PR #95 exact-tip review is 5/5 with no findings.
-- Remaining risks / P3s: live App Server post-merge proof and live Claude proof pending.
+  [PR #96](https://github.com/outfitter-dev/dispatch/pull/96), all merged.
+- Final tracker state: DIS-57, DIS-62, DIS-63, DIS-64, and DIS-65 Done; DIS-61
+  moved to Todo with its prerequisite evaluations complete; DIS-66 remains In
+  Review because GitHub still reports nine open alerts.
+- Final verification state: merged-main build, package, CLI, exact `just check`,
+  real isolated App Server integration, contained Claude launch, and both host
+  evaluations are complete.
+- Remaining risks / P3s: GitHub Dependabot alert re-evaluation remains pending;
+  the dependency graph already reports the patched versions.
 - Archive state: not ready.
 
 ## Branch / PR / Issue Ledger
@@ -29,8 +33,11 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 | --- | --- | --- | --- | --- | --- |
 | 1 | [DIS-65](https://linear.app/outfitter/issue/DIS-65) | `codex/recover-studio-bridge-20260818` | [PR #93](https://github.com/outfitter-dev/dispatch/pull/93) | Merged at `e63b538` | 5/5 local review; CI green |
 | 2 | [DIS-64](https://linear.app/outfitter/issue/DIS-64) | `dis-64-enforce-a-minimum-supported-codex-build-instead-of-an-unenforced-exact` | [PR #94](https://github.com/outfitter-dev/dispatch/pull/94) | Restacked and merged at `260f77c` | 5/5 combined review; rerun CI/CodeQL/Graphite green |
-| independent | [DIS-57](https://linear.app/outfitter/issue/DIS-57) | `dis-57-launch-claude-background-sessions-through-the-supported-cli` | [PR #95](https://github.com/outfitter-dev/dispatch/pull/95) | Merged at `1b6fc3f`; live proof pending | 5/5 review; hosted gates green at `f51e95e` |
+| independent | [DIS-57](https://linear.app/outfitter/issue/DIS-57) | `dis-57-launch-claude-background-sessions-through-the-supported-cli` | [PR #95](https://github.com/outfitter-dev/dispatch/pull/95) | Merged at `1b6fc3f`; live proof passed | 5/5 review; one isolated session reconciled and removed |
 | independent | [DIS-66](https://linear.app/outfitter/issue/DIS-66) | `dis-66-remediate-open-dependabot-runtime-alerts-without-taking-mcp` | [PR #96](https://github.com/outfitter-dev/dispatch/pull/96) | Merged at `ea4b731`; alert indexing pending | 5/5; local/full/hosted gates green |
+| evaluation | [DIS-62](https://linear.app/outfitter/issue/DIS-62) | none | none | Done | Herdr 0.8.0 optional for observation/manual attach; reject automated input |
+| evaluation | [DIS-63](https://linear.app/outfitter/issue/DIS-63) | none | none | Done | cmux 0.64.22 optional operator host; reject external automated input |
+| next | [DIS-61](https://linear.app/outfitter/issue/DIS-61) | none | none | Todo | Evaluation blockers cleared; capability-driven fail-closed contract next |
 | coordination | none | `codex/dispatch-back-on-track-goal` | none | In progress | Durable packet only |
 
 ## Planning Discoveries
@@ -43,13 +50,15 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 | Existing zmx baseline lacks safe receipt/transaction behavior | Claude control research and Linear chain | Do not begin DIS-54 implementation early | Prevents unsafe transport work |
 | Studio/local ignored continuation state already matches and is preserved | recovery checksum inventory | Exclude it from cleanup and mirroring | Protects ongoing local context |
 | `main` has nine shipped runtime dependency alerts | GitHub Dependabot audit | Remediate in one lock-only slice while keeping `mcp` on 1.x | Created DIS-66 and draft PR #96; does not block PRs #93-#95 |
+| Herdr's direct-controller lease does not cover API input | Live 0.8.0 controller/API race | Do not use Herdr for automated writes; observation/manual attach only | DIS-62 completed with optional/reject guidance |
+| cmux safe-default socket rejects an external Dispatch process | Live 0.64.22 ancestry denial and official access-mode docs | Do not enable `allowAll`; treat an in-cmux broker as future design work | DIS-63 completed with optional/reject guidance |
+| Claude credentials are expired on this machine | Attached live frontend rejected the synthetic turn | Preserve transport evidence but do not claim provider completion | No credential mutation; future model-turn proof needs re-authentication |
+| GitHub's dependency graph sees patched versions while alerts remain open | SBOM reports mcp 1.28.1, pydantic-settings 2.14.2, python-multipart 0.0.31, starlette 1.3.1, cryptography 50.0.0 | Keep DIS-66 In Review; do not manually dismiss alerts | External scanner reconciliation remains the only completion gate |
 
 ## Deferred / Follow-Up Discoveries
 
 | Issue | Discovery | Why Out Of Goal | Link |
 | --- | --- | --- | --- |
-| DIS-62 | Herdr must be evaluated with a disposable session | Requires install/live-provider authorization | [DIS-62](https://linear.app/outfitter/issue/DIS-62) |
-| DIS-63 | cmux must be evaluated with a disposable session | Requires install/live-provider authorization | [DIS-63](https://linear.app/outfitter/issue/DIS-63) |
 | DIS-54 | zmx evidence is unsafe for provider writes | Blocked by host/receipt chain | [DIS-54](https://linear.app/outfitter/issue/DIS-54) |
 | DIS-50 | Public provider slice would be premature | Blocked by DIS-57, DIS-61, DIS-54 | [DIS-50](https://linear.app/outfitter/issue/DIS-50) |
 
@@ -62,6 +71,11 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 | 2026-08-18 | DIS-50 | Removed completed blockers; retained DIS-61, DIS-57, DIS-54 | [DIS-50](https://linear.app/outfitter/issue/DIS-50) |
 | 2026-08-18 | GitHub issues 16, 17, 25, 26 | Added evidence-based scope comments; left open | [#16](https://github.com/outfitter-dev/dispatch/issues/16), [#17](https://github.com/outfitter-dev/dispatch/issues/17), [#25](https://github.com/outfitter-dev/dispatch/issues/25), [#26](https://github.com/outfitter-dev/dispatch/issues/26) |
 | 2026-08-18 | [DIS-66](https://linear.app/outfitter/issue/DIS-66) | Created High-priority security issue, attached draft PR, moved to In Review | [PR #96](https://github.com/outfitter-dev/dispatch/pull/96) |
+| 2026-08-18 | [DIS-65](https://linear.app/outfitter/issue/DIS-65) | Marked Done after merged compatibility evidence | [PR #93](https://github.com/outfitter-dev/dispatch/pull/93) |
+| 2026-08-18 | [DIS-66](https://linear.app/outfitter/issue/DIS-66) | Corrected merge auto-close back to In Review while nine alerts remain open | Live Dependabot API and current dependency-graph SBOM |
+| 2026-08-18 | [DIS-57](https://linear.app/outfitter/issue/DIS-57) | Added contained live launch/reconciliation/cleanup evidence; kept Done | [PR #95](https://github.com/outfitter-dev/dispatch/pull/95) |
+| 2026-08-18 | [DIS-62](https://linear.app/outfitter/issue/DIS-62) and [DIS-63](https://linear.app/outfitter/issue/DIS-63) | Recorded live evaluation evidence and optional/reject decisions; marked Done | Herdr 0.8.0 and cmux 0.64.22 |
+| 2026-08-18 | [DIS-61](https://linear.app/outfitter/issue/DIS-61) | Recorded host decisions and moved from Backlog to Todo | Both evaluation blockers complete |
 
 ## Execution Log
 
@@ -157,6 +171,34 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 - Result: landed code, local build/package/CLI, and isolated runtime-readiness are proven on the actual merged tree. The Dependabot API still reports nine open alerts immediately after merge despite every locked version meeting the fix floors, so DIS-66 remains open pending authoritative re-indexing.
 - Next: poll Dependabot to closure, reconcile DIS-65/DIS-64 immediately, keep DIS-57 pending its authorized live Claude proof, and keep DIS-66 pending API closure.
 - Blockers: GitHub Dependabot indexing lag only for DIS-66 completion.
+
+2026-08-18 - Contained Claude launch proof
+- Changed: no source; launched one synthetic background session through the merged internal primitive under a disposable workspace and isolated `CLAUDE_CONFIG_DIR`.
+- Verified: the short ID reconciled to exactly one full provider UUID; the isolated roster had one matching background row; exact `claude stop` plus `claude rm` returned it to zero; normal user settings fingerprints were unchanged; no matching process or temp artifact remained.
+- Result: DIS-57's supported launch/reconciliation/cleanup contract is proven on Claude Code 2.1.228 and the issue carries the live evidence.
+- Next: evaluate the two terminal-host candidates without treating host transport as provider receipt.
+- Blockers: none for DIS-57; later authenticated provider-turn tests require a renewed Claude login.
+
+2026-08-18 - Herdr 0.8.0 evaluation
+- Changed: installed the official Homebrew formula; created one exact named session and disposable workspaces; attached a Herdr frontend to a supervisor-owned Claude background UUID; exercised reads, process inspection, literal text, named keys, direct control, controller contention, restart/recovery, and cleanup.
+- Verified: wrong-pane input failed before bytes; no canary appeared in retained Herdr logs/metadata; one provider row remained through attach and frontend reconstruction; a second direct controller failed without takeover; server restart restored layout and left the provider owner intact; exact session/workspace/process cleanup passed.
+- Result: optional for observation/manual attachment, rejected for Dispatch automated input. Screen/input changes did not advance the pane revision, `pane.send_input` has no expected revision, and API prompt input succeeded while a direct controller held the terminal.
+- Next: encode these unavailable capabilities explicitly in DIS-61 rather than weakening the input contract.
+- Blockers: the attached synthetic turn reached the intended frontend but Claude rejected model execution because the account login is expired; no provider completion is claimed.
+
+2026-08-18 - cmux 0.64.22 evaluation
+- Changed: installed the official Homebrew cask; launched the app and two empty synthetic terminal workspaces; inspected the installed 0.64.22 CLI surface and tested safe-default socket access from Dispatch.
+- Verified: stable UUID/ref targeting plus screen, input, event, process, health, move, restore, and cleanup commands are present. The external Dispatch process was rejected by the default ancestry ACL. No `allowAll` override was enabled, no Claude payload was sent, and the app, two synthetic restore workspaces, stale socket markers, and disposable tree were removed.
+- Result: optional as an operator terminal/observation host, rejected for the current external Dispatch input path. The safe default excludes the daemon and the API exposes no revision-bound atomic text-plus-Enter admission.
+- Next: DIS-61 may consider a narrowly authenticated mode or an explicit in-cmux broker, but must remain fail-closed by default.
+- Blockers: none for the evaluation decision; authenticated end-to-end Claude execution remains unavailable until re-login.
+
+2026-08-18 - Tracker and dependency-graph reconciliation
+- Changed: marked DIS-65, DIS-62, and DIS-63 Done; preserved DIS-57/DIS-64 Done; moved DIS-61 to Todo; corrected DIS-66 from merge-triggered Done back to In Review.
+- Verified: GitHub's dependency-graph SBOM already reports all five patched versions from merged main, but the Dependabot alert endpoint still returns alerts 1-9 open and no dismissed/auto-dismissed alerts.
+- Result: code, PRs, and Linear now tell the truth; DIS-66 intentionally remains open until GitHub's alert evaluator catches up.
+- Next: continue bounded polling; never substitute manual dismissal for a fixed-state result.
+- Blockers: GitHub Dependabot alert-state reconciliation only.
 ```
 
 ## Local Review Log
@@ -190,21 +232,23 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 | `uv sync --locked` + CLI help smokes | merged `main` at `ea4b731` | pass | exact five patched dependency versions installed; both entry points load |
 | `just check` | merged `main` at `ea4b731` | pass | Ruff/format/mypy; 748 passed, 17 deselected; build/package-content pass |
 | `just test-int` | merged `main` at `ea4b731` | pass | 17 passed, 748 deselected in 256.02s; no skips |
-| Dependabot open-alert query | merged `main` at `ea4b731` | pending | nine alerts still reported open immediately after merge; version floors are satisfied, so await authoritative re-index |
-| `just test-int` | merged main | pending | run after merge; temporary CODEX_HOME and ephemeral lanes; record any auth/tool-dependent skips |
-| live Claude launch | DIS-57 | approval gated | settings metadata/hash snapshot and disposable cleanup required |
+| Dependabot dependency-graph SBOM | merged `main` at `ea4b731` | pass | all five packages report the patched versions from `uv.lock` |
+| Dependabot open-alert query | merged `main` at `ea4b731` | pending | alerts 1-9 remain open; no dismissed or auto-dismissed alerts; DIS-66 remains In Review |
+| live Claude launch | DIS-57 | pass | one reconciled full UUID; isolated roster 1 -> 0; exact stop/remove; normal settings unchanged; no temp/process residue |
+| Herdr 0.8.0 host evaluation | DIS-62 | decision complete | attach/restart/cleanup pass; reject automated input because no revision-bound admission and API bypasses controller lease |
+| cmux 0.64.22 host evaluation | DIS-63 | decision complete | rich API confirmed; safe-default external access denied; no `allowAll`; reject current external automated input path |
 
 ## Remote Review / CI Log
 
 | Time | PR | CI State | Review State | Scores / Signals | Unresolved P0/P1/P2 | Action |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2026-08-18 | [PR #93](https://github.com/outfitter-dev/dispatch/pull/93) | green | zero threads | local 5/5 | none | await merge approval |
-| 2026-08-18 | [PR #94](https://github.com/outfitter-dev/dispatch/pull/94) | green | two prior Cursor threads fixed/replied/resolved; integration proof [comment](https://github.com/outfitter-dev/dispatch/pull/94#issuecomment-5331466658) | local stack 5/5 | none | await PR #93 then merge approval |
-| 2026-08-18 | [PR #95](https://github.com/outfitter-dev/dispatch/pull/95) | green at `f51e95e` | zero unresolved threads | local round 3: 5/5; CI/CodeQL/Graphite green | none | await merge approval |
-| 2026-08-18 | [PR #96](https://github.com/outfitter-dev/dispatch/pull/96) | CI/CodeQL green at `8659ee2` | zero unresolved threads; integration proof [comment](https://github.com/outfitter-dev/dispatch/pull/96#issuecomment-5331466800) | local 5/5 | none | keep draft; await readiness/merge approval |
+| 2026-08-18 | [PR #93](https://github.com/outfitter-dev/dispatch/pull/93) | green | zero threads | local 5/5 | none | merged at `e63b538` |
+| 2026-08-18 | [PR #94](https://github.com/outfitter-dev/dispatch/pull/94) | green | two prior Cursor threads fixed/replied/resolved; integration proof [comment](https://github.com/outfitter-dev/dispatch/pull/94#issuecomment-5331466658) | local stack 5/5 | none | merged at `260f77c` |
+| 2026-08-18 | [PR #95](https://github.com/outfitter-dev/dispatch/pull/95) | green at `f51e95e` | zero unresolved threads | local round 3: 5/5; CI/CodeQL/Graphite green | none | merged at `1b6fc3f` |
+| 2026-08-18 | [PR #96](https://github.com/outfitter-dev/dispatch/pull/96) | CI/CodeQL green at `8659ee2` | zero unresolved threads; integration proof [comment](https://github.com/outfitter-dev/dispatch/pull/96#issuecomment-5331466800) | local 5/5 | none | merged at `ea4b731`; alert state pending |
 
-All three PRs were already non-draft before this packet began. This packet did
-not perform or authorize a readiness transition.
+PRs #93-#95 were already non-draft before this packet began. PR #96 moved from
+draft to ready only after explicit user approval, then all four were merged.
 
 ## Review Feedback Resolutions
 
@@ -220,15 +264,15 @@ not perform or authorize a readiness transition.
 
 | Action / Constraint | Status | Evidence |
 | --- | --- | --- |
-| No merge without explicit user approval | authorized, not yet exercised | user explicitly approved both ceremonies; PRs #93-#96 remain open at this checkpoint |
+| No merge without explicit user approval | satisfied | user explicitly approved both ceremonies; PRs #93-#96 merged only afterward |
 | No new PR readiness transition without explicit user approval | exercised within approval | PR #96 marked ready only after user explicitly approved both ceremonies |
 | Keep new security PR draft until explicit readiness approval | satisfied | PR #96 stayed draft until approval, then moved to ready |
 | No package publish / registry mutation unless authorized | respected | build/package inspection only |
-| No live Claude/provider mutation without separate approval | respected | no live Claude launch ran |
-| No secrets, prompt content, or settings contents exposed | respected | metadata-only plan; fake-runtime tests |
+| No live Claude/provider mutation without separate approval | satisfied | contained live work ran only after explicit approval |
+| No secrets, prompt content, or settings contents exposed | respected | synthetic prompts only; metadata/hash comparisons; no settings contents retained |
 | Preserve Studio/local ignored state | respected | checksum-matched state retained; no cleanup |
 | Source-control writes after packet start stay scoped | respected | main agent owns packet; existing Sol Low owner is limited to DIS-57 P1 worktree |
-| No unrelated destructive changes | respected | isolated worktrees and narrow diffs |
+| No unrelated destructive changes | respected | isolated worktrees and narrow diffs; only empty synthetic cmux restore state and stale socket markers were deleted during exact cleanup |
 
 Prior to this packet, implementation subagents committed and pushed the recovered
 PR slices under the earlier coordination instructions. That history is recorded
@@ -237,25 +281,29 @@ source-control ownership rule.
 
 ## Final State
 
-- Goal completion condition: not met; execution resumed with both required
-  authorization gates open.
+- Goal completion condition: met except for the external Dependabot alert-state
+  reconciliation explicitly required before DIS-66 can close.
 - Graphite / branch state: compatibility stack ordered PR #93 -> PR #94; PR #95 independent.
 - PR state: PRs #93-#96 merged in the authorized order with live merge commits
   recorded above.
 - Source-control host lag: none known at recorded heads; re-read before mutation.
-- Tracker state: partially reconciled; final post-merge update pending.
+- Tracker state: reconciled; only DIS-66 remains In Review because the live alert
+  endpoint has not acknowledged the patched graph.
 - Local review state: PRs #93/#94 5/5; PR #95 round 3 is 5/5; PR #96 is
   5/5; coordination packet audit is 5/5; no findings remain.
-- Remote review state: PRs #93-#95 green at recorded heads; PR #96 CI/CodeQL
-  green at `8659ee2`; zero unresolved threads at audit.
+- Remote review state: all four PRs merged from green reviewed heads with zero
+  unresolved threads at the final pre-merge audit.
 - Remote review scores: local scores recorded; hosted bot summaries recorded above.
-- Verification: merged-main full gate and real integration pass; only Dependabot
-  API closure and the separately authorized live Claude/host ceremonies remain.
-- Skipped checks: `just test-int` pending merge; opt-in `just scenario` excluded;
-  live Claude proof pending authorization.
-- Remaining P3s / risks: provider CLI behavior may drift; settings mutation risk must be measured.
+- Verification: merged-main full gate, real integration, contained Claude launch,
+  Herdr evaluation, and cmux evaluation pass at their stated scopes; only
+  Dependabot alert closure remains pending.
+- Skipped checks: opt-in `just scenario` remained excluded; authenticated Claude
+  model completion was unavailable because the account login is expired.
+- Remaining P3s / risks: provider CLI behavior may drift; normal Claude runtime
+  metadata changes when the default profile is used; neither evaluated host
+  satisfies revision-bound serialized input.
 - Follow-up issues created: none in this packet; existing DIS-62/DIS-63 are sufficient.
 - Forbidden actions confirmation: current audit is clean.
-- Packet archive readiness: not ready.
-- Final transcript proof: blocked-state handoff must name both authorization gates
-  and confirm that no prohibited action was taken.
+- Packet archive readiness: wait only for Dependabot alert closure and DIS-66 Done.
+- Final transcript proof: report the merged-main gates, live ceremony, host
+  decisions, exact cleanup, and the one authoritative external blocker.
