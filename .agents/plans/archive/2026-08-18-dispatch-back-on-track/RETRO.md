@@ -1,10 +1,10 @@
 # Execution Retro: Dispatch Back On Track
 
 Date started: 2026-08-18
-Date finalized: pending
-Status: In progress
-Plan: `.agents/plans/2026-08-18-dispatch-back-on-track/PLAN.md`
-Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
+Date finalized: 2026-08-18
+Status: Complete under the user's final clean-build terminal condition
+Plan: `.agents/plans/archive/2026-08-18-dispatch-back-on-track/PLAN.md`
+Goal: `.agents/plans/archive/2026-08-18-dispatch-back-on-track/GOAL.md`
 
 ## Execution Summary
 
@@ -13,8 +13,8 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 - Final outcome: resumed after explicit user approval of both the readiness/merge
   ceremony and the contained live-provider/host-evaluation ceremony; all four
   delivery PRs are merged and the authorized live work is complete.
-- Final branch / stack tip: `main` at `ea4b731`; the coordination packet remains
-  isolated on `codex/dispatch-back-on-track-goal`.
+- Final branch / stack tip: `main` at `ea4b731`; the archived coordination packet
+  is committed from `codex/dispatch-back-on-track-goal`.
 - Final PR range: [PR #93](https://github.com/outfitter-dev/dispatch/pull/93) through
   [PR #96](https://github.com/outfitter-dev/dispatch/pull/96), all merged.
 - Final tracker state: DIS-57, DIS-62, DIS-63, DIS-64, and DIS-65 Done; DIS-61
@@ -25,7 +25,8 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
   evaluations are complete.
 - Remaining risks / P3s: GitHub Dependabot alert re-evaluation remains pending;
   the dependency graph already reports the patched versions.
-- Archive state: not ready.
+- Archive state: archived and complete; DIS-66 continues independently under
+  GitHub Support.
 
 ## Branch / PR / Issue Ledger
 
@@ -38,7 +39,8 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 | evaluation | [DIS-62](https://linear.app/outfitter/issue/DIS-62) | none | none | Done | Herdr 0.8.0 optional for observation/manual attach; reject automated input |
 | evaluation | [DIS-63](https://linear.app/outfitter/issue/DIS-63) | none | none | Done | cmux 0.64.22 optional operator host; reject external automated input |
 | next | [DIS-61](https://linear.app/outfitter/issue/DIS-61) | none | none | Todo | Evaluation blockers cleared; capability-driven fail-closed contract next |
-| coordination | none | `codex/dispatch-back-on-track-goal` | none | In progress | Durable packet only |
+| deferred | [DIS-67](https://linear.app/outfitter/issue/DIS-67) | `dis-67-prepare-the-v0110-release-candidate` | none | Backlog; branch at `f0a475a` | Two version lines only; pushed before scope narrowed; no PR/release/publish |
+| coordination | none | `codex/dispatch-back-on-track-goal` | none | Complete / archived | Durable packet only |
 
 ## Planning Discoveries
 
@@ -213,6 +215,20 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 - Result: GitHub accepted and processed the supported rebuild, but ten minutes later all nine alert records still reported `state: open`, `fixed_at: null`, and their original June-August `updated_at` timestamps. The exact support packet is recorded in `REFS.md` and on DIS-66, which remains In Review.
 - Next: with explicit user authorization, submit the prepared GitHub Support escalation. Do not dismiss alerts, refresh again inside the one-hour rate limit, or manufacture a dependency change.
 - Blockers: GitHub Dependabot alert-state reconciliation only.
+
+2026-08-18 - GitHub Support escalation and release continuation
+- Changed: submitted authenticated GitHub Support case 4677807 with the two successful graph runs, current fixed SBOM, stale alert timestamps, and no-dismiss/no-noop evidence; posted the case on DIS-66. Created DIS-67 for a metadata-only v0.11.0 release candidate and assigned its isolated implementation to a Sol Low subagent.
+- Verified: GitHub confirmed the ticket was submitted and shows it Open. A fresh Terra audit found clean `main` at `ea4b731`, no open PRs, green main CI, and no actual code or packaging blocker; v0.10.0 is the current GitHub/PyPI release and `main` is five commits ahead.
+- Result: the platform defect gained an accountable external owner. Release preparation briefly began without dirtying `main`; the next checkpoint records its immediate deferral before any PR.
+- Next: superseded by the user's clean-build terminal condition below.
+- Blockers: GitHub must reconcile alerts 1-9 before DIS-66 can close; publication remains separately approval-gated.
+
+2026-08-18 - Final feature-ready clean build
+- Changed: stopped the DIS-67 release-prep subagent when the user narrowed the outcome to one clean build. The subagent had already committed and pushed a two-line 0.11.0 branch at `f0a475a`, but created no PR; DIS-67 was returned to Backlog. No release, tag, PyPI publish, or main mutation occurred.
+- Verified: on actual `main` at `ea4b731`, `HEAD == origin/main` and the checkout had zero status lines before and after. `uv lock --check`, `uv sync --locked`, both CLI help smokes, Ruff, format check, strict mypy over 145 source files, 748 tests with 17 deselected, sdist/wheel build, and package-content validation all passed.
+- Result: the user has one clean, current, fully built baseline for feature development. GitHub Support case 4677807 owns the stale Dependabot reconciliation and DIS-66 truthfully remains In Review.
+- Next: start new feature work from clean `main`; monitor the support case independently. Resume DIS-67 only when a release is desired.
+- Blockers: none for feature development; only external alert closure remains for DIS-66.
 ```
 
 ## Local Review Log
@@ -295,8 +311,8 @@ source-control ownership rule.
 
 ## Final State
 
-- Goal completion condition: met except for the external Dependabot alert-state
-  reconciliation explicitly required before DIS-66 can close.
+- Goal completion condition: met under the user's final clean-build terminal
+  condition. DIS-66 remains an independently tracked external reconciliation.
 - Graphite / branch state: compatibility stack ordered PR #93 -> PR #94; PR #95 independent.
 - PR state: PRs #93-#96 merged in the authorized order with live merge commits
   recorded above.
@@ -308,16 +324,17 @@ source-control ownership rule.
 - Remote review state: all four PRs merged from green reviewed heads with zero
   unresolved threads at the final pre-merge audit.
 - Remote review scores: local scores recorded; hosted bot summaries recorded above.
-- Verification: merged-main full gate, real integration, contained Claude launch,
-  Herdr evaluation, and cmux evaluation pass at their stated scopes; only
-  Dependabot alert closure remains pending.
+- Verification: merged-main full gate, fresh final clean build, real integration,
+  contained Claude launch, Herdr evaluation, and cmux evaluation pass at their
+  stated scopes.
 - Skipped checks: opt-in `just scenario` remained excluded; authenticated Claude
   model completion was unavailable because the account login is expired.
 - Remaining P3s / risks: provider CLI behavior may drift; normal Claude runtime
   metadata changes when the default profile is used; neither evaluated host
   satisfies revision-bound serialized input.
-- Follow-up issues created: none in this packet; existing DIS-62/DIS-63 are sufficient.
+- Follow-up issues: DIS-66 remains In Review under GitHub Support case 4677807;
+  DIS-67 is deferred in Backlog with no PR.
 - Forbidden actions confirmation: current audit is clean.
-- Packet archive readiness: wait only for Dependabot alert closure and DIS-66 Done.
+- Packet archive state: archived and complete under the user's clean-build scope.
 - Final transcript proof: report the merged-main gates, live ceremony, host
   decisions, exact cleanup, and the one authoritative external blocker.

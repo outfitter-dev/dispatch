@@ -1,7 +1,7 @@
 # Goal Plan: Dispatch Back On Track
 
 Date: 2026-08-18
-Status: Blocked on GitHub Dependabot alert reconciliation; support packet prepared
+Status: Complete; clean feature-development baseline verified, external alerts tracked
 
 ## Objective
 
@@ -12,16 +12,14 @@ Claude host work in an explicit dependency order with safe authorization gates.
 
 ## Completion Condition
 
-The goal is complete only when:
+The user finalized the terminal condition as one clean, current,
+feature-development baseline. The goal is complete because:
 
 - [x] [PR #93](https://github.com/outfitter-dev/dispatch/pull/93),
   [PR #94](https://github.com/outfitter-dev/dispatch/pull/94),
   [PR #95](https://github.com/outfitter-dev/dispatch/pull/95), and
   [PR #96](https://github.com/outfitter-dev/dispatch/pull/96) merged in the
   approved order with no unresolved P0/P1/P2 findings.
-- [ ] All nine Dependabot alerts are fixed/closed without taking MCP 2.0, and
-  [DIS-66](https://linear.app/outfitter/issue/DIS-66) is moved to Done only
-  after the alert API confirms closure.
 - [x] Local `main` matches `origin/main` and passes locked sync, `just check`,
   package build/content validation, CLI help smoke tests, and isolated App
   Server integration.
@@ -37,7 +35,18 @@ The goal is complete only when:
   [DIS-50](https://linear.app/outfitter/issue/DIS-50).
 - [x] GitHub and Linear agree apart from the documented stale Dependabot alert
   state.
-- [ ] `RETRO.md` records alert closure and the packet is archived.
+- [x] [DIS-66](https://linear.app/outfitter/issue/DIS-66) truthfully remains In
+  Review and [GitHub Support case #4677807](https://support.github.com/ticket/personal/0/4677807)
+  owns the independent stale-alert reconciliation.
+- [x] `RETRO.md` records the final evidence and the packet is archived.
+
+Release continuation considered after the original recovery landed, then deferred
+when the user narrowed the terminal condition to one clean feature-ready build:
+
+- [x] [DIS-67](https://linear.app/outfitter/issue/DIS-67) is Backlog; its isolated
+  two-line candidate is preserved on a remote branch with no PR.
+- [x] No tag, GitHub Release, PyPI publication, release PR, or `main` mutation
+  occurred.
 
 ## Non-Goals
 

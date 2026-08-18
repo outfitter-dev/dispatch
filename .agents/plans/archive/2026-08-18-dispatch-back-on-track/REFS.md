@@ -43,7 +43,12 @@
 - [DIS-50](https://linear.app/outfitter/issue/DIS-50) - vertical provider slice,
   blocked by DIS-57, DIS-61, and DIS-54.
 - [DIS-66](https://linear.app/outfitter/issue/DIS-66) - High-priority remediation
-  for all nine open runtime dependency alerts; In Review.
+  remains In Review while [GitHub Support case #4677807](https://support.github.com/ticket/personal/0/4677807)
+  investigates stale reconciliation for all nine runtime dependency alerts.
+- [DIS-67](https://linear.app/outfitter/issue/DIS-67) - deferred metadata-only
+  v0.11.0 candidate in Backlog. The clean branch
+  `dis-67-prepare-the-v0110-release-candidate` is preserved at `f0a475a`; it was
+  pushed before the scope narrowed, but no PR, tag, release, or publication exists.
 - [#16](https://github.com/outfitter-dev/dispatch/issues/16),
   [#17](https://github.com/outfitter-dev/dispatch/issues/17),
   [#25](https://github.com/outfitter-dev/dispatch/issues/25), and
@@ -109,6 +114,9 @@
 ## GitHub Support Escalation Packet
 
 Subject: Dependabot alerts remain open after fixed default-branch graph rebuild
+
+Submitted as [GitHub Support case #4677807](https://support.github.com/ticket/personal/0/4677807)
+on 2026-08-18; status Open.
 
 - Repository: <https://github.com/outfitter-dev/dispatch>
 - Remediation: [PR #96](https://github.com/outfitter-dev/dispatch/pull/96),
