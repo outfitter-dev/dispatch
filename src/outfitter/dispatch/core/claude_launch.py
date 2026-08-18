@@ -12,6 +12,7 @@ from outfitter.dispatch.core.claude_launch_types import (
     ClaudeLaunchCommandError,
     ClaudeLaunchEnvelope,
     ClaudeLaunchError,
+    ClaudeLaunchIndeterminateError,
     ClaudeLaunchObservation,
     ClaudeLaunchOutputError,
     ClaudeLaunchOutputLimitError,
@@ -171,18 +172,33 @@ async def launch_claude_background(
     runner = run_process or run_claude_process
     try:
         launched = await runner(argv, envelope.cwd, launch_environment)
-    except FileNotFoundError as exc:
+    except OSError as exc:
         raise ClaudeLaunchCommandError("Claude CLI is unavailable") from exc
-    except TimeoutError as exc:
-        raise ClaudeLaunchTimeoutError("Claude CLI command timed out") from exc
-    if launched.returncode != 0:
-        raise ClaudeLaunchCommandError("Claude background launch failed")
-    short_id = _parse_short_id(launched.stdout)
+    except (ClaudeLaunchTimeoutError, ClaudeLaunchOutputLimitError) as exc:
+        candidates = exc.short_id_candidates
+        if len(candidates) != 1:
+            raise ClaudeLaunchIndeterminateError(
+                "Claude background launch is indeterminate; automatic retry is prohibited"
+            ) from None
+        short_id = candidates[0]
+    except TimeoutError:
+        raise ClaudeLaunchIndeterminateError(
+            "Claude background launch is indeterminate; automatic retry is prohibited"
+        ) from None
+    else:
+        if launched.returncode != 0:
+            raise ClaudeLaunchCommandError("Claude background launch failed")
+        short_id = _parse_short_id(launched.stdout)
     try:
         roster = await runner(
             ("claude", "agents", "--json", "--all"), envelope.cwd, launch_environment
         )
-    except (FileNotFoundError, TimeoutError):
+    except (
+        FileNotFoundError,
+        TimeoutError,
+        ClaudeLaunchTimeoutError,
+        ClaudeLaunchOutputLimitError,
+    ):
         return ClaudeLaunchObservation(
             provider="claude",
             reconciliation="pending",
@@ -211,6 +227,7 @@ __all__ = [
     "ClaudeLaunchCommandError",
     "ClaudeLaunchEnvelope",
     "ClaudeLaunchError",
+    "ClaudeLaunchIndeterminateError",
     "ClaudeLaunchObservation",
     "ClaudeLaunchOutputError",
     "ClaudeLaunchOutputLimitError",

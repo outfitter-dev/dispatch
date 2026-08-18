@@ -14,7 +14,9 @@ from outfitter.dispatch.core import claude_process
 from outfitter.dispatch.core.claude_launch import (
     ClaudeLaunchAmbiguousError,
     ClaudeLaunchArgvLimitError,
+    ClaudeLaunchCommandError,
     ClaudeLaunchEnvelope,
+    ClaudeLaunchIndeterminateError,
     ClaudeLaunchOutputError,
     ClaudeLaunchOutputLimitError,
     ClaudeLaunchTimeoutError,
@@ -286,6 +288,74 @@ async def test_post_launch_incompatible_roster_still_fails_closed(tmp_path: Path
         )
 
 
+@pytest.mark.parametrize(
+    "interruption",
+    [ClaudeLaunchTimeoutError, ClaudeLaunchOutputLimitError],
+)
+async def test_interrupted_launch_with_one_partial_short_id_reconciles(
+    tmp_path: Path,
+    interruption: type[ClaudeLaunchTimeoutError] | type[ClaudeLaunchOutputLimitError],
+) -> None:
+    session_id = "518b912b-1234-4abc-8def-1234567890ab"
+
+    async def run(
+        argv: tuple[str, ...], _cwd: Path, _environment: Mapping[str, str]
+    ) -> ClaudeProcessResult:
+        if argv == ("claude", "agents", "--json", "--all"):
+            return ClaudeProcessResult(0, json.dumps([{"id": "518b912b", "sessionId": session_id}]))
+        raise interruption("content-free interruption", short_id_candidates=("518b912b",))
+
+    observation = await launch_claude_background(
+        ClaudeLaunchEnvelope(cwd=tmp_path, initial_text="private prompt"),
+        run_process=run,
+        environment={},
+        arg_max=100_000,
+    )
+
+    assert observation.reconciliation == "reconciled"
+    assert observation.provider_session_id == session_id
+
+
+@pytest.mark.parametrize("candidates", [(), ("518b912b", "91abcdef")])
+async def test_interrupted_launch_without_one_short_id_is_indeterminate_and_private(
+    tmp_path: Path, candidates: tuple[str, ...]
+) -> None:
+    prompt = "never retain this private prompt"
+
+    async def run(
+        _argv: tuple[str, ...], _cwd: Path, _environment: Mapping[str, str]
+    ) -> ClaudeProcessResult:
+        raise ClaudeLaunchTimeoutError("content-free interruption", short_id_candidates=candidates)
+
+    with pytest.raises(ClaudeLaunchIndeterminateError) as caught:
+        await launch_claude_background(
+            ClaudeLaunchEnvelope(cwd=tmp_path, initial_text=prompt),
+            run_process=run,
+            environment={},
+            arg_max=100_000,
+        )
+
+    assert caught.value.retry_safe is False
+    assert caught.value.__cause__ is None
+    assert prompt not in str(caught.value)
+    assert prompt not in repr(caught.value)
+
+
+async def test_pre_exec_failure_remains_retryable_command_failure(tmp_path: Path) -> None:
+    async def run(
+        _argv: tuple[str, ...], _cwd: Path, _environment: Mapping[str, str]
+    ) -> ClaudeProcessResult:
+        raise FileNotFoundError
+
+    with pytest.raises(ClaudeLaunchCommandError):
+        await launch_claude_background(
+            ClaudeLaunchEnvelope(cwd=tmp_path, initial_text="safe"),
+            run_process=run,
+            environment={},
+            arg_max=100_000,
+        )
+
+
 def test_platform_preflight_accounts_for_argv_and_environment_without_leaking() -> None:
     prompt = "private prompt body"
     with pytest.raises(ClaudeLaunchArgvLimitError) as caught:
@@ -305,12 +375,15 @@ def test_platform_preflight_rejects_invalid_environment() -> None:
 async def test_process_runner_bounds_output(tmp_path: Path) -> None:
     executable = tmp_path / "oversized"
     executable.write_text(
-        f"#!{sys.executable}\nimport sys\nsys.stdout.buffer.write(b'x' * (1024 * 1024 + 1))\n"
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        "sys.stdout.buffer.write(b'518b912b\\n' + b'x' * (1024 * 1024 + 1))\n"
     )
     executable.chmod(0o755)
 
-    with pytest.raises(ClaudeLaunchOutputLimitError):
+    with pytest.raises(ClaudeLaunchOutputLimitError) as caught:
         await run_claude_process((str(executable),), tmp_path, os.environ)
+    assert caught.value.short_id_candidates == ("518b912b",)
 
 
 async def test_process_runner_times_out_and_reaps_child(

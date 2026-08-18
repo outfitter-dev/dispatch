@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal
 
 
 class ClaudeLaunchError(Exception):
@@ -23,9 +23,17 @@ class ClaudeLaunchArgvLimitError(ClaudeLaunchError):
 class ClaudeLaunchTimeoutError(ClaudeLaunchError):
     """A bounded Claude CLI invocation timed out."""
 
+    def __init__(self, message: str, *, short_id_candidates: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.short_id_candidates = short_id_candidates
+
 
 class ClaudeLaunchOutputLimitError(ClaudeLaunchError):
     """A Claude CLI stream exceeded its bounded read limit."""
+
+    def __init__(self, message: str, *, short_id_candidates: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.short_id_candidates = short_id_candidates
 
 
 class ClaudeLaunchCommandError(ClaudeLaunchError):
@@ -38,6 +46,12 @@ class ClaudeLaunchOutputError(ClaudeLaunchError):
 
 class ClaudeLaunchAmbiguousError(ClaudeLaunchError):
     """The provisional launch matched more than one roster row."""
+
+
+class ClaudeLaunchIndeterminateError(ClaudeLaunchError):
+    """A launch may have created a session, so automatic retry is prohibited."""
+
+    retry_safe: ClassVar[Literal[False]] = False
 
 
 @dataclass(frozen=True)
