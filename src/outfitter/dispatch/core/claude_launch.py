@@ -48,10 +48,7 @@ def validate_claude_launch(envelope: ClaudeLaunchEnvelope) -> None:
         raise ClaudeLaunchValidationError("cwd must be an absolute path")
     if not envelope.cwd.is_dir():
         raise ClaudeLaunchValidationError("cwd must be an existing directory")
-    if not envelope.initial_text:
-        raise ClaudeLaunchValidationError("initial text must not be empty")
-    if "\x00" in envelope.initial_text:
-        raise ClaudeLaunchValidationError("initial text must not contain NUL")
+    _nonempty(envelope.initial_text, "initial text")
     for value, option in (
         (envelope.display_name, "display name"),
         (envelope.agent, "agent"),
@@ -123,7 +120,7 @@ def project_claude_launch_argv(envelope: ClaudeLaunchEnvelope) -> tuple[str, ...
         argv.append("--worktree")
     elif isinstance(envelope.worktree, str):
         argv.extend(("--worktree", envelope.worktree))
-    argv.append(envelope.initial_text)
+    argv.extend(("--", envelope.initial_text))
     return tuple(argv)
 
 
@@ -185,12 +182,22 @@ async def launch_claude_background(
         roster = await runner(
             ("claude", "agents", "--json", "--all"), envelope.cwd, launch_environment
         )
-    except FileNotFoundError as exc:
-        raise ClaudeLaunchCommandError("Claude CLI is unavailable") from exc
-    except TimeoutError as exc:
-        raise ClaudeLaunchTimeoutError("Claude CLI command timed out") from exc
+    except (FileNotFoundError, TimeoutError):
+        return ClaudeLaunchObservation(
+            provider="claude",
+            reconciliation="pending",
+            short_id=short_id,
+            provider_session_id=None,
+            launch_cwd=str(envelope.cwd),
+        )
     if roster.returncode != 0:
-        raise ClaudeLaunchCommandError("Claude global roster query failed")
+        return ClaudeLaunchObservation(
+            provider="claude",
+            reconciliation="pending",
+            short_id=short_id,
+            provider_session_id=None,
+            launch_cwd=str(envelope.cwd),
+        )
     return reconcile_claude_launch(
         short_id=short_id, launch_cwd=envelope.cwd, roster_output=roster.stdout
     )

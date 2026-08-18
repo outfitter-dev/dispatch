@@ -34,7 +34,7 @@ def test_launch_argv_omits_defaults_and_keeps_prompt_as_one_argument(tmp_path: P
 
     argv = project_claude_launch_argv(envelope)
 
-    assert argv == ("claude", "--bg", prompt)
+    assert argv == ("claude", "--bg", "--", prompt)
     assert argv[-1] is prompt
     assert "prompt" not in repr(envelope).lower()
     assert prompt not in repr(envelope)
@@ -88,6 +88,7 @@ def test_launch_argv_projects_supported_explicit_options(tmp_path: Path) -> None
         str(additional),
         "--worktree",
         "feature",
+        "--",
         "start",
     )
 
@@ -197,7 +198,7 @@ async def test_launch_invokes_exact_argv_then_global_unscoped_roster(tmp_path: P
     )
 
     assert [call[0] for call in calls] == [
-        ("claude", "--bg", prompt),
+        ("claude", "--bg", "--", prompt),
         ("claude", "agents", "--json", "--all"),
     ]
     assert all(call[1] == tmp_path for call in calls)
@@ -230,7 +231,7 @@ def test_platform_preflight_accounts_for_argv_and_environment_without_leaking() 
     prompt = "private prompt body"
     with pytest.raises(ClaudeLaunchArgvLimitError) as caught:
         preflight_claude_launch(
-            ("claude", "--bg", prompt), {"PRIVATE_ENV": "sensitive"}, arg_max=32
+            ("claude", "--bg", "--", prompt), {"PRIVATE_ENV": "sensitive"}, arg_max=32
         )
 
     assert prompt not in str(caught.value)
