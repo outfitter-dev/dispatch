@@ -129,6 +129,13 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 - Result: stack topology is now authoritative in both local Graphite metadata and hosted PR state; no merge has run yet.
 - Next: wait for PR #96 Cursor review, resolve any actionable findings, re-read all four PR heads/checks/threads, update this retro if needed, then execute the authorized merge.
 - Blockers: PR #96 Cursor readiness review must complete cleanly.
+
+2026-08-18 - Final pre-merge gate
+- Changed: no code; waited for PR #96 readiness-only reviews and performed the final four-PR head/check/thread read plus a fresh Graphite merge dry run.
+- Verified: PR #96 Cursor/CI/CodeQL/Graphite all pass at `8659ee2`; all four PRs have zero unresolved threads and unchanged heads. PR #94's Graphite check is intentionally `in_progress` with the explicit message that it will pass when downstack PR #93 merges and that Graphite must merge the stack; GitHub CI is green and `gt merge --dry-run` reports the stack ready.
+- Result: no P0/P1/P2, CI, topology, or mergeability blocker remains. The only non-green signal is Graphite's expected downstack ordering sentinel, which the authorized `gt merge` operation is designed to satisfy.
+- Next: run `gt merge --no-interactive` from the PR #94 stack tip, verify both hosted PRs merged in order, then merge independent PRs #95 and #96 only after refreshing their live gates against the new main.
+- Blockers: none.
 ```
 
 ## Local Review Log
