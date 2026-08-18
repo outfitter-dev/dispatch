@@ -1,7 +1,7 @@
 # Goal Plan: Dispatch Back On Track
 
 Date: 2026-08-18
-Status: Blocked pending explicit readiness/merge and live-provider authorization
+Status: In progress; readiness/merge and live-provider ceremonies authorized
 
 ## Objective
 

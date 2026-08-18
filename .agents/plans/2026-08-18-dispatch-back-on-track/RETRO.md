@@ -2,7 +2,7 @@
 
 Date started: 2026-08-18
 Date finalized: pending
-Status: Blocked
+Status: In progress
 Plan: `.agents/plans/2026-08-18-dispatch-back-on-track/PLAN.md`
 Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 
@@ -10,8 +10,8 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 
 - Objective: restore reviewed Studio/Codex/Claude work to trunk, prove this
   machine, and leave the remaining Claude path dependency-ordered.
-- Final outcome: blocked at the explicit readiness/merge and live-provider
-  authorization gates after all safe implementation and verification completed.
+- Final outcome: resumed after explicit user approval of both the readiness/merge
+  ceremony and the contained live-provider/host-evaluation ceremony.
 - Final branch / stack tip: PR #94 head `142c58a`; PR #95 head `f51e95e`; draft
   PR #96 head `8659ee2`.
 - Final PR range: [PR #93](https://github.com/outfitter-dev/dispatch/pull/93) through
@@ -115,6 +115,13 @@ Goal: `.agents/plans/2026-08-18-dispatch-back-on-track/GOAL.md`
 - Result: the goal cannot lawfully progress to landing or live-provider proof without direct user approval under repository policy.
 - Next: on resume, re-read live state, then perform only the ceremony or ceremonies explicitly approved by the user.
 - Blockers: explicit readiness/merge authorization; separately, explicit live-Claude/provider authorization.
+
+2026-08-18 - Both ceremonies authorized
+- Changed: user explicitly replied “Approve both” and delegated ordering; no readiness or merge mutation occurred before this ledger update.
+- Verified: re-read repo guidance and Graphite/GitHub/Linear/goal workflow instructions; live main, PR heads, hosted checks, review threads, and owned worktrees remain clean.
+- Result: authorization gates are open. Merge ceremony will run first so live Claude proof exercises landed code.
+- Next: restore missing local Graphite metadata for the PR #93 -> PR #94 stack, dry-run it, mark draft PR #96 ready, and revalidate all newly triggered gates before merge.
+- Blockers: none; stop on any topology, CI, review, or live-state divergence.
 ```
 
 ## Local Review Log
@@ -174,9 +181,9 @@ not perform or authorize a readiness transition.
 
 | Action / Constraint | Status | Evidence |
 | --- | --- | --- |
-| No merge without explicit user approval | respected | PRs #93-#96 remain open |
-| No new PR readiness transition without explicit user approval | respected | all three PRs inherited non-draft status before this packet |
-| Keep new security PR draft until explicit readiness approval | respected | PR #96 remains draft |
+| No merge without explicit user approval | authorized, not yet exercised | user explicitly approved both ceremonies; PRs #93-#96 remain open at this checkpoint |
+| No new PR readiness transition without explicit user approval | authorized for PR #96, not yet exercised | user explicitly approved both ceremonies |
+| Keep new security PR draft until explicit readiness approval | satisfied through approval checkpoint | PR #96 remains draft until the next recorded action |
 | No package publish / registry mutation unless authorized | respected | build/package inspection only |
 | No live Claude/provider mutation without separate approval | respected | no live Claude launch ran |
 | No secrets, prompt content, or settings contents exposed | respected | metadata-only plan; fake-runtime tests |
@@ -191,8 +198,8 @@ source-control ownership rule.
 
 ## Final State
 
-- Goal completion condition: not met; blocked on explicit authorization rather
-  than implementation, review, CI, packaging, or isolated-runtime failures.
+- Goal completion condition: not met; execution resumed with both required
+  authorization gates open.
 - Graphite / branch state: compatibility stack ordered PR #93 -> PR #94; PR #95 independent.
 - PR state: PRs #93-#95 open/non-draft/merge-clean/review-clean; PR #96 open,
   draft, merge-clean, and locally/hosted-check clean.
