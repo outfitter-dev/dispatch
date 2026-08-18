@@ -356,6 +356,32 @@ async def test_pre_exec_failure_remains_retryable_command_failure(tmp_path: Path
         )
 
 
+@pytest.mark.parametrize("launch_output", ["", "518b912b\n91abcdef\n"])
+async def test_exit_zero_launch_without_one_short_id_is_indeterminate_and_private(
+    tmp_path: Path, launch_output: str
+) -> None:
+    prompt = "never retain this private prompt"
+
+    async def run(
+        _argv: tuple[str, ...], _cwd: Path, _environment: Mapping[str, str]
+    ) -> ClaudeProcessResult:
+        return ClaudeProcessResult(0, launch_output)
+
+    with pytest.raises(ClaudeLaunchIndeterminateError) as caught:
+        await launch_claude_background(
+            ClaudeLaunchEnvelope(cwd=tmp_path, initial_text=prompt),
+            run_process=run,
+            environment={},
+            arg_max=100_000,
+        )
+
+    assert caught.value.retry_safe is False
+    assert caught.value.__cause__ is None
+    assert prompt not in str(caught.value)
+    if launch_output:
+        assert launch_output not in str(caught.value)
+
+
 def test_platform_preflight_accounts_for_argv_and_environment_without_leaking() -> None:
     prompt = "private prompt body"
     with pytest.raises(ClaudeLaunchArgvLimitError) as caught:

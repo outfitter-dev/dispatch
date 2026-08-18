@@ -188,7 +188,12 @@ async def launch_claude_background(
     else:
         if launched.returncode != 0:
             raise ClaudeLaunchCommandError("Claude background launch failed")
-        short_id = _parse_short_id(launched.stdout)
+        try:
+            short_id = _parse_short_id(launched.stdout)
+        except ClaudeLaunchOutputError:
+            raise ClaudeLaunchIndeterminateError(
+                "Claude background launch is indeterminate; automatic retry is prohibited"
+            ) from None
     try:
         roster = await runner(
             ("claude", "agents", "--json", "--all"), envelope.cwd, launch_environment
