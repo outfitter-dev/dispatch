@@ -139,6 +139,7 @@
     ]
   },
   "codex_cli_version": "0.147.0",
+  "minimum_codex_cli_version": "0.147.0",
   "schema_files": {
     "experimental": 361,
     "stable": 285

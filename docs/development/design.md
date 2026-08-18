@@ -2,7 +2,7 @@
 
 A local control plane for orchestrating Codex agent lanes (threads) over the Codex App Server: create/attach lanes, send work or context, queue delivery, stop active turns, and automate pings on time- and event-based triggers. One authored contract per operation is projected onto multiple surfaces — CLI now, MCP now, remote control later — with no drift.
 
-Status: approved design, implemented through v0 and updated for dispatch-local refs / flat thread CLI. Companion research (schema refreshed against `codex-cli 0.147.0`): [`docs/research/app-server-verification.md`](../research/app-server-verification.md) and [`docs/research/orchestration-thesis.md`](../research/orchestration-thesis.md). Decisions: [`docs/adrs/`](../adrs/). Execution ledger: [`../../.agents/plans/v0/RETRO.md`](../../.agents/plans/v0/RETRO.md).
+Status: approved design, implemented through v0 and updated for dispatch-local refs / flat thread CLI. Companion research (schema provenance currently `codex-cli 0.147.0`): [`docs/research/app-server-verification.md`](../research/app-server-verification.md) and [`docs/research/orchestration-thesis.md`](../research/orchestration-thesis.md). Decisions: [`docs/adrs/`](../adrs/). Execution ledger: [`../../.agents/plans/v0/RETRO.md`](../../.agents/plans/v0/RETRO.md).
 
 ## Naming
 
@@ -147,7 +147,7 @@ Approvals are server→client JSON-RPC requests: while pending the lane emits `t
 
 All stable server requests enter one generic request stream before category-specific compatibility events. Dispatch persists only correlation metadata and lifecycle state, keyed by a dispatch-local id plus an App Server connection generation so JSON-RPC id reuse after restart is safe. Response senders atomically claim `pending -> responding`, send once, then finalize to `responded`, `denied`, `timed_out`, or `failed`; reconnect marks requests from the dead connection failed. The CLI and grouped MCP surface project one list op and one generic response op rather than one tool per App Server method.
 
-Schema is regenerated per binary (`codex app-server generate-json-schema [--experimental]`); pin the binary and store the generated schema with the build.
+Schema is regenerated per binary (`codex app-server generate-json-schema [--experimental]`). The compatibility manifest records the exact binary version as generated provenance and separately carries a hand-maintained minimum supported version. Refreshing generated evidence preserves that floor. Older binaries produce explicit doctor, integration-skip, and daemon warnings rather than a startup hard failure.
 
 ## Triggers
 
@@ -237,4 +237,4 @@ The client classifies command/file/permission approvals, user input, MCP elicita
 
 - **Cross-process contention** (dispatch vs desktop app-server on one thread) — resolved for v0 by ADR-0005/0018: attached lanes are turn-write locked, while metadata/lifecycle actions are explicit.
 - **MCP transport** — stdio first; SSE/streamable-HTTP later (mirrors Codex/Trails MCP status).
-- **App-server version drift** — pin/record the binary; the current compatibility manifest was generated from `codex-cli 0.147.0`, the latest stable release. The pin tracks stable so the manifest describes what the managed daemon actually speaks; the manifest records the exact reported version string, prerelease suffix included, if a prerelease is ever pinned. The public Python SDK still pins an older binary, so we drive the installed CLI directly and regenerate the compact manifest before relying on new fields.
+- **App-server version drift** — record the exact binary used to generate the current compatibility manifest and maintain a separate minimum supported version in that manifest. Prerelease suffixes remain part of provenance and compatibility comparisons. The public Python SDK may pin an older binary, so Dispatch drives the installed CLI directly, warns when it is below the supported floor, and regenerates the compact manifest before relying on new fields.

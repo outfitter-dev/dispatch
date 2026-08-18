@@ -24,6 +24,7 @@ from outfitter.dispatch import config
 from outfitter.dispatch.client.client import AppServerClient
 from outfitter.dispatch.client.models import ClientInfo
 from outfitter.dispatch.client.transport import StdioTransport
+from outfitter.dispatch.codex_compat import inspect_codex_binary
 from outfitter.dispatch.daemon.lifecycle import is_daemon_up
 from outfitter.dispatch.registry.store import SCHEMA_VERSION
 from outfitter.dispatch.version import package_version
@@ -134,13 +135,7 @@ def _codex_binary_check() -> DoctorCheck:
             recovery="Install or expose Codex CLI before starting dispatchd.",
         )
     try:
-        proc = subprocess.run(
-            [codex, "--version"],
-            check=False,
-            text=True,
-            capture_output=True,
-            timeout=5,
-        )
+        compatibility = inspect_codex_binary(codex)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return DoctorCheck(
             name="codex_binary",
@@ -150,21 +145,41 @@ def _codex_binary_check() -> DoctorCheck:
             recovery="Verify `codex --version` works in the same shell or Codex context.",
             data={"path": codex},
         )
-    output = (proc.stdout or proc.stderr).strip()
-    if proc.returncode != 0:
+    except (subprocess.CalledProcessError, ValueError) as exc:
         return DoctorCheck(
             name="codex_binary",
             status="fail",
-            summary="codex --version failed",
-            detail=output,
+            summary="codex --version failed or reported an unsupported version shape",
+            detail=str(exc),
             recovery="Fix the Codex CLI install before starting dispatchd.",
-            data={"path": codex, "returncode": proc.returncode},
+            data={"path": codex},
+        )
+    data: dict[str, object] = {
+        "path": compatibility.path,
+        "version": compatibility.version,
+        "minimum_version": compatibility.minimum_version,
+    }
+    if not compatibility.supported:
+        return DoctorCheck(
+            name="codex_binary",
+            status="warn",
+            summary=(
+                f"Codex CLI {compatibility.version} is below the supported floor "
+                f"{compatibility.minimum_version}"
+            ),
+            detail=f"Resolved binary: {compatibility.path}",
+            recovery=(
+                "Update Codex CLI, then re-run `dispatch doctor` before relying on "
+                "app-server compatibility."
+            ),
+            data=data,
         )
     return DoctorCheck(
         name="codex_binary",
         status="ok",
-        summary=output or "codex version command succeeded",
-        data={"path": codex, "version": output},
+        summary=f"codex-cli {compatibility.version}",
+        detail=f"Resolved binary: {compatibility.path}",
+        data=data,
     )
 
 

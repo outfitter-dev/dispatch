@@ -84,7 +84,14 @@ def _run(command: list[str], *args: str) -> str:
     return completed.stdout.strip()
 
 
-def build_manifest(command: list[str]) -> dict[str, object]:
+def _minimum_codex_cli_version(path: Path) -> str:
+    value = _json(path).get("minimum_codex_cli_version")
+    if not isinstance(value, str):
+        raise ValueError(f"{path} must define the hand-maintained minimum_codex_cli_version")
+    return value
+
+
+def build_manifest(command: list[str], *, minimum_codex_cli_version: str) -> dict[str, object]:
     # Record the exact reported version, prerelease suffix included: dispatch
     # pins prerelease builds, and truncating to the release line would claim a
     # stable version that may not exist yet (e.g. 0.148.0-alpha.9 -> "0.148.0").
@@ -107,6 +114,7 @@ def build_manifest(command: list[str]) -> dict[str, object]:
         experimental_requests = _methods(experimental / "ClientRequest.json")
         return {
             "codex_cli_version": version,
+            "minimum_codex_cli_version": minimum_codex_cli_version,
             "schema_files": {
                 "stable": sum(1 for path in stable.rglob("*") if path.is_file()),
                 "experimental": sum(1 for path in experimental.rglob("*") if path.is_file()),
@@ -218,7 +226,8 @@ def main() -> None:
     command = list(args.command)
     if command[:1] == ["--"]:
         command = command[1:]
-    manifest = build_manifest(command or ["codex"])
+    minimum = _minimum_codex_cli_version(args.output)
+    manifest = build_manifest(command or ["codex"], minimum_codex_cli_version=minimum)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
