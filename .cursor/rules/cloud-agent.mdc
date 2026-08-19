@@ -1,0 +1,13 @@
+---
+description: Cursor Cloud environment caveats for dispatch (not shared with Codex/Claude fieldguides)
+alwaysApply: true
+---
+
+# Cursor Cloud environment
+
+Cursor-only operating notes. Canonical project guidance stays in `AGENTS.md`. Standard commands live in the `justfile` and `README.md`.
+
+- **Toolchain lives in the Cloud snapshot, not this repo.** `uv`, `just`, and the Codex CLI are under `~/.local/bin`. The startup update script is `"$HOME/.local/bin/uv" sync` (explicit path because a clean non-interactive shell may omit `~/.local/bin` from `PATH`). System `python3` is 3.12; `uv` provisions 3.13. Always go through `uv run`.
+- **`dispatchd` needs the `codex` binary to bind its socket.** `run_daemon` spawns `codex app-server` and completes `initialize()` before listening. Without `codex` on `PATH`, `dispatch up` times out. The CLI floor is `minimum_codex_cli_version()` (currently 0.147.0).
+- **Do not expect Codex login or model-turn coverage in Cloud Agents.** Do not request, store, or reuse personal Codex/OpenAI credentials in this remote environment. Treat live assistant turns, `just test-int`, and `just scenario` as operator-local / opt-in. The Cloud bar is `just check` plus protocol-level CLI/daemon work that does not need `~/.codex/auth.json` (`dispatch up`, `dispatch doctor`, `dispatch models`, lane create/list/get/tail). `dispatch doctor` may report overall `warn` solely for missing `codex_auth`; that is expected. Integration tests auto-skip without auth.
+- **`CODEX_HOME` defaults to `~/.codex`.** Owned lanes from `dispatch new` are real Codex threads. Tests must keep using the isolated ephemeral harness in `tests/integration/conftest.py` and must never touch live operator state.
