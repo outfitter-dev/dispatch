@@ -22,6 +22,10 @@ test-int *args:
 pypi-smoke *args:
     uv run python scripts/check_pypi_smoke.py {{args}}
 
+# Show whether pyproject.toml's version would cut a GitHub Release.
+release-status:
+    uv run python scripts/cut_github_release.py
+
 # Run a live agent scenario against an isolated DISPATCH_HOME/CODEX_HOME.
 scenario *args:
     uv run python scripts/run_scenario.py {{args}}

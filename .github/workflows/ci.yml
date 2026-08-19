@@ -32,3 +32,24 @@ jobs:
         run: uv build
       - name: Inspect package contents
         run: uv run python scripts/check_package_contents.py
+
+  release:
+    name: Cut GitHub Release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'outfitter-dev/dispatch'
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+      - name: Cut GitHub Release if version is untagged
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: uv run --no-project python scripts/cut_github_release.py --apply

@@ -179,30 +179,35 @@ Common recovery paths:
 
 ## Release Publishing
 
-Maintainers publish `outfitter-dispatch` through PyPI Trusted Publishing from
-GitHub Actions. The PyPI pending/trusted publisher must match:
+`project.version` in `pyproject.toml` is the release trigger. Maintainers bump
+that version (and regenerate `uv.lock`) on a PR. After the PR merges to `main`
+and CI `check` is green, Actions cuts GitHub Release `v<version>` when that tag
+does not already exist. Publishing the GitHub Release runs `publish.yml`, which
+uploads to PyPI through Trusted Publishing and then confirms the version is
+installable with `just pypi-smoke -- --install-only`.
+
+The PyPI pending/trusted publisher must match:
 
 - project: `outfitter-dispatch`
 - repository: `outfitter-dev/dispatch`
 - workflow: `publish.yml`
 - environment: `pypi`
 
-Publishing is triggered by a published GitHub Release. Before creating a
-release, bump `project.version` in `pyproject.toml`, run:
+Do not upload with a long-lived PyPI token unless the trusted publisher path is
+unavailable and the maintainer explicitly chooses that fallback. If a release
+tag already exists, a later `main` push is a no-op for publishing.
+
+The full daemon/App Server smoke still needs a local Codex install. After PyPI
+has the version, run:
 
 ```bash
-just check
+just pypi-smoke -- --package-spec outfitter-dispatch==<version>
 ```
 
-After the GitHub Release publishes to PyPI, run `just pypi-smoke -- --package-spec
-outfitter-dispatch==<version>` to verify the public install path. The smoke
-refreshes the package under test in uv's cache, so an immediate post-publish
-check does not reuse an early "version not found" resolver result.
-
-Then create and publish a GitHub Release for the same tag, for example
-`v0.1.0`. Do not upload with a long-lived PyPI token unless the trusted
-publisher path is unavailable and the maintainer explicitly chooses that
-fallback.
+The smoke refreshes the package under test in uv's cache, so an immediate
+post-publish check does not reuse an early "version not found" resolver result.
+Use `just release-status` to see whether the current tree would cut a GitHub
+Release.
 
 ## Lanes
 

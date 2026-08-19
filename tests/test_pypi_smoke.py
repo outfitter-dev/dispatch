@@ -49,3 +49,29 @@ def test_dispatch_refreshes_target_package_cache(
             "--version",
         ]
     ]
+
+
+def test_install_only_skips_daemon_commands(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        if cmd[-1] == "--help":
+            return subprocess.CompletedProcess(cmd, 0, stdout="Usage: dispatch\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="dispatch 0.11.0\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "outfitter-dispatch"\nversion = "0.11.0"\n'
+    )
+
+    assert (
+        check_pypi_smoke.main(["--install-only", "--package-spec", "outfitter-dispatch==0.11.0"])
+        == 0
+    )
+    invoked = [call[-1] for call in calls]
+    assert invoked == ["--version", "--help"]
+    assert "up" not in invoked

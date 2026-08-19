@@ -25,3 +25,32 @@ jobs:
         run: uv build
       - name: Publish distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  confirm:
+    name: Confirm PyPI install
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+      - name: Install published package
+        env:
+          VERSION: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          version="${VERSION#v}"
+          spec="outfitter-dispatch==${version}"
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if uv run --no-project python scripts/check_pypi_smoke.py --install-only --package-spec "${spec}"; then
+              exit 0
+            fi
+            echo "PyPI not ready yet (attempt ${attempt}); waiting"
+            sleep 20
+          done
+          echo "Published ${spec} was not installable from PyPI" >&2
+          exit 1
