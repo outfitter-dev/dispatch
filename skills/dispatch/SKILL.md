@@ -146,7 +146,7 @@ helper is a vanilla git preflight, not a Codex protocol feature.
 For worktree-backed lanes, treat the launched runtime as the source of truth.
 Dispatch should be given the exact `--cwd`; it should not assume fixed Codex
 worktree paths such as `.codex/worktrees/<run>/<lane>` or
-`~/.config/codex/worktrees/<name>`. Codex-managed worktrees may be detached or
+`${CODEX_HOME:-$HOME/.codex}/worktrees/<name>`. Codex-managed worktrees may be detached or
 unnamed, so an empty `git branch --show-current` is not automatically a failure.
 Verify identity with `pwd`, `git rev-parse --show-toplevel`,
 `git rev-parse --short HEAD`, `git status --short`, and any repo-provided runtime

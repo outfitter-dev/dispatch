@@ -497,7 +497,7 @@ git preflight, not a Codex protocol feature.
 For worktree-backed lanes, pass the exact `--cwd` you want Dispatch to launch in
 and treat the runtime checkout as authoritative. Do not depend on a fixed Codex
 worktree layout such as `.codex/worktrees/<run>/<lane>` or
-`~/.config/codex/worktrees/<name>`; Codex-managed worktrees may be detached or
+`${CODEX_HOME:-$HOME/.codex}/worktrees/<name>`; Codex-managed worktrees may be detached or
 unnamed, and an empty `git branch --show-current` is not automatically a failure.
 Verify identity with `pwd`, `git rev-parse --show-toplevel`,
 `git rev-parse --short HEAD`, `git status --short`, and any repo-provided runtime
