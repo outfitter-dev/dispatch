@@ -182,9 +182,11 @@ Common recovery paths:
 `project.version` in `pyproject.toml` is the release trigger. Maintainers bump
 that version (and regenerate `uv.lock`) on a PR. After the PR merges to `main`
 and CI `check` is green, Actions cuts GitHub Release `v<version>` when that tag
-does not already exist. Publishing the GitHub Release runs `publish.yml`, which
-uploads to PyPI through Trusted Publishing and then confirms the version is
-installable with `just pypi-smoke -- --install-only`.
+does not already exist, then `workflow_dispatch`es `publish.yml`. GitHub does
+not start other workflows from a `GITHUB_TOKEN` `release` event, so the
+dispatch step is required for Trusted Publishing. `publish.yml` also still
+runs from a manually published GitHub Release. It uploads to PyPI and then
+confirms the version is installable with `just pypi-smoke -- --install-only`.
 
 The PyPI pending/trusted publisher must match:
 

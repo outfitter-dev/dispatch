@@ -1,7 +1,8 @@
 """Cut a GitHub Release for ``pyproject.toml``'s current version when missing.
 
-CI on ``main`` runs this after a green check. Creating the GitHub Release
-triggers ``.github/workflows/publish.yml`` (PyPI Trusted Publishing).
+CI on ``main`` runs this after a green check. ``GITHUB_TOKEN`` cannot start
+another workflow from the ``release`` event it creates, so CI then
+``workflow_dispatch``es ``publish.yml`` (PyPI Trusted Publishing).
 """
 
 from __future__ import annotations
@@ -35,9 +36,11 @@ def main(argv: list[str] | None = None) -> int:
     existing = collect_existing_tags()
     plan = plan_release(version=version, existing_tags=existing)
     print(plan.reason)
-    if plan.action == "skip" or not args.apply:
-        return 0
-    create_github_release(plan, target=_release_target(args.target))
+    created = False
+    if plan.action == "create" and args.apply:
+        create_github_release(plan, target=_release_target(args.target))
+        created = True
+    write_github_output(plan, created=created)
     return 0
 
 
@@ -89,6 +92,20 @@ def collect_existing_tags() -> set[str]:
                     if isinstance(tag_name, str) and tag_name:
                         tags.add(tag_name)
     return tags
+
+
+def write_github_output(
+    plan: ReleasePlan, *, created: bool, output_path: Path | None = None
+) -> None:
+    path = output_path
+    if path is None:
+        raw = os.environ.get("GITHUB_OUTPUT", "").strip()
+        if not raw:
+            return
+        path = Path(raw)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(f"created={'true' if created else 'false'}\n")
+        handle.write(f"tag={plan.tag}\n")
 
 
 def create_github_release(plan: ReleasePlan, *, target: str) -> None:

@@ -9,6 +9,7 @@ from scripts.cut_github_release import (
     plan_release,
     read_project_version,
     release_tag_for,
+    write_github_output,
 )
 
 
@@ -41,3 +42,12 @@ def test_plan_release_skips_existing_tag() -> None:
 
     assert plan.action == "skip"
     assert plan.reason == "v0.11.0 already exists"
+
+
+def test_write_github_output_records_created_tag(tmp_path: Path) -> None:
+    output = tmp_path / "github_output"
+    plan = plan_release(version="0.11.0", existing_tags=set())
+
+    write_github_output(plan, created=True, output_path=output)
+
+    assert output.read_text() == "created=true\ntag=v0.11.0\n"

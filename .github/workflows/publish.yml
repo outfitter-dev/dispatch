@@ -3,6 +3,12 @@ name: Publish
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (e.g. v0.11.0)
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -17,6 +23,8 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
       - name: Install uv
         uses: astral-sh/setup-uv@v8.2.0
         with:
@@ -34,13 +42,15 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
       - name: Install uv
         uses: astral-sh/setup-uv@v8.2.0
         with:
           enable-cache: true
       - name: Install published package
         env:
-          VERSION: ${{ github.event.release.tag_name }}
+          VERSION: ${{ inputs.tag || github.event.release.tag_name }}
         run: |
           set -euo pipefail
           version="${VERSION#v}"
