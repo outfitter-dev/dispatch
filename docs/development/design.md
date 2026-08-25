@@ -220,7 +220,8 @@ The client classifies command/file/permission approvals, user input, MCP elicita
 - Promote the existing probe scripts (`/tmp/codex_{stdio,dm,lab4,fanout}.py`) into the integration suite, run against a **real ephemeral app-server with an isolated `CODEX_HOME`** (zero pollution; `ephemeral:true` lanes).
 - `test_examples(registry)` runs op examples as assertions.
 - Unit: message router (canned JSONL), trigger/guard evaluation, registry, error projections.
-- Release smoke: `just pypi-smoke -- --package-spec outfitter-dispatch==<version>` installs the published package with `uvx`, uses a temporary `DISPATCH_HOME`, verifies daemon/model/list paths, and shuts down cleanly.
+- Release publishing: bump `project.version` on a PR; a green `main` CI run cuts GitHub Release `v<version>` when that tag is missing, then `workflow_dispatch`es `publish.yml` (a `GITHUB_TOKEN` release event cannot start it) to Trusted-Publish to PyPI and confirm a clean `uvx` install.
+- Release smoke: `just pypi-smoke -- --package-spec outfitter-dispatch==<version>` installs the published package with `uvx`, uses a temporary `DISPATCH_HOME`, verifies daemon/model/list paths, and shuts down cleanly. `--install-only` skips the daemon/App Server half for CI confirmation.
 - Agent workflow smoke: `just scenario -- tests/scenarios/basic_coordination.toml` starts a real isolated daemon, creates live Codex lanes, waits for completion, and verifies list/get/tail state.
 
 ## Rough build slices (detailed by the implementation plan)

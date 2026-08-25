@@ -30,6 +30,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         version = _dispatch(package_spec, ["--version"], env)
         _expect(version.stdout.strip().startswith("dispatch "), version.stdout)
+        if args.install_only:
+            help_text = _dispatch(package_spec, ["--help"], env)
+            _expect("Usage:" in help_text.stdout or "usage:" in help_text.stdout, help_text.stdout)
+            print("PyPI install-only smoke passed")
+            return 0
 
         schema = _dispatch_json(package_spec, ["schema", "models"], env)
         _expect(schema.get("op") == "models", "schema op is not models")
@@ -63,7 +68,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     finally:
         if not args.keep_home:
-            _dispatch(package_spec, ["down", "--json"], env, check=False)
+            if not args.install_only:
+                _dispatch(package_spec, ["down", "--json"], env, check=False)
             shutil.rmtree(home, ignore_errors=True)
 
 
@@ -86,6 +92,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--keep-home",
         action="store_true",
         help="keep the temporary DISPATCH_HOME for debugging",
+    )
+    parser.add_argument(
+        "--install-only",
+        action="store_true",
+        help="install from PyPI and check --version/--help without starting a daemon",
     )
     return parser.parse_args(raw_args)
 
