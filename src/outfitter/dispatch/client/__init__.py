@@ -26,7 +26,7 @@ from .events import (
     TurnStarted,
 )
 from .models import InitializeResult, JsonRpcError, SandboxPolicy, ThreadInfo
-from .transport import StdioTransport, Transport
+from .transport import StdioTransport, Transport, UnixSocketTransport
 
 __all__ = [
     "AccountRateLimitsUpdated",
@@ -55,4 +55,5 @@ __all__ = [
     "TurnCompleted",
     "TurnFailed",
     "TurnStarted",
+    "UnixSocketTransport",
 ]

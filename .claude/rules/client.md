@@ -4,9 +4,10 @@ Path: `src/outfitter/dispatch/client/`. The ONLY place that spawns or speaks to 
 
 ## Transport
 
-- Spawn `codex app-server --listen stdio://` via `asyncio.create_subprocess_exec`. **stdio JSONL is the only bare-JSON transport** — one newline-delimited JSON message per line. (unix/ws are WebSocket-framed; the managed daemon control socket is auth-gated. Do not use them.)
+- Default to spawning `codex app-server --listen stdio://` via `asyncio.create_subprocess_exec`. **stdio JSONL is the only bare-JSON transport** — one newline-delimited JSON message per line.
+- An explicit absolute `[app_server].socket_path` / `DISPATCH_APP_SERVER_SOCKET` may attach to an existing local App Server. Unix transport is WebSocket-framed; use a real WebSocket client. Dispatch owns only that connection and must never stop or unlink the shared server. Do not silently fall back to stdio when an explicit socket fails.
 - One app-server process hosts many lanes. A single connection multiplexes them.
-- Detect crash via stdout EOF; surface it so the daemon can restart + re-resume.
+- Detect stdio EOF or socket disconnect; surface it so the daemon can restart/reconnect + re-resume.
 
 ## Message router
 

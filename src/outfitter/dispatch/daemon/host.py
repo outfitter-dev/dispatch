@@ -14,9 +14,9 @@ from pathlib import Path
 import structlog
 
 from outfitter.dispatch.client.client import AppServerClient
-from outfitter.dispatch.client.transport import StdioTransport
+from outfitter.dispatch.client.transport import StdioTransport, UnixSocketTransport
 from outfitter.dispatch.codex_compat import inspect_codex_binary
-from outfitter.dispatch.config import capture_policy, runtime_policy
+from outfitter.dispatch.config import app_server_socket_path, capture_policy, runtime_policy
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.core.ops import REGISTRY
 from outfitter.dispatch.core.reactor import Reactor
@@ -33,12 +33,17 @@ def _utcnow() -> datetime:
 
 
 async def _spawn_client() -> AppServerClient:
-    transport = StdioTransport()
+    transport = _configured_transport()
     await transport.start()
     client = AppServerClient(transport)
     await client.start()
     await client.initialize()
     return client
+
+
+def _configured_transport() -> StdioTransport | UnixSocketTransport:
+    socket = app_server_socket_path()
+    return UnixSocketTransport(socket) if socket is not None else StdioTransport()
 
 
 async def _warn_if_codex_below_floor(log: structlog.stdlib.BoundLogger) -> None:

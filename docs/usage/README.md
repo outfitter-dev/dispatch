@@ -119,6 +119,46 @@ DISPATCH_HOME=/tmp/dispatch-dev uv run dispatch up
 
 The lower-level overrides are `DISPATCH_SOCKET`, `DISPATCH_DB`, and `DISPATCH_PIDFILE`.
 
+### Attach To A Shared App Server
+
+Dispatch owns a stdio App Server subprocess by default. To attach to an already-running
+local App Server instead, configure one absolute Unix socket path:
+
+```toml
+# ~/.dispatch/config.toml
+[app_server]
+socket_path = "/Users/me/.codex/app-server-control/app-server-control.sock"
+```
+
+For a bounded one-shot test, use the environment without editing config:
+
+```bash
+DISPATCH_APP_SERVER_SOCKET="$HOME/.codex/app-server-control/app-server-control.sock" \
+  dispatch doctor
+DISPATCH_APP_SERVER_SOCKET="$HOME/.codex/app-server-control/app-server-control.sock" \
+  dispatch up
+```
+
+`doctor` reports `data.transport="unix"` and the selected socket when initialization
+succeeds. An explicit socket is fail-closed: if it is missing or incompatible, Dispatch
+does not spawn a fallback stdio server. `dispatch down` closes Dispatch's client
+connection but never stops or unlinks the shared App Server.
+
+The server must be ready before Dispatch starts. If Codex Desktop is also part of a
+bounded shared-daemon experiment, start the managed daemon first and completely relaunch
+Desktop with its current undocumented gate:
+
+```bash
+open --env CODEX_APP_SERVER_USE_LOCAL_DAEMON=1 -b com.openai.codex
+```
+
+Verify Desktop is connected to the same socket before starting Dispatch. Do not make
+this launch setup persistent until the one-launch topology is proven: Desktop may fall
+back to a private stdio server when the daemon probe fails. Shared transport does not
+change lane authority; attached lanes remain write-locked by default, and concurrent
+Desktop/Dispatch writes are outside this experiment. See
+[`ADR-0027`](../adrs/0027-optional-shared-app-server-socket.md).
+
 ## Shell Completions
 
 Dispatch exposes completion scripts from the derived CLI surface:
@@ -150,7 +190,8 @@ Checks include:
 - daemon reachability, socket path, pidfile, and stale runtime files.
 - registry database readability, SQLite `quick_check`, required tables, and schema version.
 - packaged `dispatch`/`dm` skills and plugin MCP config.
-- low-risk `codex app-server --listen stdio://` initialize smoke.
+- low-risk App Server initialize smoke through owned stdio or the explicitly configured
+  shared Unix socket.
 
 Common recovery paths:
 
@@ -174,8 +215,10 @@ Common recovery paths:
   `--allow-running` is explicitly set for a controlled recovery.
 - Registry integrity failure: stop the daemon, back up the database at the path shown
   by doctor, and recreate it or inspect with `sqlite3`.
-- App Server initialize failure: run `codex app-server --listen stdio://` directly in
-  the same shell and fix the Codex CLI/auth problem before relying on thread operations.
+- App Server initialize failure in default mode: run `codex app-server --listen stdio://`
+  directly in the same shell and fix the Codex CLI/auth problem before relying on thread
+  operations. In shared mode, verify the configured Unix socket exists and its daemon is
+  ready; Dispatch will not replace it with a private server.
 
 ## Release Publishing
 

@@ -2,9 +2,54 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from pytest import MonkeyPatch
 
-from outfitter.dispatch.config import CapturePolicy, capture_policy, config_path, runtime_policy
+from outfitter.dispatch.config import (
+    CapturePolicy,
+    app_server_socket_path,
+    capture_policy,
+    config_path,
+    runtime_policy,
+)
+
+
+def test_app_server_socket_defaults_to_owned_stdio(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path))
+    monkeypatch.delenv("DISPATCH_APP_SERVER_SOCKET", raising=False)
+
+    assert app_server_socket_path() is None
+
+
+def test_app_server_socket_reads_local_config(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path))
+    monkeypatch.delenv("DISPATCH_APP_SERVER_SOCKET", raising=False)
+    socket = tmp_path / "app-server.sock"
+    config_path().write_text(f'[app_server]\nsocket_path = "{socket}"\n')
+
+    assert app_server_socket_path() == socket
+
+
+def test_app_server_socket_env_overrides_local_config(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path))
+    configured = tmp_path / "configured.sock"
+    overridden = tmp_path / "overridden.sock"
+    config_path().write_text(f'[app_server]\nsocket_path = "{configured}"\n')
+    monkeypatch.setenv("DISPATCH_APP_SERVER_SOCKET", str(overridden))
+
+    assert app_server_socket_path() == overridden
+
+
+def test_app_server_socket_rejects_relative_path(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path))
+    config_path().write_text('[app_server]\nsocket_path = "relative.sock"\n')
+
+    with pytest.raises(ValueError, match="absolute path"):
+        app_server_socket_path()
 
 
 def test_runtime_policy_reads_local_config(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:

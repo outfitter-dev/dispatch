@@ -11,7 +11,7 @@ Status: approved design, implemented through v0 and updated for dispatch-local r
 
 ## Goals / non-goals
 
-Goals (v1): a single daemon that owns one Codex app-server and drives many lanes; a typed CLI and an MCP server, both derived from one contract set; time + event triggers; durable registry of lanes and triggers; full read/write on self-spawned owned lanes. Existing desktop lanes can be attached as managed lanes. They remain blocked for turn-writing and history-mutating ops by default per ADR-0005, while explicit metadata/lifecycle actions and search can target managed or unmanaged Codex threads per ADR-0018. A local operator policy may explicitly opt in to attached-lane writes for trusted setups.
+Goals (v1): a single daemon that owns one Codex App Server connection and drives many lanes; a typed CLI and an MCP server, both derived from one contract set; time + event triggers; durable registry of lanes and triggers; full read/write on self-spawned owned lanes. The default connection owns a stdio App Server subprocess; ADR-0027 proposes an explicit Unix-socket attachment mode without server lifecycle ownership. Existing desktop lanes can be attached as managed lanes. They remain blocked for turn-writing and history-mutating ops by default per ADR-0005, while explicit metadata/lifecycle actions and search can target managed or unmanaged Codex threads per ADR-0018. A local operator policy may explicitly opt in to attached-lane writes for trusted setups.
 
 Non-goals (v1): Claude/crew backend; conditional triggers (seam only); dashboard/TUI; full approval policy engine; multi-user; remote-control surface (planned v2).
 
@@ -24,7 +24,7 @@ The recursive nicety: the Codex App Server is itself a one-protocol-many-surface
 ## Architecture
 
 Single long-lived **daemon** (`dispatchd`):
-- Spawns and owns **one** `codex app-server --listen stdio://` subprocess, sharing `CODEX_HOME=~/.codex` so it sees existing desktop threads. Communicates in newline-delimited JSON (the only bare-JSONL transport; unix/ws are WebSocket-framed and the managed daemon's control socket is auth-gated — see research notes).
+- Owns **one** App Server connection. By default it spawns `codex app-server --listen stdio://`, sharing `CODEX_HOME=~/.codex`, and communicates in newline-delimited JSON. An explicit absolute socket endpoint attaches with WebSocket-over-Unix; Dispatch owns only that connection and fails closed instead of falling back to a second stdio server.
 - A **message router** demuxes responses (by request id) and notifications (by `threadId`) from the single app-server connection into per-lane async event streams. (Verified pattern; mirrors the Python SDK's internal router.)
 - Hosts the **core**: registry, scheduler, reactor, and the contract handlers. Executes all handlers.
 - Exposes a **control API** over a Unix domain socket — the canonical projection of the contract set.
@@ -43,7 +43,7 @@ contracts ──────►├── MCP (mcp SDK) ─┤──► daemon co
 ## Module layout (clean layers; `client` + `registry` importable without the daemon)
 
 `src/outfitter/dispatch/` (PEP 420 namespace — no `__init__.py` at the `outfitter/` level):
-- `client/` — typed App Server client. Spawns app-server, stdio JSONL, message router, async event streams. Primitives: initialize · thread start/resume/list/read/archive/unarchive/search/name-set · turn start/steer/interrupt · inject_items · approval responder. Pydantic models for wire messages. Importable standalone.
+- `client/` — typed App Server client. Owned stdio and attached WebSocket-over-Unix transports, message router, async event streams. Primitives: initialize · thread start/resume/list/read/archive/unarchive/search/name-set · turn start/steer/interrupt · inject_items · approval responder. Pydantic models for wire messages. Importable standalone.
 - `contracts/` — the op definitions (one per operation) + the registry + projection functions (`derive_cli`, `derive_mcp`, `derive_remote`) + error taxonomy.
 - `registry/` — SQLite (aiosqlite) store of lanes, triggers, and an actions audit log. Importable standalone.
 - `core/` — scheduler (time triggers), reactor (event triggers), trigger model + guards, and the handlers that fulfill the contracts.
@@ -172,7 +172,7 @@ The client classifies command/file/permission approvals, user input, MCP elicita
 
 - **uv** (deps, lockfile, venv, Python-version mgmt, runner) · build backend **hatchling** · **src/ layout + PEP 420 namespace** (`src/outfitter/dispatch/`, no `__init__.py` at `outfitter/`).
 - CLI: **Typer** + **Rich**. Lint/format: **Ruff**. Types: **mypy --strict**. Validation/config: **Pydantic v2** + **pydantic-settings**.
-- Async: stdlib **asyncio** (subprocess + streams + unix socket server). DB: **aiosqlite** (hand-written SQL; no ORM). Logging: **structlog** (also feeds the audit log).
+- Async: stdlib **asyncio** plus **websockets** for an explicitly configured App Server Unix socket. DB: **aiosqlite** (hand-written SQL; no ORM). Logging: **structlog** (also feeds the audit log).
 - MCP: the official Python **`mcp`** SDK (stdio transport first). Scheduling: small custom asyncio scheduler + `croniter` for cron (interval needs no lib). No `dateutil`/RRULE in v1.
 - Tests: **pytest** + **pytest-asyncio**. Hooks: **lefthook** (polyglot; runs ruff/mypy/pytest). Task runner: **just** (justfile) for `test`/`lint`/`typecheck`/`run`. Daemon keep-alive: **launchd** LaunchAgent plist. CI: GitHub Actions + `astral-sh/setup-uv`.
 - Fixture corpus: `tests/fixtures/` stores small named App Server payloads, Codex JSONL sync sources, CLI-smoke notes, and registry builders. Every checked-in fixture should be loaded by a test. Prefer builders over binary SQLite files.

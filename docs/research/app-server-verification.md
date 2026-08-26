@@ -45,6 +45,25 @@ The report concluded there is "no way to connect to an already-running App Serve
 
 Topology implication for tooling: instead of spawn-per-client (Python SDK's current model), run **one managed daemon** and have N clients attach by speaking JSON-RPC through `proxy` over the Unix control socket. This is the multi-client / remote-steering backbone the report could only treat as experimental.
 
+### 2026-08-26 shared-socket refresh
+
+A current isolated probe corrected the older control-socket interpretation below:
+
+- Managed Codex `0.149.0` listening on `unix://` accepted a standard WebSocket
+  HTTP Upgrade and App Server `initialize` directly over the Unix socket.
+- `codex app-server proxy --sock <PATH>` also worked when the caller sent the
+  WebSocket handshake and frames. Proxy is a raw byte bridge, not a JSONL-to-WebSocket
+  translator.
+- Dispatch `0.11.0` with the proposed Unix transport initialized, listed persisted
+  sessions, and disconnected while the same App Server remained running.
+- The live Desktop process still used a private stdio App Server and exposed no
+  control socket. Sharing requires Desktop and Dispatch to be launched against the
+  same managed Unix endpoint; it is not attachment to an already-running private
+  Desktop stdio process.
+
+These findings support ADR-0027's explicit socket mode. They do not unlock concurrent
+Desktop/Dispatch writes to one thread; ADR-0005 remains the authority boundary.
+
 ## Authoritative wire inventory (from `generate-json-schema`)
 
 Regenerate any time (read-only, no network):
@@ -227,7 +246,7 @@ NB on running these: the **default model is a slow reasoner** — benign turns c
 ### Transports — only stdio is bare JSONL
 - **`stdio://` = newline-delimited JSON** (one msg/line). `initialize` → `{userAgent, codexHome, platformFamily, platformOs}`. This is the SDK + desktop transport and the only one that "just works" with raw JSON. ✅
 - **`unix://` and `ws://` are WebSocket-framed**, NOT bare JSONL. Sending raw JSON bytes to a `--listen unix://` socket → server silently closes the connection (connection stays open on idle; closes the instant non-WS bytes arrive). Use a real WebSocket client. Loopback `ws://` needs **no auth** (auth mode applies only to non-loopback listeners: `capability-token` | `signed-bearer-token`).
-- **Daemon control socket** (`~/.codex/app-server-control/…sock`): direct connect is **closed instantly** (auth/credential gate). The sanctioned client is `codex app-server proxy --sock <PATH>` — but feeding it JSONL produced **no passthrough reply** in my tests; the control socket speaks an undocumented wrapper/handshake, not the app-server JSON-RPC directly. Attaching external tooling to the *running daemon* is not a solved path yet — treat as volatile.
+- **Daemon control socket** (`~/.codex/app-server-control/…sock`): this is WebSocket-over-Unix. A raw JSON/JSONL write closes because it omits the WebSocket handshake and framing; that behavior is not evidence of a separate auth wrapper. The sanctioned `codex app-server proxy --sock <PATH>` command bridges raw bytes to the socket and therefore still requires its caller to speak WebSocket. Direct WebSocket initialization was re-verified on 0.149.0, but the transport remains experimental and should be explicitly configured rather than assumed.
 - `--listen unix://PATH` quirk: the socket's parent dir must be a **real directory**, not a symlink — `/tmp` (→`/private/tmp` on macOS) is rejected with "socket directory path exists and is not a directory". Use a real subdir.
 
 ### Turn grammar (captured from a real read-only turn, agent replied "pong")
