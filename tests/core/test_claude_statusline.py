@@ -15,6 +15,10 @@ from outfitter.dispatch.core.claude_statusline import (
     capture_claude_statusline,
     read_claude_statusline_snapshot,
 )
+from outfitter.dispatch.core.usage_capture import (
+    UsageCaptureRecord,
+    write_usage_capture_record,
+)
 
 
 def _payload(
@@ -184,6 +188,22 @@ def test_capture_statusline_retains_last_windows_when_current_limits_are_unavail
         json.dumps({"rate_limits": {"five_hour": {"used_percentage": 101}}}).encode(),
         json.dumps({"rate_limits": {"five_hour": {"used_percentage": "private"}}}).encode(),
         b"x" * (1024 * 1024 + 1),
+        # Integer literal beyond CPython's int-conversion digit limit: json.loads
+        # raises a bare ValueError, not JSONDecodeError.
+        b'{"resets_at": ' + b"9" * 4400 + b"}",
+        # In-limit integer too large for float(): used_percentage conversion
+        # raises OverflowError, not ValidationError.
+        b'{"rate_limits": {"five_hour": {"used_percentage": ' + b"9" * 400 + b"}}}",
+        # Nesting deep enough to exhaust the recursion limit inside json.loads.
+        b'{"a":' * 100_000 + b"1" + b"}" * 100_000,
+        # Invalid UTF-8 bytes: json.loads raises UnicodeDecodeError.
+        b'\xff\xfe{"a": 1}',
+        # Escaped lone surrogate survives json.loads; _fingerprint's UTF-8
+        # encode of session_id raises UnicodeEncodeError post-parse.
+        b'{"session_id": "\\ud800"}',
+        # Lone surrogate in any other captured string field is rejected by
+        # pydantic string validation (ValidationError), never persisted.
+        b'{"model": {"display_name": "x\\ud800y"}}',
     ],
 )
 def test_capture_statusline_rejects_invalid_input_without_clobbering(
@@ -218,30 +238,87 @@ def test_statusline_entrypoint_captures_without_rendering(
 ) -> None:
     payload = json.dumps(_payload()).encode()
     monkeypatch.setenv("DISPATCH_HOME", str(tmp_path))
+    monkeypatch.setattr(sys, "argv", ["dispatch-claude-statusline"])
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(payload)))
 
-    main()
+    with pytest.raises(SystemExit) as excinfo:
+        main()
 
+    assert excinfo.value.code == 0
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
     assert read_claude_statusline_snapshot() is not None
 
 
-def test_statusline_entrypoint_reports_only_generic_failure(
+def test_statusline_entrypoint_fails_open_on_bad_payload_without_leaking(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setenv("DISPATCH_HOME", str(tmp_path))
+    monkeypatch.setattr(sys, "argv", ["dispatch-claude-statusline"])
     monkeypatch.setattr(
         sys,
         "stdin",
         io.TextIOWrapper(io.BytesIO(b"private malformed statusline")),
     )
 
-    with pytest.raises(SystemExit, match="1"):
+    with pytest.raises(SystemExit) as excinfo:
         main()
 
+    assert excinfo.value.code == 0
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == "dispatch: Claude statusline snapshot rejected\n"
     assert "private" not in captured.err
+
+
+def test_statusline_entrypoint_never_delegates_even_with_recorded_renderer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """The legacy helper is capture-only: a recorded original renderer is ignored.
+
+    The documented wrapper pattern invokes this helper from the user's own
+    statusline script; if the helper delegated to the recorded command (which
+    may be that very wrapper), each refresh would recurse indefinitely.
+    """
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path))
+    write_usage_capture_record(
+        UsageCaptureRecord.model_validate(
+            {
+                "provider": "claude",
+                "had_statusline": True,
+                "original_statusline": {"type": "command", "command": "echo DELEGATED"},
+                "installed_command": "dispatch usage-capture run --provider claude",
+                "installed_at": "2026-08-29T12:00:00+00:00",
+            }
+        )
+    )
+    monkeypatch.setattr(sys, "argv", ["dispatch-claude-statusline"])
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(_payload()).encode())))
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    assert excinfo.value.code == 0
+    captured = capfd.readouterr()
+    assert captured.out == ""
+    assert "DELEGATED" not in captured.out
+    assert read_claude_statusline_snapshot() is not None
+
+
+def test_statusline_entrypoint_help_notes_deprecation_and_capture_only(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["dispatch-claude-statusline", "--help"])
+
+    main()
+
+    captured = capsys.readouterr()
+    assert "Deprecated capture-only helper" in captured.out
+    assert "never" in captured.out and "delegates" in captured.out
+    # Until `dispatch usage-capture install` ships, the wrapper pattern stays
+    # the recommendation; hand-wiring `usage-capture run` is warned against
+    # (without a managed restoration record it renders nothing).
+    assert "wrapper" in captured.out
+    assert "dispatch usage-capture install" in captured.out
+    assert "Prefer `dispatch usage-capture run" not in captured.out

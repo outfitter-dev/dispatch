@@ -50,8 +50,9 @@ One `DispatchError` hierarchy in `errors.py` (e.g. `NotFoundError`, `LaneBusyErr
   projections route it intentionally. If a route is missing, the parity tests
   should fail.
 - If a route is intentionally a surface control rather than an op (`doctor`,
-  `up`, `down`, `registry migrate`, `schema`, `mcp`), document why and keep it out
-  of per-op business logic.
+  `up`, `down`, `registry migrate`, `schema`, `mcp`, `usage-capture`), document
+  why and keep it out of per-op business logic (`usage-capture` is daemon-free
+  host integration: its run path must never touch the control socket).
 - Every op exposed on MCP/remote must define `output`.
 - Keep handlers pure-ish: input in, output out (or raise). Side effects go through injected dependencies (the App Server client, the registry) passed via `ctx`, never imported ad hoc.
 - A parity test must stay green — and it checks **behavior/reachability, not

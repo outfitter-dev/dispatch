@@ -10,8 +10,11 @@ Path: `src/outfitter/dispatch/surfaces/`. Each surface is a thin, generated proj
   contract input → calls the daemon control socket → renders the result with
   Rich. The CLI is a **sync** client; it does not import `core/` or `client/`.
   Process/control commands such as `doctor`, `up`, `down`, `registry migrate`,
-  `schema`, and `mcp` are the allowed exceptions: they manage or inspect the
-  surface/runtime itself and must not duplicate op behavior.
+  `schema`, `mcp`, and `usage-capture` are the allowed exceptions: they manage
+  or inspect the surface/runtime itself and must not duplicate op behavior
+  (`usage-capture` is host-machine statusline integration that is daemon-free
+  by contract — its high-frequency run path must never touch the control
+  socket).
 - **MCP** (`mcp.py`): a stdio MCP server (via the `mcp` SDK) from
   `derive_mcp(registry)`; grouped tool handlers route to the daemon control
   socket, same as the CLI. Spawned by the MCP client (Claude/Codex), not hosted

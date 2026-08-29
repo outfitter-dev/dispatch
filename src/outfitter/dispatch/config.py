@@ -91,6 +91,12 @@ def claude_statusline_snapshot_path() -> Path:
     return _base() / "providers" / "claude" / "statusline.json"
 
 
+def claude_usage_capture_dir() -> Path:
+    """Managed Claude statusline wrapper and restoration-record directory."""
+
+    return _base() / "claude"
+
+
 def ensure_base() -> Path:
     base = _base()
     base.mkdir(parents=True, exist_ok=True)
