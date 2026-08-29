@@ -1,10 +1,9 @@
-"""Transport for the App Server: spawn ``codex app-server --listen stdio://`` and
-move newline-delimited JSON over its stdio (the only bare-JSONL transport).
+"""Transports for owned stdio and attached Unix-socket App Servers.
 
 The client depends on the ``Transport`` protocol, not on the concrete subprocess
 implementation, so it is unit-testable with an in-memory fake. ``receive()``
-returns ``None`` on stdout EOF — the daemon reads that as an app-server crash and
-restarts (Phase 5).
+returns ``None`` when the underlying stream closes — the daemon reads that as an
+App Server disconnect and reconnects (Phase 5).
 """
 
 from __future__ import annotations
@@ -14,7 +13,11 @@ import contextlib
 import json
 from collections import deque
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Protocol
+
+from websockets.asyncio.client import ClientConnection, unix_connect
+from websockets.exceptions import ConnectionClosed, ConnectionClosedOK, InvalidHandshake
 
 from .errors import ProtocolError, TransportError
 
@@ -132,3 +135,75 @@ class StdioTransport:
             self._stderr_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._stderr_task
+
+
+class UnixSocketTransport:
+    """App Server WebSocket connection over an existing Unix socket.
+
+    Dispatch owns only this connection. Closing it must never stop or unlink the
+    shared App Server daemon.
+    """
+
+    def __init__(
+        self,
+        socket_path: Path,
+        *,
+        open_timeout: float = 10,
+        read_limit: int = DEFAULT_STDIO_READ_LIMIT,
+    ) -> None:
+        self._socket_path = socket_path
+        self._open_timeout = open_timeout
+        self._read_limit = read_limit
+        self._connection: ClientConnection | None = None
+
+    async def start(self) -> None:
+        try:
+            self._connection = await unix_connect(
+                path=str(self._socket_path),
+                uri="ws://localhost/rpc",
+                compression=None,
+                max_size=self._read_limit,
+                open_timeout=self._open_timeout,
+                proxy=None,
+            )
+        except (OSError, TimeoutError, InvalidHandshake) as exc:
+            raise TransportError(
+                f"failed to connect to App Server socket {self._socket_path}: {exc}"
+            ) from exc
+
+    def _require_connection(self) -> ClientConnection:
+        if self._connection is None:
+            raise TransportError("transport not started")
+        return self._connection
+
+    async def send(self, message: Mapping[str, object]) -> None:
+        connection = self._require_connection()
+        try:
+            await connection.send(json.dumps(dict(message)))
+        except ConnectionClosed as exc:
+            raise TransportError(f"App Server socket write failed: {exc}") from exc
+
+    async def receive(self) -> dict[str, object] | None:
+        connection = self._require_connection()
+        try:
+            raw = await connection.recv()
+        except ConnectionClosedOK:
+            return None
+        except ConnectionClosed as exc:
+            raise TransportError(f"App Server socket closed: {exc}") from exc
+        if not isinstance(raw, str):
+            raise ProtocolError("expected a text WebSocket message from app-server")
+        try:
+            parsed: object = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ProtocolError(f"non-JSON message from app-server: {raw[:200]!r}") from exc
+        if not isinstance(parsed, dict):
+            raise ProtocolError(f"expected a JSON object, got {type(parsed).__name__}")
+        return parsed
+
+    async def close(self) -> None:
+        connection = self._connection
+        if connection is None:
+            return
+        self._connection = None
+        await connection.close()

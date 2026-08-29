@@ -8,8 +8,10 @@ metadata:
 # dispatch
 
 Use `$dispatch` to operate the local dispatch control plane. dispatch owns one
-`codex app-server` through a daemon and exposes one authored op registry through
-CLI and MCP surfaces.
+App Server connection through a daemon and exposes one authored op registry
+through CLI and MCP surfaces. The connection owns a stdio App Server by default;
+an explicitly configured local Unix socket attaches without owning server
+lifecycle.
 
 For source changes, read the repo-root `AGENTS.md` instead. This skill is for
 using the tool.
@@ -64,6 +66,13 @@ untrusted environment. It checks PATH visibility, Codex CLI/auth footprint,
 daemon socket/pidfile state, registry schema/integrity, packaged skills/plugin
 assets, and a low-risk Codex App Server initialize smoke. Use `--no-app-server`
 when you only need local install/runtime diagnostics.
+
+Advanced shared-daemon experiments may set the absolute
+`DISPATCH_APP_SERVER_SOCKET` path or `[app_server].socket_path` in the local
+Dispatch config. `doctor` must report `transport: unix` before relying on that
+topology. An explicit socket fails closed, and `dispatch down` closes only
+Dispatch's connection. Do not use shared transport as authority for concurrent
+Desktop/Dispatch writes; attached-lane write locks remain unchanged.
 
 If doctor reports an old registry schema, run `uv run dispatch down`, then
 `uv run dispatch registry migrate`, then `uv run dispatch up --json`.
@@ -287,8 +296,9 @@ uv run dispatch attach <codex-thread-id> --sync
 Attached lanes are managed by dispatch but turn-writing/history-mutating
 operations such as send, stop, goal mutation, fork, rollback, or compact are
 blocked by default. ADR-0005 and
-ADR-0018 keep this boundary locked because desktop Codex and dispatch run
-separate app-server processes and there is no cross-process write interlock.
+ADR-0018 keep this boundary locked because the default Desktop/Dispatch topology
+uses separate App Server processes, and optional shared transport still has no
+verified writer lease or handoff protocol.
 Local operators can opt in with `[policy] allow_attached_writes = true` in
 `~/.dispatch/config.toml`; when that policy is enabled, Dispatch may send,
 inject context, and set goals on attached lanes. Check `writable`,

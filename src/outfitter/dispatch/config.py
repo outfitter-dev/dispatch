@@ -51,6 +51,40 @@ def config_path() -> Path:
     return Path(override) if override else _base() / "config.toml"
 
 
+def app_server_socket_path() -> Path | None:
+    """Shared App Server socket, or ``None`` when Dispatch should own stdio.
+
+    The environment override supports bounded one-shot experiments. The local
+    config form makes the same explicit endpoint durable without changing the
+    default process-ownership contract.
+    """
+    override = os.environ.get("DISPATCH_APP_SERVER_SOCKET")
+    if override is not None:
+        return _absolute_socket_path(override, "DISPATCH_APP_SERVER_SOCKET")
+
+    path = config_path()
+    if not path.exists():
+        return None
+    with path.open("rb") as f:
+        raw = tomllib.load(f)
+    raw_app_server = raw.get("app_server", {})
+    if not isinstance(raw_app_server, dict):
+        raise ValueError("app_server must be a TOML table")
+    value = raw_app_server.get("socket_path")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("app_server.socket_path must be a string")
+    return _absolute_socket_path(value, "app_server.socket_path")
+
+
+def _absolute_socket_path(value: str, name: str) -> Path:
+    path = Path(value).expanduser()
+    if not value.strip() or not path.is_absolute():
+        raise ValueError(f"{name} must be an absolute path")
+    return path
+
+
 def claude_statusline_snapshot_path() -> Path:
     """Normalized Claude statusline capacity snapshot."""
 

@@ -246,6 +246,74 @@ def test_doctor_fails_for_invalid_capture_cap(monkeypatch: MonkeyPatch, tmp_path
     assert "history.max_payload_bytes" in capture.detail
 
 
+def test_doctor_fails_for_relative_shared_app_server_socket(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path / "dispatch-home"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setenv("DISPATCH_APP_SERVER_SOCKET", "relative.sock")
+
+    report = run_doctor()
+
+    app_server = next(check for check in report.checks if check.name == "app_server")
+    assert app_server.status == "fail"
+    assert app_server.summary == "shared app-server configuration is invalid"
+    assert app_server.detail is not None
+    assert "absolute path" in app_server.detail
+
+
+def test_doctor_reports_unreadable_shared_socket_config(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    config_dir = tmp_path / "config-as-directory"
+    config_dir.mkdir()
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path / "dispatch-home"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setenv("DISPATCH_CONFIG", str(config_dir))
+
+    report = run_doctor()
+
+    app_server = next(check for check in report.checks if check.name == "app_server")
+    assert app_server.status == "fail"
+    assert app_server.summary == "shared app-server configuration is invalid"
+    assert app_server.detail is not None
+    assert app_server.recovery is not None
+
+
+def test_doctor_reports_malformed_shared_socket_config(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text("[app_server\nsocket_path = broken")
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path / "dispatch-home"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setenv("DISPATCH_CONFIG", str(config_file))
+
+    report = run_doctor()
+
+    app_server = next(check for check in report.checks if check.name == "app_server")
+    assert app_server.status == "fail"
+    assert app_server.summary == "shared app-server configuration is invalid"
+    assert app_server.detail is not None
+
+
+def test_doctor_downgrades_missing_codex_when_shared_socket_configured(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path / "dispatch-home"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setenv("DISPATCH_APP_SERVER_SOCKET", str(tmp_path / "app-server.sock"))
+
+    report = run_doctor(DoctorOptions(app_server=False))
+
+    checks = {check.name: check for check in report.checks}
+    assert checks["codex_binary"].status == "warn"
+    assert checks["codex_binary"].recovery is not None
+    assert "socket_path" in checks["codex_binary"].recovery
+    assert report.status == "warn"
+
+
 def test_doctor_warns_for_unversioned_registry_migration(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:

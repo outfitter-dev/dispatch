@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from outfitter.dispatch import config
 from outfitter.dispatch.client.client import AppServerClient
 from outfitter.dispatch.client.models import ClientInfo
-from outfitter.dispatch.client.transport import StdioTransport
+from outfitter.dispatch.client.transport import StdioTransport, UnixSocketTransport
 from outfitter.dispatch.codex_compat import inspect_codex_binary
 from outfitter.dispatch.daemon.lifecycle import is_daemon_up
 from outfitter.dispatch.registry.store import SCHEMA_VERSION
@@ -57,7 +57,7 @@ def run_doctor(options: DoctorOptions | None = None) -> DoctorReport:
     opts = options or DoctorOptions()
     checks = [
         _path_check(),
-        _codex_binary_check(),
+        _codex_binary_check(shared_socket_configured=_shared_socket_configured()),
         _codex_auth_check(),
         _daemon_state_check(),
         _capture_policy_check(),
@@ -125,7 +125,35 @@ def _path_check() -> DoctorCheck:
     )
 
 
-def _codex_binary_check() -> DoctorCheck:
+def _shared_socket_configured() -> bool:
+    """True when an explicit shared App Server socket is configured.
+
+    Config errors are surfaced by the app_server check; treat them as
+    unconfigured here so the codex_binary verdict stays independent.
+    """
+    try:
+        return config.app_server_socket_path() is not None
+    except (OSError, ValueError, tomllib.TOMLDecodeError):
+        return False
+
+
+def _codex_binary_check(*, shared_socket_configured: bool = False) -> DoctorCheck:
+    check = _local_codex_binary_check()
+    if check.status != "fail" or not shared_socket_configured:
+        return check
+    return check.model_copy(
+        update={
+            "status": "warn",
+            "recovery": (
+                "A shared [app_server].socket_path is configured, so dispatchd attaches "
+                "instead of spawning codex; fix the local Codex CLI only if you need "
+                "dispatch to own a stdio app-server."
+            ),
+        }
+    )
+
+
+def _local_codex_binary_check() -> DoctorCheck:
     codex = shutil.which("codex")
     if codex is None:
         return DoctorCheck(
@@ -476,8 +504,21 @@ def _asset_candidates() -> list[tuple[Path, Path]]:
 
 
 async def _app_server_check(timeout: float) -> DoctorCheck:
+    try:
+        shared_socket = config.app_server_socket_path()
+    except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
+        return DoctorCheck(
+            name="app_server",
+            status="fail",
+            summary="shared app-server configuration is invalid",
+            detail=str(exc),
+            recovery=(
+                "Fix the dispatch config file (or DISPATCH_APP_SERVER_SOCKET) so "
+                "[app_server].socket_path is a readable, absolute Unix socket path."
+            ),
+        )
     codex = shutil.which("codex")
-    if codex is None:
+    if shared_socket is None and codex is None:
         return DoctorCheck(
             name="app_server",
             status="fail",
@@ -487,7 +528,11 @@ async def _app_server_check(timeout: float) -> DoctorCheck:
     env = dict(os.environ)
     with tempfile.TemporaryDirectory(prefix="dispatch-doctor-") as tmp:
         env.setdefault("TMPDIR", tmp)
-        transport = StdioTransport(env=env)
+        transport = (
+            UnixSocketTransport(shared_socket, open_timeout=timeout)
+            if shared_socket is not None
+            else StdioTransport(env=env)
+        )
         client = AppServerClient(transport)
         try:
             await asyncio.wait_for(transport.start(), timeout=timeout)
@@ -509,7 +554,10 @@ async def _app_server_check(timeout: float) -> DoctorCheck:
                 summary="codex app-server initialize smoke failed",
                 detail=detail,
                 recovery=(
-                    "Verify `codex app-server --listen stdio://` starts in this shell; "
+                    f"Verify the shared App Server is listening at {shared_socket}; "
+                    "then re-run `dispatch doctor`."
+                    if shared_socket is not None
+                    else "Verify `codex app-server --listen stdio://` starts in this shell; "
                     "then re-run `dispatch doctor`."
                 ),
             )
@@ -523,5 +571,7 @@ async def _app_server_check(timeout: float) -> DoctorCheck:
                 "user_agent": result.user_agent,
                 "codex_home": result.codex_home,
                 "platform": result.platform_family or result.platform_os,
+                "transport": "unix" if shared_socket is not None else "stdio",
+                "socket_path": str(shared_socket) if shared_socket is not None else None,
             },
         )

@@ -8,7 +8,22 @@ import structlog
 from pytest import MonkeyPatch
 from structlog.testing import capture_logs
 
-from outfitter.dispatch.daemon.host import _warn_if_codex_below_floor
+from outfitter.dispatch.client.transport import StdioTransport, UnixSocketTransport
+from outfitter.dispatch.daemon.host import _configured_transport, _warn_if_codex_below_floor
+
+
+def test_daemon_owns_stdio_by_default(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path))
+    monkeypatch.delenv("DISPATCH_APP_SERVER_SOCKET", raising=False)
+
+    assert isinstance(_configured_transport(), StdioTransport)
+
+
+def test_daemon_attaches_to_configured_socket(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path))
+    monkeypatch.setenv("DISPATCH_APP_SERVER_SOCKET", str(tmp_path / "app.sock"))
+
+    assert isinstance(_configured_transport(), UnixSocketTransport)
 
 
 async def test_daemon_warns_with_structured_below_floor_details(

@@ -10,6 +10,10 @@ owners: ['[galligan](https://github.com/galligan)']
 
 # ADR-0002: Single Daemon over One App Server
 
+> 2026-08-26: ADR-0027 proposes a narrow optional transport update: `dispatchd`
+> still owns one App Server connection, but that connection may attach to an
+> explicitly configured shared Unix socket without owning the server lifecycle.
+
 ## Context
 
 dispatch drives many lanes (Codex threads), reacts to their live events for triggers, and must answer surfaces (CLI/MCP). Event-driven triggers require a continuous subscription, which implies a long-lived process. The App Server exposes lanes over a transport; only **stdio is bare newline-delimited JSON** (verified) — `unix://`/`ws://` are WebSocket-framed and the managed daemon's control socket is auth-gated. One App Server process can host many threads, and a single stdio connection can multiplex them (verified: persisted-thread resume fans out live events to a connection).
@@ -41,9 +45,9 @@ another Codex App Server.
 ## Alternatives considered
 
 - **Spawn-per-client (like the SDK)** — no shared event bus; can't do cross-lane triggers cleanly.
-- **Attach to the running managed daemon** — its control socket handshake is undocumented/auth-gated; not externally drivable today.
-- **WebSocket/unix transport** — needs a WS client and (off-loopback) auth; stdio is simpler and sufficient.
+- **Attach to the running managed daemon** — rejected for the original default because the transport and lifecycle were not yet verified. ADR-0027 reconsiders it as an explicit opt-in after a current WebSocket-over-Unix probe.
+- **WebSocket/unix transport as the default** — rejected: stdio remains simpler and preserves existing lifecycle behavior.
 
 ## References
 
-- `docs/development/design.md`; `docs/research/app-server-verification.md`; `.claude/rules/client.md`; [ADR-0026](0026-claude-control-uses-resume-processes-and-hooks.md)
+- `docs/development/design.md`; `docs/research/app-server-verification.md`; `.claude/rules/client.md`; [ADR-0026](0026-claude-control-uses-resume-processes-and-hooks.md); [ADR-0027](0027-optional-shared-app-server-socket.md)

@@ -24,7 +24,7 @@ Always go through `uv` (never a bare `python`/`pip`). `uv sync` to install, `uv 
 
 ## Project Overview
 
-dispatch owns one `codex app-server` subprocess (stdio JSONL, shared `~/.codex`), multiplexes many lanes over it, and exposes them through derived surfaces. The architecture makes consistency easier than drift: every surface (CLI/MCP/remote) is *derived* from one op registry, so they cannot diverge. We orchestrate the Codex App Server (itself a one-protocol-many-surfaces design) and apply the same discipline to our own surfaces.
+dispatch owns one Codex App Server connection and multiplexes many lanes over it. By default it owns a `codex app-server` subprocess over stdio JSONL; an explicit local Unix-socket endpoint may instead attach to a shared App Server without owning that server's lifecycle. Every surface (CLI/MCP/remote) is *derived* from one op registry, so they cannot diverge. We orchestrate the Codex App Server (itself a one-protocol-many-surfaces design) and apply the same discipline to our own surfaces.
 
 ## Project docs
 

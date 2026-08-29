@@ -131,6 +131,14 @@ skills/plugin assets, and a low-risk Codex App Server initialize smoke. If docto
 an old registry schema, stop the daemon and run `dispatch registry migrate` before
 starting it again.
 
+Dispatch owns a stdio App Server by default. An advanced local setup may instead attach
+to an existing WebSocket-over-Unix App Server with
+`DISPATCH_APP_SERVER_SOCKET=/absolute/path.sock` or
+`[app_server].socket_path` in `~/.dispatch/config.toml`. The explicit socket path is
+fail-closed, and `dispatch down` never stops a shared server. See the
+[`shared App Server operator guide`](docs/usage/README.md#attach-to-a-shared-app-server)
+and [`ADR-0027`](docs/adrs/0027-optional-shared-app-server-socket.md).
+
 ## Agent And Plugin Support
 
 This repo ships first-party skills in [`skills/`](skills/):

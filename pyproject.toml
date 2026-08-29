@@ -17,6 +17,7 @@ dependencies = [
     "mcp>=1.2",
     "httpx>=0.28,<1",
     "httpcore>=1.0,<2",
+    "websockets>=17,<18",
 ]
 
 [project.scripts]
