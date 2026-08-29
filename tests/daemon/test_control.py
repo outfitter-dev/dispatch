@@ -13,6 +13,10 @@ from pathlib import Path
 
 import pytest_asyncio
 
+from outfitter.dispatch.contracts.registry import (
+    registry_op_schema_hashes,
+    registry_schema_hash,
+)
 from outfitter.dispatch.core.ops import REGISTRY
 from outfitter.dispatch.daemon.control import ControlServer
 from outfitter.dispatch.registry.store import Registry
@@ -106,6 +110,11 @@ async def test_control_metadata_reports_version_and_supported_ops(socket_path: P
     supported_ops = result["supported_ops"]
     assert isinstance(supported_ops, list)
     assert "query" in supported_ops
+    # The schema fingerprints clients compare against their own registry to
+    # detect field-level drift a stale daemon would silently ignore: one per op
+    # (the pre-flight gate) plus a whole-registry summary.
+    assert result["registry_hash"] == registry_schema_hash(REGISTRY)
+    assert result["op_schemas"] == registry_op_schema_hashes(REGISTRY)
 
 
 def _result(message: dict[str, object]) -> dict[str, object]:

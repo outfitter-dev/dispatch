@@ -205,8 +205,10 @@ Common recovery paths:
 - Stale socket or pidfile: run `dispatch down`, then `dispatch up`. If you are using
   isolated state, confirm `DISPATCH_HOME`, `DISPATCH_SOCKET`, and `DISPATCH_PIDFILE`.
 - Stale daemon/client op mismatch: dispatch restarts and retries once when the
-  daemon is idle. If it reports active work, wait for the work to finish or
-  explicitly run `dispatch down`, then `dispatch up`.
+  daemon is idle. If it reports active work, only the mismatched ops are
+  refused — commands whose schemas the daemon still agrees on (for example
+  `daemon status`, `roster`, `stop`) keep working, so you can inspect and drain
+  the work, then run `dispatch down` and `dispatch up`.
 - Registry schema newer than the installed binary: upgrade with
   `uv tool upgrade outfitter-dispatch` before starting the daemon.
 - Registry schema older than the installed binary: run `dispatch down`, then
@@ -276,6 +278,26 @@ starting a turn:
 
 ```bash
 uv run dispatch new --name docs-review --preset reviewer --no-send
+```
+
+`new` chooses the execution provider with the canonical
+`--provider codex|claude` option; omitting it selects Codex. The CLI also
+projects one boolean shorthand per provider — `--codex` and `--claude` — that
+marshal to the same canonical `provider` input. The shorthands are CLI-only
+sugar: MCP, remote schemas, config, and presets expose only the canonical
+enum — set `provider = "codex"` (or `"claude"`) under `[defaults]` or
+`[presets.*]`, with the usual precedence (CLI flags win over presets, presets
+win over defaults). Provider selectors are mutually exclusive, and every
+multiple-selector form is rejected before any provider, worktree, or registry
+work — including redundant pairs like `--claude --provider claude`. The
+execution provider is distinct from the Codex App Server `--model-provider`.
+The Claude execution provider is not launchable yet; resolving to it — from a
+flag, preset, or config default — fails with a validation error at launch (it
+never falls back to Codex) until the Claude provider vertical lands.
+
+```bash
+uv run dispatch new --name docs-review --codex --no-send
+uv run dispatch new --name docs-review --provider codex --no-send   # same input
 ```
 
 Use `new --no-send` when you want to create the lane first and send later:

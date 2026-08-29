@@ -217,6 +217,7 @@ def _packet_layer(
 def _cli_layer(inp: NewInput, text: str | None, schema: dict[str, object] | None) -> NewSettings:
     return NewSettings(
         cwd=inp.cwd,
+        provider=inp.provider,
         permission_profile=inp.permission_profile,
         sandbox=inp.sandbox,
         approval_policy=inp.approval_policy,

@@ -19,6 +19,9 @@ from mcp.types import CallToolResult, TextContent, Tool
 
 from outfitter.dispatch import config
 from outfitter.dispatch.contracts.derive_mcp import McpProjection, derive_mcp_projection
+from outfitter.dispatch.contracts.registry import CONTROL_META_METHOD
+
+_METHOD_NOT_FOUND = -32601
 
 
 def _io_error(message: str) -> dict[str, object]:
@@ -62,14 +65,42 @@ async def handle_tool_call(
     arguments: dict[str, object],
     projection: McpProjection | None = None,
 ) -> CallToolResult:
-    if projection is None:
-        from outfitter.dispatch.core.ops import REGISTRY
+    from outfitter.dispatch.contracts.registry import (
+        op_schema_hash,
+        registry_legacy_safe_ops,
+        registry_read_safe_ops,
+    )
+    from outfitter.dispatch.core.ops import REGISTRY
 
+    if projection is None:
         projection = derive_mcp_projection(REGISTRY)
     route = _route_tool_call(projection, name, arguments)
     if isinstance(route, CallToolResult):
         return route
     method, params = route
+    # Never forward op input to a daemon whose schema for THIS op differs from
+    # this process's: a stale daemon parses input with Pydantic's default
+    # ``extra="ignore"`` and would silently drop fields it does not know. Ops
+    # whose schemas match stay usable even when other ops drifted.
+    op = REGISTRY.get(method)
+    skew = await _daemon_op_skew(
+        socket_path,
+        op.id,
+        op_schema_hash(op),
+        read_safe=op.id in registry_read_safe_ops(REGISTRY),
+        baseline_safe=op.id in registry_legacy_safe_ops(REGISTRY),
+    )
+    if skew is not None:
+        return CallToolResult(
+            isError=True,
+            content=[
+                TextContent(
+                    type="text",
+                    text=f"{skew}; restart it (`dispatch down && dispatch up`), then retry.",
+                )
+            ],
+            _meta={"code": -32601, "dispatchCode": "daemon_stale", "exitCode": 8},
+        )
     response = await call_daemon(socket_path, method, params)
     error = response.get("error")
     if isinstance(error, dict):
@@ -114,6 +145,56 @@ async def _serve(socket_path: Path) -> None:
 def run_mcp(socket_path: Path | None = None) -> None:
     """`dispatch mcp` entrypoint: serve MCP tools over stdio."""
     asyncio.run(_serve(socket_path if socket_path is not None else config.socket_path()))
+
+
+async def _daemon_op_skew(
+    socket_path: Path,
+    op_id: str,
+    expected_hash: str,
+    *,
+    read_safe: bool,
+    baseline_safe: bool,
+) -> str | None:
+    """Describe daemon/MCP schema skew for ONE op, or ``None`` when safe to send.
+
+    Mirrors the CLI pre-flight: only this op's fingerprint gates the call, so
+    hash-matching ops stay usable against a busy stale daemon. A daemon that
+    predates the handshake reports no hashes; ``read_safe`` ops pass when it
+    self-reports at least the read baseline floor, ``baseline_safe`` ops
+    (schema unchanged since the parent release, such as ``stop``) only when
+    it self-reports exactly the parent version, and a daemon reporting no
+    version at all (no metadata method, <= 0.8.1) gets nothing (see
+    :func:`prehandshake_op_allowed`). Everything else — notably the ops
+    whose schema drifted, like ``new``/``new-plan`` with ``provider`` — is
+    treated as skewed. Any other probe failure also returns ``None`` — the op
+    call that follows surfaces it with the normal projection.
+    """
+    from outfitter.dispatch.contracts.registry import prehandshake_op_allowed
+
+    response = await call_daemon(socket_path, CONTROL_META_METHOD, {})
+    error = response.get("error")
+    if isinstance(error, dict):
+        if error.get("code") == _METHOD_NOT_FOUND and not prehandshake_op_allowed(
+            None, read_safe=read_safe, baseline_safe=baseline_safe
+        ):
+            return "dispatch daemon predates the op-schema handshake (older than this MCP server)"
+        return None
+    result = response.get("result")
+    op_schemas = result.get("op_schemas") if isinstance(result, dict) else None
+    if not isinstance(op_schemas, dict):
+        reported = result.get("version") if isinstance(result, dict) else None
+        if prehandshake_op_allowed(reported, read_safe=read_safe, baseline_safe=baseline_safe):
+            return None
+        version = f"version {reported}" if isinstance(reported, str) else "unreported version"
+        return (
+            f"dispatch daemon predates the op-schema handshake "
+            f"({version}, older than this MCP server)"
+        )
+    if op_schemas.get(op_id) == expected_hash:
+        return None
+    return (
+        f"dispatch daemon op schemas do not match this MCP server for op {op_id!r} (stale daemon)"
+    )
 
 
 def _route_tool_call(

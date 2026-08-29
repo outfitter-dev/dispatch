@@ -25,6 +25,7 @@ from outfitter.dispatch.client.models import (
 )
 from outfitter.dispatch.config import config_path as global_config_path
 from outfitter.dispatch.contracts.errors import ValidationError
+from outfitter.dispatch.core.models import ExecutionProvider
 
 _CONFIG_PATH = Path(".dispatch") / "config.toml"
 _VAR_RE = re.compile(r"\$\{([^}]+)\}")
@@ -37,6 +38,7 @@ class NewSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     cwd: str | None = None
+    provider: ExecutionProvider | None = None
     permission_profile: str | None = None
     sandbox: ThreadSandbox | None = None
     approval_policy: ApprovalPolicy | None = None

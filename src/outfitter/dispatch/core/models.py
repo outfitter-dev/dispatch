@@ -48,6 +48,7 @@ QueryDateField = Literal["created_at", "updated_at"]
 HistoryView = Literal["auto", "overview", "summary", "items", "tools", "files"]
 WorkspaceSetupMode = Literal["auto", "skip", "run"]
 WorktreeMode = Literal["none", "create"]
+ExecutionProvider = Literal["codex", "claude"]
 THREAD_SELECTOR_DESCRIPTION = (
     "Thread selector: dispatch ref, full Codex thread id, or unique handle/title."
 )
@@ -94,6 +95,13 @@ class NewInput(BaseModel):
     name: str = Field(description="Thread title; prefix/presets may decorate it.")
     preset: list[str] = Field(
         default_factory=list, description="Preset(s) to apply, left to right."
+    )
+    provider: ExecutionProvider | None = Field(
+        default=None,
+        description=(
+            "Execution provider that runs the new lane: codex (default) or claude. "
+            "Distinct from the Codex App Server model_provider."
+        ),
     )
     goal: str | None = Field(
         default=None,

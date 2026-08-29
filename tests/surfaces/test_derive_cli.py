@@ -423,6 +423,81 @@ def test_new_command_maps_repeated_presets_and_no_send() -> None:
     assert params["send"] is False
 
 
+@pytest.mark.parametrize("provider", ["codex", "claude"])
+def test_new_provider_shorthand_marshals_identically_to_provider_option(provider: str) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        calls.append((op_id, params))
+        return {}
+
+    app = derive_cli(REGISTRY, invoke)
+
+    shorthand = runner.invoke(app, ["new", "--name", "x", f"--{provider}"])
+    explicit = runner.invoke(app, ["new", "--name", "x", "--provider", provider])
+
+    assert shorthand.exit_code == 0, shorthand.output
+    assert explicit.exit_code == 0, explicit.output
+    assert calls[0] == calls[1]  # identical marshalled op input
+    op_id, params = calls[0]
+    assert op_id == "new"
+    assert params["provider"] == provider
+
+
+def test_new_omitted_provider_stays_unset_for_codex_default() -> None:
+    captured: dict[str, object] = {}
+    app = derive_cli(REGISTRY, _capture_invoke(captured))
+    result = runner.invoke(app, ["new", "--name", "x"])
+    assert result.exit_code == 0, result.output
+    params = captured["params"]
+    assert isinstance(params, dict)
+    assert params["provider"] is None  # daemon default selects codex
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--claude", "--codex"],
+        ["--claude", "--provider", "codex"],
+        ["--codex", "--provider", "claude"],
+        ["--claude", "--provider", "claude"],  # redundant match is still rejected
+        ["--codex", "--provider", "codex"],
+    ],
+)
+def test_new_rejects_every_multiple_provider_selector_form(argv: list[str]) -> None:
+    captured: dict[str, object] = {}
+    app = derive_cli(REGISTRY, _capture_invoke(captured))
+
+    result = runner.invoke(app, ["new", "--name", "x", *argv])
+
+    assert result.exit_code == 2
+    assert "choose at most one execution provider selector" in result.stderr
+    assert "op" not in captured  # rejected before the daemon was invoked
+
+
+def test_new_dry_run_accepts_provider_shorthand() -> None:
+    captured: dict[str, object] = {}
+    app = derive_cli(REGISTRY, _capture_invoke(captured))
+    result = runner.invoke(app, ["new", "--name", "x", "--codex", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert captured["op"] == "new-plan"
+    params = captured["params"]
+    assert isinstance(params, dict)
+    assert params["provider"] == "codex"
+
+
+def test_schema_new_renders_provider_shorthands_beside_canonical_enum() -> None:
+    app = derive_cli(REGISTRY, lambda _op, _params: {})
+
+    for command in ("new", "new --dry-run"):
+        result = runner.invoke(app, ["schema", command])
+        assert result.exit_code == 0, command
+        properties = json.loads(result.output)["input"]["properties"]
+        assert "provider" in properties, command
+        assert properties["claude"]["type"] == "boolean", command
+        assert properties["codex"]["type"] == "boolean", command
+
+
 def test_new_subscribe_flag_accepts_default_and_compact_spec(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
