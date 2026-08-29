@@ -31,6 +31,9 @@ CLI_SURFACE_CONTROL_PATHS: tuple[tuple[str, ...], ...] = (
     ("registry", "migrate"),
     # Host-machine statusline integration; daemon-free by contract, never an op.
     ("usage-capture", "run"),
+    ("usage-capture", "install"),
+    ("usage-capture", "status"),
+    ("usage-capture", "remove"),
 )
 _METHOD_NOT_FOUND = -32601
 
@@ -545,29 +548,9 @@ def build_cli(socket_path: Path | None = None) -> typer.Typer:
     # integration, like `doctor`/`up`/`down`): it is daemon-free by contract —
     # the high-frequency run path must never touch the control socket — so it
     # is not authored as an op.
-    usage_capture = typer.Typer(
-        no_args_is_help=True,
-        add_completion=False,
-        help="Manage host-side provider usage capture (daemon-free).",
-    )
-    app.add_typer(usage_capture, name="usage-capture")
+    from outfitter.dispatch.surfaces.cli_usage_capture import build_usage_capture_cli
 
-    @usage_capture.command(
-        name="run",
-        help=(
-            "Capture provider usage from the statusline JSON on stdin, then delegate "
-            "to the original renderer with verbatim stdout passthrough."
-        ),
-    )
-    def _usage_capture_run(
-        provider: Annotated[
-            Literal["claude"],
-            typer.Option("--provider", help="Provider whose statusline payload is on stdin."),
-        ],
-    ) -> None:
-        from outfitter.dispatch.core.usage_capture_run import run_usage_capture_from_stdin
-
-        raise typer.Exit(code=run_usage_capture_from_stdin())
+    app.add_typer(build_usage_capture_cli(), name="usage-capture")
 
     return app
 

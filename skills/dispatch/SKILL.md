@@ -33,6 +33,8 @@ The current canonical operator grammar is:
 - model catalog: `models`
 - permission profiles: `permissions`
 - provider capacity: `usage`
+- statusline capture lifecycle (daemon-free): `usage-capture install`,
+  `usage-capture run`, `usage-capture status`, `usage-capture remove`
 - thread lifecycle/read/search: `new`, `attach`, `list`, `list --unmanaged`,
   `get`, `sync`, `tail`, `history`, `watch`, `search`, `query`
 - thread actions: `rename`, `archive`, `restore`
@@ -289,15 +291,43 @@ includes raw email or organization ids, auth material, balances, or
 reset-credit mutation ids. Claude account/runtime can be ready before supported
 statusline capacity snapshots exist.
 
-Claude capacity snapshots are opt-in. `dispatch-claude-statusline` reads the
-supported statusline JSON from stdin, emits no display text, and atomically
-writes bounded normalized rate-limit facts beneath `DISPATCH_HOME`. It never
-edits Claude settings. If an operator already has a statusline, tell them to
-manually wrap it so the same stdin is passed to the capture helper and then to
-their existing renderer. `rate_limits` appears only for supported Claude.ai
-subscriber sessions after the first API response; missing or stale snapshots
-must not erase the last valid capacity windows. Never use the private OAuth
-usage endpoint as a fallback.
+Claude capacity snapshots are opt-in via the daemon-free `usage-capture`
+lifecycle:
+
+```bash
+uv run dispatch usage-capture install --provider claude --dry-run
+uv run dispatch usage-capture install --provider claude --yes
+uv run dispatch usage-capture status --provider claude --json
+uv run dispatch usage-capture remove --provider claude --yes
+uv run dispatch usage-capture remove --provider claude --keep-current --yes
+```
+
+`install` preserves the operator's complete `statusLine` object in a
+restoration record under `~/.dispatch/claude/`, writes the capture wrapper,
+then swaps only `statusLine.command` in Claude settings — record, wrapper,
+settings, in that crash-safe order. It requires confirmation before touching
+Claude settings (`--yes` when non-interactive), is idempotent on rerun, never
+records the Dispatch wrapper as the original, and reports malformed settings,
+`disableAllHooks`, higher-precedence project/local overrides, and a missing
+`dispatch` on `PATH` instead of silently succeeding. On each refresh,
+`usage-capture run` reads the statusline JSON from stdin, atomically writes
+bounded normalized rate-limit facts beneath `DISPATCH_HOME`, then delegates
+the same stdin to the original renderer verbatim; with no original renderer it
+emits nothing and Claude keeps its built-in footer.
+`dispatch-claude-statusline` is a deprecated alias of the run path.
+
+`status` reports one bounded state — `not_installed`, `prepared`, `installed`,
+`drifted`, `broken`, or `disabled` — plus wrapper/record health and last
+capture freshness, and never exposes the original command string. `remove`
+restores the exact original `statusLine` (or deletes the key when none
+existed) before deleting Dispatch artifacts; if settings drifted to something
+newer, both `install` and `remove` refuse by default so the restoration
+record is never overwritten with the drifted value — run
+`remove --provider claude --keep-current` to clean up the artifacts while
+preserving the newer setting, then reinstall to adopt it as the new original. `rate_limits` appears only for supported
+Claude.ai subscriber sessions after the first API response; missing or stale
+snapshots must not erase the last valid capacity windows. Never use the
+private OAuth usage endpoint as a fallback.
 
 Attached lanes are existing desktop Codex threads registered by raw thread id:
 
