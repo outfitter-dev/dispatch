@@ -429,38 +429,79 @@ includes local paths and operational detail unnecessary for this inventory.
 ### Capture Claude capacity from a statusline
 
 Claude Code sends supported subscriber rate-limit fields to statusline commands
-after the first API response in a Pro/Max session. Dispatch provides a narrow
-stdin capture helper:
+after the first API response in a Pro/Max session. `dispatch usage-capture`
+manages the whole lifecycle as daemon-free surface controls:
 
 ```bash
-dispatch-claude-statusline
+dispatch usage-capture install --provider claude --dry-run
+dispatch usage-capture install --provider claude
+dispatch usage-capture status --provider claude [--json]
+dispatch usage-capture remove --provider claude [--keep-current]
 ```
 
-The helper emits no statusline text. It atomically writes only a bounded,
-normalized snapshot to
-`$DISPATCH_HOME/providers/claude/statusline.json` (default
-`~/.dispatch/providers/claude/statusline.json`): capture time, Claude Code
-version, a fingerprint of the session id, bounded model label, and the
-`five_hour`/`seven_day` percentages and reset times. Raw stdin, cwd, transcript
-path, model id, and raw session id are never retained. Missing `rate_limits` is
-recorded as unavailable because the field is absent before the first API
-response and may be absent for non-subscriber sessions.
+`install` reads Claude Code's user settings (`~/.claude/settings.json`, or
+`$CLAUDE_CONFIG_DIR/settings.json`), preserves the complete current
+`statusLine` object verbatim in a restoration record, writes the wrapper
+`~/.dispatch/claude/statusline.sh`, and only then swaps `statusLine.command`
+to the wrapper. The wrapper bakes the absolute path of the `dispatch`
+executable resolved at install time (falling back to a bare `dispatch` only
+when nothing resolves), so it keeps working under Claude's own environment
+even when install ran through a transient PATH such as `uv run`; a relative
+or `~`-prefixed `DISPATCH_HOME` is likewise anchored to an absolute path
+before it is persisted anywhere. Every other statusline key (`padding`, `refreshInterval`,
+`hideVimModeIndicator`, unknown keys) and every other settings key stays
+unchanged. Writes are atomic and owner-only, and the record → wrapper →
+settings order means a crash between steps is always recoverable by re-running
+`install` or `remove`. Changing Claude settings requires confirmation: an
+interactive prompt, or `--yes` when stdin is not a TTY. `--dry-run` prints the
+plan and changes nothing. Install is idempotent — a rerun detects the wrapper
+is already the command, never records the Dispatch wrapper as the "original",
+and refreshes a drifted wrapper file. If settings drifted after install
+(they no longer point at the wrapper and no longer match the recorded
+original), install refuses rather than overwriting the restoration record
+with the drifted value; run
+`dispatch usage-capture remove --provider claude --keep-current` to discard
+the Dispatch artifacts while keeping the newer setting, then reinstall to
+adopt it as the new original. Installing with no existing statusline
+records that fact; the run path then emits zero stdout and Claude keeps its
+built-in footer. Install also reports (without silently succeeding past)
+malformed settings JSON, `disableAllHooks`, higher-precedence project/local
+`statusLine` overrides, and a `dispatch` binary that is not on `PATH`. A
+`statusLine` that is present but not a JSON object (a hand-edited string or
+list) blocks install: it cannot be preserved in the restoration record, so
+overwriting it would be irreversible. Fix or remove the value, then rerun
+install; `remove` likewise refuses to touch such a value except with
+`--keep-current`.
 
-Dispatch never edits `~/.claude/settings.json`. To opt in without replacing an
-existing statusline, create a wrapper you control that feeds the same JSON to
-both commands:
+Each statusline refresh then invokes
+`dispatch usage-capture run --provider claude`, which captures a bounded,
+normalized snapshot to `$DISPATCH_HOME/providers/claude/statusline.json`
+(capture time, Claude Code version, a fingerprint of the session id, bounded
+model label, and the `five_hour`/`seven_day` percentages and reset times) and
+delegates the same stdin to the original renderer with verbatim stdout
+passthrough. Raw stdin, cwd, transcript path, model id, and raw session id are
+never retained. Missing `rate_limits` is recorded as unavailable because the
+field is absent before the first API response and may be absent for
+non-subscriber sessions. `dispatch-claude-statusline` is a deprecated alias of
+the run path, retained for at least one release.
 
-```bash
-#!/bin/sh
-input="$(cat)"
-printf '%s' "$input" | dispatch-claude-statusline
-printf '%s' "$input" | "$HOME/.claude/existing-statusline.sh"
-```
+`status` reports one bounded state — `not_installed`, `prepared` (record and
+wrapper exist but settings do not point at the wrapper yet), `installed`,
+`drifted` (settings changed after install), `broken` (settings point at the
+wrapper while the wrapper or record is unusable), or `disabled`
+(`disableAllHooks` or a higher-precedence override suppresses it) — plus
+wrapper/record health, whether an original renderer was recorded, and the last
+capture time with freshness. It never exposes the original command string.
 
-Then manually point Claude Code's `statusLine.command` at that wrapper. If no
-statusline exists yet, the wrapper can render any text you prefer after the
-capture call. A fresh snapshot is merged into `dispatch usage`; a missing or
-stale snapshot never erases the last valid capacity windows. The undocumented
+`remove` verifies settings still point at the Dispatch wrapper, restores the
+exact original `statusLine` object (or deletes the key when none existed),
+and only after the settings write succeeds deletes the wrapper and record. If
+settings drifted to something newer, `remove` refuses by default;
+`--keep-current` removes the Dispatch artifacts while preserving the current
+setting. `--dry-run` and the `--yes` confirmation behave as in `install`.
+
+A fresh snapshot is merged into `dispatch usage`; a missing or stale snapshot
+never erases the last valid capacity windows. The undocumented
 `/api/oauth/usage` endpoint is intentionally not used.
 
 States are explicit: `ready`, `partial`, `signed_out`, `disabled`,

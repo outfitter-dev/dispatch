@@ -92,9 +92,18 @@ def claude_statusline_snapshot_path() -> Path:
 
 
 def claude_usage_capture_dir() -> Path:
-    """Managed Claude statusline wrapper and restoration-record directory."""
+    """Managed Claude statusline wrapper and restoration-record directory.
 
-    return _base() / "claude"
+    Always absolute, even under a relative ``DISPATCH_HOME``: the wrapper path
+    is persisted into Claude settings and invoked from arbitrary working
+    directories, so a cwd-relative location would break as soon as Claude runs
+    from anywhere but the install cwd.
+    """
+
+    base = _base()
+    if not base.is_absolute():
+        base = Path.cwd() / base
+    return base / "claude"
 
 
 def ensure_base() -> Path:

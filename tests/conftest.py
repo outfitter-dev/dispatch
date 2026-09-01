@@ -24,8 +24,11 @@ SUN_PATH_MAX = 104
 
 @pytest.fixture(autouse=True)
 def isolated_dispatch_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep every test away from the operator's live Dispatch config and database."""
+    """Keep every test away from the operator's live Dispatch and Claude state."""
     monkeypatch.setenv("DISPATCH_HOME", str(tmp_path / "dispatch-home"))
+    # usage-capture lifecycle code resolves Claude settings through this seam;
+    # no test may ever read or mutate the live ~/.claude.
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-home"))
 
 
 def _short_tmp_root() -> Path:
