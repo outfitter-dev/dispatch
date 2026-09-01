@@ -5,9 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# PR event deliveries run independently, including duplicate events for one SHA.
+# Main pushes share a group without cancelling an in-progress release; GitHub
+# may still replace an older pending main run with a newer one.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.run_id || github.ref }}
+  cancel-in-progress: false
 
 jobs:
   check:
