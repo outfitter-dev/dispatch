@@ -135,7 +135,13 @@ NEW = define_op(
     examples=[
         Example(
             "idle",
-            input={"name": "alpha", "cwd": "/work", "prefix": "[dispatch]", "send": False},
+            input={
+                "name": "alpha",
+                "cwd": "/work",
+                "prefix": "[dispatch]",
+                "send": False,
+                "provider": "codex",
+            },
             output={
                 "ref": "0BGeK1",
                 "id": "lane-1",
@@ -213,7 +219,12 @@ NEW = define_op(
                 },
                 "subscription": None,
             },
-        )
+        ),
+        Example(
+            "claude-not-launchable",
+            input={"name": "alpha", "cwd": "/work", "send": False, "provider": "claude"},
+            raises=ValidationError,
+        ),
     ],
 )
 
@@ -287,7 +298,12 @@ NEW_PLAN = define_op(
                 "unknown_packet_files": [],
                 "aux_packet_dirs": [],
             },
-        )
+        ),
+        Example(
+            "claude-not-launchable",
+            input={"name": "preview", "cwd": "/work", "send": False, "provider": "claude"},
+            raises=ValidationError,
+        ),
     ],
 )
 

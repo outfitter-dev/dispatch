@@ -58,8 +58,10 @@ uv run dispatch daemon log --limit 10
 
 If a command fails because the running daemon does not support a current CLI op,
 dispatch treats that as daemon/client skew. It restarts an idle daemon and retries
-once. If the daemon has active work, it refuses to restart automatically; wait or
-run `uv run dispatch down`, then `uv run dispatch up --json` when it is safe.
+once. If the daemon has active work, it refuses to restart automatically and only
+blocks the mismatched ops — commands the daemon still agrees on (`daemon status`,
+`roster`, `stop`, ...) keep working, so inspect or drain the work, then run
+`uv run dispatch down` and `uv run dispatch up --json` when it is safe.
 
 Use `uv run dispatch doctor` before relying on live thread operations in a new or
 untrusted environment. It checks PATH visibility, Codex CLI/auth footprint,
@@ -119,6 +121,17 @@ uv run dispatch new --name my-lane --preset reviewer --no-send
 ```
 
 For rich initial input, repeat `--image PATH` and `--image-url HTTPS_URL`; add `--image-detail auto|low|high|original` when the default detail is not appropriate. Local images must be PNG, JPEG, GIF, or WebP and at most 20 MiB. Remote images must use HTTPS and resolve publicly; Dispatch fetches them under a shared 15-second deadline into ephemeral App Server inputs and never stores the bytes.
+
+`new` selects the execution provider with `--provider codex|claude`, plus
+CLI-only boolean shorthands `--codex` and `--claude` that marshal to the same
+canonical input. Config `[defaults]` and `[presets.*]` accept the canonical
+`provider` key only (no shorthands); CLI flags win over presets, which win over
+defaults. Omitting all selectors launches a Codex lane. Provider selectors are
+mutually exclusive — any combination of two, even the redundant
+`--claude --provider claude`, is rejected before any lane work. This execution
+provider is distinct from `--model-provider`, and the Claude execution provider is
+not launchable yet: resolving to it — from a flag, preset, or config default —
+fails with a validation error at launch, never with a silent Codex fallback.
 
 Omit permission-profile, sandbox, approval, model, and service-tier settings when Codex defaults are
 acceptable. `dispatch new` omits unset policy/model fields from `thread/start`

@@ -89,6 +89,7 @@ from .models import (
     DiscoveredSession,
     DiscoverInput,
     Discovery,
+    ExecutionProvider,
     ForkInput,
     Goal,
     GoalClearInput,
@@ -554,6 +555,21 @@ async def open_lane(inp: OpenInput, ctx: Ctx) -> LaneRef:
     return _ref(lane, ctx)
 
 
+def _require_launchable_provider(provider: ExecutionProvider | None) -> None:
+    """Reject execution providers `new` cannot launch yet, before any mutation.
+
+    Shared by ``new`` and ``new-plan``, checked against the resolved provider
+    (config defaults < presets < packet < CLI flags). Only Codex lanes are
+    launchable until the Claude provider vertical lands (DIS-50); an omitted
+    provider selects Codex."""
+    if provider == "claude":
+        raise ValidationError(
+            "the claude execution provider is not launchable yet; "
+            "select codex (the default) or drop the claude provider "
+            "from CLI flags, presets, and config defaults"
+        )
+
+
 def _validate_launch(launch: ResolvedLaunch) -> None:
     """Reject launches the App Server would not honor, before any thread is created.
 
@@ -588,6 +604,7 @@ def _stage_content(launch: ResolvedLaunch) -> StageContent:
 async def plan_new_lane(inp: NewInput, ctx: Ctx) -> LaunchPlan:
     """Resolve a launch and report what it would do — no daemon/thread mutation."""
     launch = resolve_launch(inp)
+    _require_launchable_provider(launch.resolved.settings.provider)
     _validate_launch(launch)
     rich = RichInput(text=launch.text or "", input_items=[], stored_content=[])
     if launch.text is not None or launch.content:
@@ -677,6 +694,7 @@ def _launch_image_views(rich: RichInput) -> list[LaunchImageView]:
 
 async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
     launch = resolve_launch(inp)
+    _require_launchable_provider(launch.resolved.settings.provider)
     _validate_launch(launch)
     resolved = launch.resolved
     settings = resolved.settings

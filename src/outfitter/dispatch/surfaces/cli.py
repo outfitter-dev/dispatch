@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import socket
 import sqlite3
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from typing import Annotated, Literal, cast
@@ -18,6 +19,7 @@ from typer.main import get_command
 
 from outfitter.dispatch import config
 from outfitter.dispatch.contracts.derive_cli import derive_cli
+from outfitter.dispatch.contracts.registry import CONTROL_META_METHOD, prehandshake_op_allowed
 from outfitter.dispatch.version import package_version
 
 CLI_SURFACE_CONTROL_PATHS: tuple[tuple[str, ...], ...] = (
@@ -44,13 +46,59 @@ def _recv_line(sock: socket.socket) -> bytes:
 def invoke_daemon(
     socket_path: Path,
     current_ops: frozenset[str],
+    read_safe_ops: frozenset[str],
+    legacy_safe_ops: frozenset[str],
+    op_schema_hashes: Callable[[], dict[str, str]],
     op_id: str,
     params: dict[str, object],
     *,
     retry_on_stale: bool = True,
 ) -> dict[str, object]:
     """Send one control request and return its result, or exit with the projected
-    code on error (the CLI's projection of the DispatchError taxonomy)."""
+    code on error (the CLI's projection of the DispatchError taxonomy).
+
+    Before forwarding, verify the daemon's fingerprint for THIS op matches this
+    CLI's. A stale daemon parses op input with Pydantic's default
+    ``extra="ignore"``, so a field it does not know (e.g. ``provider``) would be
+    dropped silently — never forward input a skewed daemon could misread. Ops
+    whose schemas match are forwarded even when other ops drifted, so a busy
+    stale daemon can still be inspected and drained safely. A pre-handshake
+    daemon (reports a version but no hashes) still accepts ``read_safe_ops``
+    (derived: unshared-input read ops, see :func:`registry_read_safe_ops`)
+    when it self-reports at least the read baseline floor — read inputs
+    evolved too, so older daemons are blocked — and ``legacy_safe_ops``
+    (schema hash matching the parent release's checked-in baseline, see
+    :func:`registry_legacy_safe_ops`) only when it self-reports exactly the
+    parent version — the baseline proves nothing about older daemons.
+    Everything else is blocked: the ops whose schemas drifted since the
+    parent release (``new``/``new-plan``), and EVERY op on a daemon so old it
+    lacks ``__dispatch/metadata`` entirely (<= 0.8.1).
+    """
+    skew = _daemon_op_skew(
+        socket_path,
+        op_id,
+        op_schema_hashes().get(op_id),
+        read_safe=op_id in read_safe_ops,
+        baseline_safe=op_id in legacy_safe_ops,
+    )
+    if skew is not None:
+        if retry_on_stale and _restart_stale_daemon_if_idle(socket_path, skew):
+            return invoke_daemon(
+                socket_path,
+                current_ops,
+                read_safe_ops,
+                legacy_safe_ops,
+                op_schema_hashes,
+                op_id,
+                params,
+                retry_on_stale=False,
+            )
+        typer.secho(
+            f"dispatch: {skew}; run `dispatch down && dispatch up`, then retry.",
+            fg="red",
+            err=True,
+        )
+        raise typer.Exit(code=8)
     message = _control_request(socket_path, op_id, params)
     error = message.get("error")
     if isinstance(error, dict):
@@ -58,11 +106,16 @@ def invoke_daemon(
             retry_on_stale
             and op_id in current_ops
             and _is_method_not_found(error)
-            and _restart_stale_daemon_if_idle(socket_path, op_id)
+            and _restart_stale_daemon_if_idle(
+                socket_path, f"daemon does not support current CLI op {op_id!r}"
+            )
         ):
             return invoke_daemon(
                 socket_path,
                 current_ops,
+                read_safe_ops,
+                legacy_safe_ops,
+                op_schema_hashes,
                 op_id,
                 params,
                 retry_on_stale=False,
@@ -109,12 +162,56 @@ def _is_method_not_found(error: dict[str, object]) -> bool:
     return error.get("code") == _METHOD_NOT_FOUND
 
 
-def _restart_stale_daemon_if_idle(socket_path: Path, op_id: str) -> bool:
+def _daemon_op_skew(
+    socket_path: Path,
+    op_id: str,
+    expected_hash: str | None,
+    *,
+    read_safe: bool,
+    baseline_safe: bool,
+) -> str | None:
+    """Describe daemon/CLI schema skew for ONE op, or ``None`` when safe to send.
+
+    Only this op's fingerprint gates the call: whole-registry drift alone never
+    blocks an op whose own schema matches, so hash-matching ops (status, roster,
+    stop, ...) stay usable against a busy stale daemon. A daemon that predates
+    the handshake reports no hashes; ``read_safe`` ops pass when it
+    self-reports at least the read baseline floor, ``baseline_safe`` ops
+    (schema unchanged since the parent release, such as ``stop``) only when
+    it self-reports exactly the parent version, and a daemon reporting no
+    version at all (no metadata method, <= 0.8.1) gets nothing (see
+    :func:`prehandshake_op_allowed`). Everything else — notably the ops whose
+    schema drifted, like ``new``/``new-plan`` with ``provider`` — is treated as
+    skewed. Any other probe failure also returns ``None`` — the op call that
+    follows surfaces it with the normal projection.
+    """
+    message = _control_request(socket_path, CONTROL_META_METHOD, {})
+    error = message.get("error")
+    if isinstance(error, dict):
+        if _is_method_not_found(error) and not prehandshake_op_allowed(
+            None, read_safe=read_safe, baseline_safe=baseline_safe
+        ):
+            return "daemon predates the op-schema handshake (older than this CLI)"
+        return None
+    result = message.get("result")
+    op_schemas = result.get("op_schemas") if isinstance(result, dict) else None
+    if not isinstance(op_schemas, dict):
+        reported = result.get("version") if isinstance(result, dict) else None
+        if prehandshake_op_allowed(reported, read_safe=read_safe, baseline_safe=baseline_safe):
+            return None
+        version = f"version {reported}" if isinstance(reported, str) else "unreported version"
+        return f"daemon predates the op-schema handshake ({version}, older than this CLI)"
+    if op_schemas.get(op_id) == expected_hash:
+        return None
+    return f"daemon op schemas do not match this CLI for op {op_id!r} (stale daemon)"
+
+
+def _restart_stale_daemon_if_idle(socket_path: Path, problem: str) -> bool:
     idle, reason = _daemon_idle_for_restart(socket_path)
     if not idle:
         typer.secho(
             (
-                f"dispatch: daemon does not support current CLI op {op_id!r}; "
+                f"dispatch: {problem}; "
                 f"not restarting automatically because {reason}. "
                 "Run `dispatch down && dispatch up`, then retry."
             ),
@@ -131,7 +228,7 @@ def _restart_stale_daemon_if_idle(socket_path: Path, op_id: str) -> bool:
         if not stopped:
             typer.secho(
                 (
-                    f"dispatch: daemon does not support current CLI op {op_id!r}; "
+                    f"dispatch: {problem}; "
                     "could not identify a live daemon process to restart safely. "
                     "Run `dispatch down && dispatch up`, then retry."
                 ),
@@ -145,7 +242,7 @@ def _restart_stale_daemon_if_idle(socket_path: Path, op_id: str) -> bool:
     except (RuntimeError, TimeoutError, OSError) as exc:
         typer.secho(
             (
-                f"dispatch: daemon does not support current CLI op {op_id!r}; "
+                f"dispatch: {problem}; "
                 f"restart failed ({exc}). Run `dispatch down && dispatch up`, then retry."
             ),
             fg="red",
@@ -153,7 +250,7 @@ def _restart_stale_daemon_if_idle(socket_path: Path, op_id: str) -> bool:
         )
         raise typer.Exit(code=8) from exc
     typer.secho(
-        f"dispatch: restarted idle stale daemon for current CLI op {op_id!r}; retrying.",
+        f"dispatch: restarted idle stale daemon ({problem}); retrying.",
         fg="yellow",
         err=True,
     )
@@ -196,10 +293,30 @@ def _version_callback(value: bool) -> None:
 def build_cli(socket_path: Path | None = None) -> typer.Typer:
     path = socket_path if socket_path is not None else config.socket_path()
     # Import the registry lazily so this module stays a thin surface.
+    from outfitter.dispatch.contracts.registry import (
+        registry_legacy_safe_ops,
+        registry_op_schema_hashes,
+        registry_read_safe_ops,
+    )
     from outfitter.dispatch.core.ops import REGISTRY
 
     current_ops = frozenset(REGISTRY.ids())
-    app = derive_cli(REGISTRY, partial(invoke_daemon, path, current_ops))
+    read_safe_ops = registry_read_safe_ops(REGISTRY)
+    legacy_safe_ops = registry_legacy_safe_ops(REGISTRY)
+    # Bind the hashes lazily: they are only needed when an op is actually
+    # invoked, and computing them (JSON schemas for every op) would tax
+    # --help/completion.
+    app = derive_cli(
+        REGISTRY,
+        partial(
+            invoke_daemon,
+            path,
+            current_ops,
+            read_safe_ops,
+            legacy_safe_ops,
+            partial(registry_op_schema_hashes, REGISTRY),
+        ),
+    )
 
     @app.callback()
     def _root(

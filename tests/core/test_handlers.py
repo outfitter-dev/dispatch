@@ -307,6 +307,40 @@ async def test_new_lane_omits_policy_fields_to_inherit_codex_config(
     assert settings.approval_policy is None
 
 
+async def test_new_lane_rejects_config_selected_claude_provider_before_any_mutation(
+    store: Registry, tmp_path: Path
+) -> None:
+    repo = tmp_path / "dispatch"
+    (repo / ".dispatch").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / ".dispatch" / "config.toml").write_text('[defaults]\nprovider = "claude"\n')
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    with pytest.raises(ValidationError, match="not launchable"):
+        await handlers.new_lane(NewInput(name="blocked", cwd=str(repo), send=False), ctx)
+
+    assert client.calls == []
+
+
+async def test_new_lane_cli_codex_overrides_config_claude_provider(
+    store: Registry, tmp_path: Path
+) -> None:
+    repo = tmp_path / "dispatch"
+    (repo / ".dispatch").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / ".dispatch" / "config.toml").write_text('[defaults]\nprovider = "claude"\n')
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+
+    out = await handlers.new_lane(
+        NewInput(name="builder", cwd=str(repo), provider="codex", send=False), ctx
+    )
+
+    assert out.status == "idle"
+    assert any(name == "thread_start" for name, _ in client.calls)
+
+
 async def test_new_lane_validates_and_persists_permission_profile(
     store: Registry, tmp_path: Path
 ) -> None:

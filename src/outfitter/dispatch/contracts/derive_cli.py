@@ -16,7 +16,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Literal, cast
+from typing import Annotated, Literal, cast, get_args
 
 import typer
 
@@ -92,6 +92,13 @@ _COMPOSED_SCHEMA_ROUTES: dict[str, str] = {
     "list --unmanaged": "discover",
     "new --dry-run": "new-plan",
 }
+# Execution-provider shorthands (DIS-49): ops that choose an execution provider at
+# invocation time also project one boolean flag per enum value (--codex/--claude)
+# beside the canonical --provider option. CLI-only sugar consumed by the derivation;
+# MCP/remote schemas stay canonical. Ops whose target lane already determines the
+# provider (e.g. send) must not be listed here.
+CLI_PROVIDER_ALIAS_OPS: frozenset[str] = frozenset({"new"})
+_PROVIDER_FIELD = "provider"
 
 
 def cli_public_routes() -> tuple[CliRoute, ...]:
@@ -212,12 +219,13 @@ def _op_command(
     *,
     positionals: tuple[str, ...] = (),
 ) -> Callable[..., None]:
-    parameters = _parameters(op, positionals=positionals)
+    parameters = _with_provider_alias_parameters(op, _parameters(op, positionals=positionals))
 
     def command(**kwargs: object) -> None:
         json_requested = bool(kwargs.pop("json", False))
         yes = bool(kwargs.pop("yes", False))
         no_interactive = bool(kwargs.pop("no_interactive", False))
+        _resolve_provider_aliases(op, kwargs)
         for field in _CALLER_RESOLVED_PATH_FIELDS.get(op.id, frozenset()):
             value = kwargs.get(field)
             if isinstance(value, str):
@@ -296,6 +304,60 @@ def _parameters(op: Op, *, positionals: tuple[str, ...] = ()) -> list[inspect.Pa
     return parameters
 
 
+def _provider_choices(op: Op) -> tuple[str, ...]:
+    """Enum values of the op's canonical ``provider`` field (derived, not re-declared)."""
+    annotation = op.input.model_fields[_PROVIDER_FIELD].annotation
+    choices: list[str] = []
+    for member in get_args(annotation):
+        if isinstance(member, str):
+            choices.append(member)
+        else:
+            choices.extend(value for value in get_args(member) if isinstance(value, str))
+    return tuple(choices)
+
+
+def _with_provider_alias_parameters(
+    op: Op, parameters: list[inspect.Parameter]
+) -> list[inspect.Parameter]:
+    """Insert --codex/--claude style shorthand flags beside the canonical --provider."""
+    if op.id not in CLI_PROVIDER_ALIAS_OPS:
+        return parameters
+    aliases = [
+        inspect.Parameter(
+            choice,
+            inspect.Parameter.KEYWORD_ONLY,
+            default=typer.Option(False, f"--{choice}", help=f"Shorthand for --provider {choice}."),
+            annotation=bool,
+        )
+        for choice in _provider_choices(op)
+    ]
+    names = [parameter.name for parameter in parameters]
+    index = names.index(_PROVIDER_FIELD) + 1 if _PROVIDER_FIELD in names else len(parameters)
+    return [*parameters[:index], *aliases, *parameters[index:]]
+
+
+def _resolve_provider_aliases(op: Op, kwargs: dict[str, object]) -> None:
+    """Collapse shorthand flags into the canonical ``provider`` value.
+
+    Every multiple-selector form is rejected before the daemon is invoked —
+    including a redundant shorthand beside the same explicit --provider value."""
+    if op.id not in CLI_PROVIDER_ALIAS_OPS:
+        return
+    choices = _provider_choices(op)
+    chosen = [choice for choice in choices if bool(kwargs.pop(choice, False))]
+    selectors = len(chosen) + (kwargs.get(_PROVIDER_FIELD) is not None)
+    if selectors > 1:
+        flags = ", ".join(("--provider", *(f"--{choice}" for choice in choices)))
+        typer.secho(
+            f"dispatch: choose at most one execution provider selector ({flags})",
+            fg="red",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if chosen:
+        kwargs[_PROVIDER_FIELD] = chosen[0]
+
+
 _STDIN_FIELDS: dict[str, str] = {"goal_file": "goal", "input_file": "text"}
 _PATH_FIELDS: tuple[str, ...] = (
     "packet",
@@ -316,6 +378,7 @@ def _new_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Cal
     plan_op = registry.get("new-plan")
     parameters = [param for param in _parameters(new_op) if param.name != "content"]
     parameters = [_new_subscribe_parameter(param) for param in parameters]
+    parameters = _with_provider_alias_parameters(new_op, parameters)
     parameters[len(parameters) - 1 : len(parameters) - 1] = _image_parameters()
     parameters.insert(
         len(parameters) - 1,  # before the trailing --json option
@@ -349,6 +412,7 @@ def _new_command(registry: OpRegistry, invoke: Invoker, render: Renderer) -> Cal
     def command(ctx: typer.Context, **kwargs: object) -> None:
         json_requested = bool(kwargs.pop("json", False))
         dry_run = bool(kwargs.pop("dry_run", False))
+        _resolve_provider_aliases(new_op, kwargs)
         _resolve_new_subscribe(ctx, kwargs)
         _resolve_new_stdin(kwargs)
         _absolutize_new_paths(kwargs)
@@ -1184,10 +1248,20 @@ def _schema_command(registry: OpRegistry) -> Callable[..., None]:
 def _cli_input_schema(op: Op) -> dict[str, object]:
     schema = public_schema(deepcopy(op.input.model_json_schema()))
     adapter_id = "new" if op.id == "new-plan" else op.id
-    if adapter_id not in CLI_ADAPTED_INPUT_FIELDS:
-        return schema
     properties = schema.get("properties")
     if not isinstance(properties, dict):
+        return schema
+    if adapter_id in CLI_PROVIDER_ALIAS_OPS:
+        for choice in _provider_choices(op):
+            properties[choice] = {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    f"CLI shorthand for --provider {choice}; exclusive with --provider "
+                    "and the other provider shorthands."
+                ),
+            }
+    if adapter_id not in CLI_ADAPTED_INPUT_FIELDS:
         return schema
     for authored_field in CLI_ADAPTED_INPUT_FIELDS[adapter_id]:
         properties.pop(authored_field, None)

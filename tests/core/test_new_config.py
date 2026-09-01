@@ -94,6 +94,42 @@ allow_attached_writes = true
     assert resolved.settings.cwd == str(tmp_path)
 
 
+def test_resolve_new_threads_provider_through_defaults_presets_and_cli(tmp_path: Path) -> None:
+    (tmp_path / ".dispatch").mkdir()
+    (tmp_path / ".dispatch" / "config.toml").write_text(
+        """
+[defaults]
+provider = "codex"
+
+[presets.claude-lane]
+provider = "claude"
+"""
+    )
+
+    defaults_only = resolve_new(name="work", presets=[], cli=NewSettings(cwd=str(tmp_path)))
+    assert defaults_only.settings.provider == "codex"
+
+    preset_wins = resolve_new(
+        name="work", presets=["claude-lane"], cli=NewSettings(cwd=str(tmp_path))
+    )
+    assert preset_wins.settings.provider == "claude"
+
+    cli_wins = resolve_new(
+        name="work",
+        presets=["claude-lane"],
+        cli=NewSettings(cwd=str(tmp_path), provider="codex"),
+    )
+    assert cli_wins.settings.provider == "codex"
+
+
+def test_resolve_new_rejects_unknown_provider_in_config(tmp_path: Path) -> None:
+    (tmp_path / ".dispatch").mkdir()
+    (tmp_path / ".dispatch" / "config.toml").write_text('[defaults]\nprovider = "gemini"\n')
+
+    with pytest.raises(ValidationError, match="invalid dispatch config"):
+        resolve_new(name="work", presets=[], cli=NewSettings(cwd=str(tmp_path)))
+
+
 def test_resolve_new_rejects_missing_preset(tmp_path: Path) -> None:
     (tmp_path / ".dispatch").mkdir()
     (tmp_path / ".dispatch" / "config.toml").write_text("[presets.ok]\neffort = 'low'\n")
