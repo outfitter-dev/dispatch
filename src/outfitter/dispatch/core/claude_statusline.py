@@ -110,7 +110,10 @@ def _normalize(payload: bytes, *, observed_at: str) -> ClaudeStatuslineSnapshot:
         raise StatuslineCaptureError("statusline input too large")
     try:
         raw_payload = json.loads(payload)
-    except (json.JSONDecodeError, RecursionError, UnicodeDecodeError) as exc:
+    except (ValueError, RecursionError) as exc:
+        # ValueError covers JSONDecodeError and UnicodeDecodeError, plus the
+        # bare ValueError CPython raises for integer literals beyond the
+        # int-conversion digit limit; RecursionError bounds deep nesting.
         raise StatuslineCaptureError("invalid statusline JSON") from exc
     if not isinstance(raw_payload, dict):
         raise StatuslineCaptureError("incompatible statusline JSON")
@@ -140,7 +143,14 @@ def _normalize(payload: bytes, *, observed_at: str) -> ClaudeStatuslineSnapshot:
                 seven_day=seven_day,
             ),
         )
-    except ValidationError as exc:
+    except (ValidationError, OverflowError, UnicodeEncodeError) as exc:
+        # OverflowError: an in-limit but astronomically large integer
+        # used_percentage overflows the float() conversion in _window.
+        # UnicodeEncodeError: a parseable payload can smuggle an escaped lone
+        # surrogate (e.g. "\ud800") through json.loads; _fingerprint's UTF-8
+        # encode of session_id then raises post-parse. Pydantic rejects lone
+        # surrogates in every other string field with ValidationError, so no
+        # surrogate can reach the persisted snapshot or its serialization.
         raise StatuslineCaptureError("incompatible statusline values") from exc
 
 
