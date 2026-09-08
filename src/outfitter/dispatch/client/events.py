@@ -196,6 +196,10 @@ def project_notification(method: str, params: dict[str, object]) -> list[LaneEve
     if lane is None:
         return []
     turn = _str(params, "turnId")
+    raw_turn = params.get("turn")
+    if turn is None and isinstance(raw_turn, dict):
+        # Lifecycle notifications carry a Turn object; older events use turnId.
+        turn = _str(raw_turn, "id")
     match method:
         case "turn/started":
             return [TurnStarted(lane, turn, raw_payload=raw)]
