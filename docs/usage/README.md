@@ -747,6 +747,13 @@ uv run dispatch stop <dispatch-ref>
 Use `send --queue` when delivery should wait for the lane to become idle. The message is
 stored in dispatch's durable registry and starts one queued turn per idle transition:
 
+A failed or interrupted turn (including an explicit stop) is not a successful
+completion. Dispatch preserves that status and error, marks the thread as needing
+attention, and leaves pending messages queued. Inspect the failure before sending
+an explicit follow-up turn; its successful completion can resume queue draining.
+This deliberately prevents a stop or provider failure from immediately launching
+more pending work.
+
 ```bash
 uv run dispatch send @docs-review "Run this after the active turn." --queue
 ```

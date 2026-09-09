@@ -174,7 +174,7 @@ def _correlation_id(event: LaneEvent) -> str | None:
 
 def _summary(event: LaneEvent, capture: CapturePolicy) -> dict[str, object]:
     if isinstance(event, TurnFailed):
-        summary: dict[str, object] = {"status": "failed"}
+        summary: dict[str, object] = {"status": event.execution_status}
         if event.turn_id is not None:
             summary["turn_id"] = event.turn_id
         message = bound_text(event.message, capture)
@@ -282,7 +282,7 @@ def _thread_turn(
             provider_thread_id=lane.id,
             lane=lane.id,
             turn_id=event.turn_id,
-            status="failed",
+            status=event.execution_status,
             failed_at=now,
             error=message.text if message is not None else None,
             completion_source="codex-event",
@@ -318,7 +318,7 @@ def _runtime_state(
             now,
             status="error",
             latest_turn_id=event.turn_id,
-            latest_turn_status="failed",
+            latest_turn_status=event.execution_status,
             needs_attention=True,
             attention_kind="turn_failed",
             attention_detail=message.text if message is not None else None,

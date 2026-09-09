@@ -114,18 +114,20 @@ def test_registry_legacy_safe_ops_excludes_reads_sharing_write_input() -> None:
     registry.register(preview)
     registry.register(LOOKUP)  # read, input model not shared with any write
 
-    assert registry_legacy_safe_ops(registry) == frozenset({"lookup"})
+    assert registry_legacy_safe_ops(registry) == frozenset()
 
 
 def test_registry_legacy_safe_ops_real_registry_gates_new_plan() -> None:
     """``new`` and ``new-plan`` carry the drifted ``NewInput`` (``provider``),
-    so neither is exempt on a pre-handshake daemon; plain reads like ``roster``
+    so neither is exempt on a pre-handshake daemon; unchanged reads like ``models``
     stay safe, and baseline-matching writes like ``stop`` stay usable so a
     pre-handshake daemon with active work can still be drained."""
     from outfitter.dispatch.core.ops import REGISTRY
 
     safe = registry_legacy_safe_ops(REGISTRY)
-    assert "roster" in safe
+    assert "models" in safe
+    assert "roster" not in safe
+    assert "show" not in safe
     assert "status" in safe
     assert "stop" in safe  # write-intent, but schema unchanged since the parent release
     assert "new" not in safe
@@ -175,7 +177,9 @@ def test_registry_read_safe_ops_is_subset_without_baseline_writes() -> None:
 
     read_safe = registry_read_safe_ops(REGISTRY)
     assert read_safe <= registry_legacy_safe_ops(REGISTRY)
-    assert "roster" in read_safe
+    assert "roster" not in read_safe
+    assert "show" not in read_safe
+    assert "models" in read_safe
     assert "stop" not in read_safe
     assert "new-plan" not in read_safe
 

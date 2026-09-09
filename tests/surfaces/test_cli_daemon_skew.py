@@ -215,7 +215,7 @@ def test_invoke_daemon_allows_baseline_ops_on_parent_version_prehandshake_daemon
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A pre-handshake daemon that self-reports exactly the parent version
-    serves both unshared-input reads (``roster``) and baseline-matching ops
+    serves both unshared-input reads (``models``) and baseline-matching ops
     (``stop``, write-intent) — the baseline proves that release parses them
     identically, so an operator can still cancel runaway work right after
     upgrading, without restarting the daemon mid-flight."""
@@ -229,9 +229,9 @@ def test_invoke_daemon_allows_baseline_ops_on_parent_version_prehandshake_daemon
 
     monkeypatch.setattr(cli, "_control_request", request)
 
-    assert _invoke(tmp_path / "dispatchd.sock", "roster", {}) == {"ok": True}
+    assert _invoke(tmp_path / "dispatchd.sock", "models", {}) == {"ok": True}
     assert _invoke(tmp_path / "dispatchd.sock", "stop", {"lane": "@a"}) == {"ok": True}
-    assert calls == [CONTROL_META_METHOD, "roster", CONTROL_META_METHOD, "stop"]
+    assert calls == [CONTROL_META_METHOD, "models", CONTROL_META_METHOD, "stop"]
 
 
 def test_invoke_daemon_blocks_baseline_ops_on_older_prehandshake_daemon(
@@ -262,7 +262,7 @@ def test_invoke_daemon_blocks_baseline_ops_on_older_prehandshake_daemon(
     monkeypatch.setattr(cli, "_control_request", request)
     monkeypatch.setattr("outfitter.dispatch.daemon.lifecycle.stop_daemon", stop)
 
-    assert _invoke(tmp_path / "dispatchd.sock", "roster", {}) == {"ok": True}
+    assert _invoke(tmp_path / "dispatchd.sock", "models", {}) == {"ok": True}
 
     with pytest.raises(typer.Exit) as exc:
         _invoke(tmp_path / "dispatchd.sock", "stop", {"lane": "@a"})

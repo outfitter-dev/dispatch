@@ -1,0 +1,2 @@
+{"method":"turn/started","params":{"threadId":"lab-thread-153","turn":{"id":"lab-turn-153","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":1788908524,"completedAt":null,"durationMs":null}}}
+{"method":"turn/completed","params":{"threadId":"lab-thread-153","turn":{"id":"lab-turn-153","items":[{"type":"agentMessage","id":"lab-reply-153","text":"ORIGINAL_FINAL","phase":"final_answer"}],"itemsView":"summary","status":"completed","error":null,"startedAt":1788908524,"completedAt":1788908540,"durationMs":15905}}}

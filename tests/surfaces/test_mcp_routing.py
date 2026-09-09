@@ -334,16 +334,16 @@ async def test_tool_call_prehandshake_baseline_ops_gated_by_reported_version(
     assert forwarded == ["stop"]
 
     listed = await handle_tool_call(
-        Path("/nonexistent.sock"), "dispatch_thread_read", {"op": "roster"}
+        Path("/nonexistent.sock"), "dispatch_daemon_read", {"op": "models"}
     )
     assert listed.isError is False
-    assert forwarded == ["stop", "roster"]
+    assert forwarded == ["stop", "models"]
 
     # Below the read baseline floor (v0.9.0's ``usage`` output predates the
     # provider runtime summary): reads are blocked too.
     reported_version = "0.9.0"
     read_blocked = await handle_tool_call(
-        Path("/nonexistent.sock"), "dispatch_thread_read", {"op": "roster"}
+        Path("/nonexistent.sock"), "dispatch_daemon_read", {"op": "models"}
     )
     assert read_blocked.isError is True
     assert read_blocked.meta is not None
@@ -351,7 +351,7 @@ async def test_tool_call_prehandshake_baseline_ops_gated_by_reported_version(
     first_read = read_blocked.content[0]
     assert isinstance(first_read, TextContent)
     assert "version 0.9.0" in first_read.text
-    assert forwarded == ["stop", "roster"]
+    assert forwarded == ["stop", "models"]
 
 
 async def test_tool_call_rejects_unknown_grouped_action(socket_path: Path) -> None:

@@ -52,7 +52,7 @@ changes; the release-cut baseline test only proves parity with
 ``PARENT_VERSION``, so a read-op schema change must also bump this floor to
 the first release carrying the new schema."""
 
-CHANGED_SINCE_PARENT: frozenset[str] = frozenset({"new", "new-plan"})
+CHANGED_SINCE_PARENT: frozenset[str] = frozenset({"new", "new-plan", "roster", "show"})
 """Ops whose input/output schema drifted since ``PARENT_VERSION``.
 
 Never forwarded to a pre-handshake daemon: its Pydantic models (default
@@ -64,13 +64,11 @@ PARENT_OP_SCHEMA_HASHES: dict[str, str] = {
     "attach": "b6897800a0405339e910cf98de8277bac6ad6f1b6b90bd58345182d5c9d21bc9",
     "send": "0a3ff6aca533e074bab606a11f3e473abb2a7fad5d46dc64b5a5de4de76545bb",
     "stop": "16ccc26967a0c253f1cff65f4b8a455f7db38226773d0b0c1cb5f6e2b86e392c",
-    "show": "dde8863962e92c7fc562c223ce1bdc7690664279d031af4cdd7bd89b6e99e0c5",
     "lane-rename": "c90f27886bd7bb6a8468f7bc7336716d60525b2361b4e9507d6e9d8b9273cf46",
     "transcript": "d1d2acca3ed46ce7451801aff4c588038e8cd13eea83b5b8e6c8e2a87671b86a",
     "history": "43f8d8689b4171d655a8b14895cbb1af6ffe007aaa93ec14d6be76c19d2e1243",
     "watch": "9febdc5f24bac264900435da630a5c4adb3b63e8da934d58cef5b3750f498fa5",
     "sync": "306c6ddcf8abf3fca5f0509ca85499064b67e8b98eb1db68f9942a1e9b768845",
-    "roster": "87b510b96a96157303bd508fd01f26e11da8e31965e3878950504149de71d5d2",
     "discover": "96a284f08bdb3b9c4f15c6a70f5abb0ecf3b5022d7b05ac443a2c8d5377adeb1",
     "search": "6383eb95772eae4ad689ad90c123244f36434f5b884cbe43cfab15075a891c0e",
     "query": "37544d538a1ee55818edcda6b9615db719d35fd8dd4274fc4075fccf5e6b79ba",

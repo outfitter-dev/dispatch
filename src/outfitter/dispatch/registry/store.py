@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
-from typing import Any, Concatenate, Protocol, cast
+from typing import Any, Concatenate, Literal, Protocol, cast
 
 import aiosqlite
 
@@ -1363,16 +1363,28 @@ class Registry:
 
     @_serialized_access
     async def record_turn_failed(
-        self, lane_id: str, turn_id: str | None, message: str | None
+        self,
+        lane_id: str,
+        turn_id: str | None,
+        message: str | None,
+        *,
+        execution_status: Literal["failed", "interrupted"] = "failed",
     ) -> None:
         now = self._now().isoformat()
         async with self._write_lock:
             await self._conn.execute(
                 "UPDATE lanes SET active_turn_id = NULL, "
                 "latest_turn_id = COALESCE(?, latest_turn_id), "
-                "latest_turn_status = 'failed', latest_error = ?, latest_error_at = ?, "
+                "latest_turn_status = ?, latest_error = ?, latest_error_at = ?, "
                 "status = 'error', updated_at = ? WHERE id = ?",
-                (turn_id, message, now if message is not None else None, now, lane_id),
+                (
+                    turn_id,
+                    execution_status,
+                    message,
+                    now if message is not None else None,
+                    now,
+                    lane_id,
+                ),
             )
             await self._conn.commit()
 
@@ -1392,7 +1404,9 @@ class Registry:
     async def mark_lane_idle(self, lane_id: str) -> None:
         lane = await self.find_lane(lane_id)
         status: LaneStatus = (
-            "error" if lane is not None and lane.latest_turn_status == "failed" else "idle"
+            "error"
+            if lane is not None and lane.latest_turn_status in ("failed", "interrupted")
+            else "idle"
         )
         async with self._write_lock:
             await self._conn.execute(

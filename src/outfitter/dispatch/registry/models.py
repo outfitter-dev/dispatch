@@ -37,8 +37,8 @@ LaneStatus = Literal[
     "error",
     "unknown",
 ]
-TurnRuntimeStatus = Literal["started", "completed", "failed"]
-ProviderTurnStatus = Literal["started", "completed", "failed", "unknown"]
+TurnRuntimeStatus = Literal["started", "completed", "failed", "interrupted"]
+ProviderTurnStatus = Literal["started", "completed", "failed", "interrupted", "unknown"]
 ProviderThreadLifecycleState = Literal["active", "archived", "deleted", "unknown"]
 ProviderCapacityState = Literal[
     "ready", "partial", "signed_out", "unsupported", "unavailable", "disabled"
