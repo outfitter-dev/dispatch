@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 DeliveryMode = Literal["send", "queue"]
+DeliveryTransport = Literal["turn", "native_queue"]
 DeliveryStatus = Literal[
     "queued",
     "submitting",
@@ -26,6 +27,8 @@ class DeliveryReceipt(BaseModel):
     key: str | None = None
     lane: str
     mode: DeliveryMode
+    transport: DeliveryTransport = "turn"
+    submission_id: str | None = None
     payload: str
     status: DeliveryStatus = "queued"
     execution_status: DeliveryExecutionStatus | None = None

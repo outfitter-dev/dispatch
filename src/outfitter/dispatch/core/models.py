@@ -17,7 +17,7 @@ from outfitter.dispatch.client.models import (
     ThreadGoalStatus,
     ThreadSandbox,
 )
-from outfitter.dispatch.registry.delivery import DeliveryMode, DeliveryStatus
+from outfitter.dispatch.registry.delivery import DeliveryMode, DeliveryStatus, DeliveryTransport
 from outfitter.dispatch.registry.models import (
     InboxMessageKind,
     InboxMessageState,
@@ -1214,6 +1214,8 @@ class DeliveryView(BaseModel):
     key: str | None = None
     lane: str
     mode: DeliveryMode
+    transport: DeliveryTransport = "turn"
+    submission_id: str | None = None
     status: DeliveryStatus
     execution_status: Literal["inProgress", "completed", "failed", "interrupted"] | None = None
     turn_id: str | None = None

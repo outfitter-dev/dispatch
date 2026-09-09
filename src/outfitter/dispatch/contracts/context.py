@@ -57,6 +57,7 @@ from outfitter.dispatch.client.models import (
     TurnItemsView,
     UserInput,
 )
+from outfitter.dispatch.client.native_queue import QueuedSubmission, ThreadQueuePage
 from outfitter.dispatch.config import CapturePolicy, RuntimePolicy
 
 if TYPE_CHECKING:
@@ -67,6 +68,14 @@ class LaneClient(Protocol):
     """The App Server primitives handlers depend on (ADR-0006 DI seam)."""
 
     async def config_read(self) -> ConfigInfo: ...
+
+    async def thread_queue_add(
+        self, thread_id: str, text: str, *, client_user_message_id: str
+    ) -> QueuedSubmission: ...
+
+    async def thread_queue_list(
+        self, thread_id: str, *, cursor: str | None = None, limit: int | None = None
+    ) -> ThreadQueuePage: ...
 
     async def account_read(self) -> AccountReadResult: ...
 

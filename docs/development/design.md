@@ -121,7 +121,7 @@ for collisions. Titles and `@handles` are mutable convenience labels.
 | `attach` | `thread/read(includeTurns:false)` (+ register) | Metadata-only by default: verifies the thread id, registers a turn-write locked attached lane, assigns a dispatch ref, and stores sync state without loading turn history. `--sync` runs a quick local index refresh after registration. |
 | `sync` | `thread/read(includeTurns:false)` + metadata-only `thread/resume` + bounded `initialTurnsPage` / `thread/turns/list` / `thread/items/list` + local JSONL parsing + archive reconciliation | Establishes explicit live observation and refreshes Dispatch's normalized history index under one turn/item/time/aggregate-byte budget. Recent App Server history is indexed before remaining budget is used for local JSONL facts; durable cursors continue newer reconciliation and older backfill across calls. Unsupported experimental paging retains metadata-only observation plus JSONL fallback. A raw unmanaged Codex id is registered as an attached read/metadata-managed lane before syncing; sync never grants turn-write authority. |
 | `send` (`mode=send`) | `turn/start` | Delivers text and/or validated local/HTTPS image inputs that the lane processes and answers. The DM/`send_message_to_thread` equivalent. `sandboxPolicy` here is an OBJECT (`{type:"readOnly"}`) — different encoding than `thread/start.sandbox`. |
-| `send` (`mode=queue`) | registry queue + later `turn/start` | Persists text plus image references and bounded metadata, never image bytes, then revalidates files and model modalities before starting one queued turn when the lane becomes idle. |
+| `send` (`mode=queue`) | owned: registry queue + later `turn/start`; attached: `thread/queue/add` | Owned threads persist text plus image references and bounded metadata, then revalidate before starting on idle. Attached plain-text requests use durable receipts and the native queue without resuming the existing writer; acceptance precedes execution. See [delivery contract](../usage/deliveries.md). |
 | `send` (`mode=steer`) | `turn/steer` | Requires `expectedTurnId` (the active turn id from `turn/started`). Adds validated text/image input to an in-flight turn. |
 | `send` (`mode=context`) | `thread/inject_items` | Silent model-visible text context injection (Responses-API items); no turn runs. Rich images are rejected because an equivalent image injection contract is not verified. Trigger actions still call this lower-level behavior `brief`. |
 | `send` (`mode=interject`) | `turn/interrupt` + `turn/start` | Requires an active turn id, cancels that turn, then starts replacement text/image work. |
@@ -209,9 +209,11 @@ The client classifies command/file/permission approvals, user input, MCP elicita
 ## Error handling / resilience
 
 - app-server subprocess crash → daemon detects stdout EOF → restart → restore owned-lane resumes and attached-lane metadata reads → restart the reactor.
-- Action on a busy lane → direct `send` starts a turn immediately; `send --queue`
-  persists local queued delivery and starts one queued turn when the lane next
-  becomes idle.
+- Action on a busy lane → direct `send` requests a turn immediately. On owned
+  threads, `send --queue` persists local delivery and starts on a successful idle
+  transition. On attached threads, explicit plain-text queue uses native
+  admission and the existing owner controls execution; reconcile the receipt to
+  verify execution. See [delivery contract](../usage/deliveries.md).
 - Reconnect → rebuild via `thread/read` + explicit sync; rely on persisted history, not replay.
 - Every action audited; per-lane advisory lock for cross-process safety.
 

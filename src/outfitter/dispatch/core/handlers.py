@@ -34,6 +34,7 @@ from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.contracts.errors import (
     AppServerError,
     AuthorityError,
+    CapabilityUnavailableError,
     DispatchError,
     NotFoundError,
     StagingError,
@@ -472,7 +473,7 @@ async def _resolve(ctx: Ctx, ref: str) -> Lane:
     return resolved.lane
 
 
-async def _resolve_message_target(ctx: Ctx, ref: str) -> Lane:
+async def _resolve_message_target(ctx: Ctx, ref: str, *, sync: bool = True) -> Lane:
     resolved = await resolve_thread_selector(ctx, ref, allow_unmanaged_raw=True, allow_fuzzy=False)
     if resolved.lane is not None:
         return resolved.lane
@@ -485,7 +486,7 @@ async def _resolve_message_target(ctx: Ctx, ref: str) -> Lane:
             f"send timed out: thread/read metadata for {resolved.thread_id!r} exceeded "
             f"{_ATTACH_METADATA_TIMEOUT_S:.0f}s (no lane registered)"
         ) from exc
-    lane = await _register_attached_thread(thread, ctx, sync=True, audit_op="send-manage")
+    lane = await _register_attached_thread(thread, ctx, sync=sync, audit_op="send-manage")
     ctx.log.info("lane.send_manage", lane=lane.id, handle=lane.handle)
     return lane
 
@@ -529,7 +530,16 @@ def _require_writable(lane: Lane, ctx: Ctx) -> None:
 
 async def _prepare_attached_write(lane: Lane, ctx: Ctx) -> None:
     if lane.source == "attached":
-        await ctx.client.thread_resume(lane.id, exclude_turns=True)
+        try:
+            await ctx.client.thread_resume(lane.id, exclude_turns=True)
+        except ClientAppServerError as exc:
+            if exc.code == -32600 and "already has an active writer" in exc.message:
+                raise CapabilityUnavailableError(
+                    "the attached thread retains another writer; this connection cannot "
+                    "start or steer its turns. Explicit native queue delivery uses "
+                    "`dispatch send <thread> <text> --queue`; no fallback was attempted"
+                ) from exc
+            raise
 
 
 def _require_active_turn(lane: Lane, action: str) -> str:
@@ -1397,9 +1407,10 @@ async def send_message(inp: SendInput, ctx: Ctx) -> SendAck:
 
 async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
     text = await _apply_send_intro(inp, ctx)
-    lane = await _resolve_message_target(ctx, inp.lane)
+    # Initial history sync may resume the thread; native queue must retain its owner.
+    lane = await _resolve_message_target(ctx, inp.lane, sync=inp.mode != "queue")
     _require_writable(lane, ctx)
-    if inp.idempotency_key is not None:
+    if inp.idempotency_key is not None or (lane.source == "attached" and inp.mode == "queue"):
         from .delivery import send_reserved
 
         receipt = await send_reserved(inp, lane, text, ctx)

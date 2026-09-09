@@ -12,7 +12,7 @@ import pytest
 import pytest_asyncio
 
 from outfitter.dispatch.contracts.errors import DeliveryConflictError
-from outfitter.dispatch.registry.delivery import DeliveryExecutionStatus
+from outfitter.dispatch.registry.delivery import DeliveryExecutionStatus, DeliveryReceipt
 from outfitter.dispatch.registry.store import Registry
 
 
@@ -124,6 +124,49 @@ async def test_claim_holds_lane_and_claims_queue_atomically(store: Registry) -> 
     assert accepted.turn_id == "turn-1"
     assert (await store.get_queued_message(first.queue_id)).status == "sent"
     assert await store.claim_delivery(second.id) is True
+
+
+async def test_native_claim_preserves_fifo_after_ambiguous_predecessor(store: Registry) -> None:
+    async def reserve(text: str) -> DeliveryReceipt:
+        receipt, _ = await store.reserve_delivery(
+            key=None,
+            lane="lane-1",
+            mode="queue",
+            payload=text,
+            text=text,
+            transport="native_queue",
+        )
+        return receipt
+
+    first = await reserve("one")
+    assert await store.claim_delivery(first.id)
+    await store.update_delivery(first.id, status="ambiguous")
+    second = await reserve("two")
+    assert not await store.claim_delivery(second.id)
+    await store.update_delivery(first.id, status="accepted", submission_id="native-one")
+    third = await reserve("three")
+    assert not await store.claim_delivery(third.id)
+    assert await store.claim_delivery(second.id)
+    await store.update_delivery(second.id, status="accepted", submission_id="native-two")
+    assert await store.claim_delivery(third.id)
+
+
+@pytest.mark.parametrize("status", ["pending", "sending"])
+async def test_native_claim_holds_legacy_queue_after_upgrade(store: Registry, status: str) -> None:
+    legacy = await store.enqueue_message(lane="lane-1", text="older legacy request")
+    if status == "sending":
+        assert await store.claim_queued_message(legacy.id)
+    native, _ = await store.reserve_delivery(
+        key=None,
+        lane="lane-1",
+        mode="queue",
+        payload="new",
+        text="new",
+        transport="native_queue",
+    )
+    assert not await store.claim_delivery(native.id)
+    await store.complete_queued_message(legacy.id)
+    assert await store.claim_delivery(native.id)
 
 
 async def test_terminal_updates_preserve_turn_and_drive_queue_status(store: Registry) -> None:
@@ -298,7 +341,7 @@ async def test_v21_migration_adds_delivery_ledger(tmp_path: Path) -> None:
         assert receipt.key == "after:migration"
         async with migrated._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-        assert row is not None and int(row[0]) == 22
+        assert row is not None and int(row[0]) == 23
     finally:
         await migrated.close()
 
@@ -499,3 +542,40 @@ async def test_delivery_check_budget_is_atomic_across_connections(tmp_path: Path
     finally:
         await first.close()
         await second.close()
+
+
+async def test_v22_migration_preserves_existing_delivery_and_adds_native_correlation(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "registry-v22.db"
+    store = await Registry.open(db, now=_clock)
+    await store.add_lane(id="lane-1", handle="@one", source="own")
+    receipt, _ = await store.reserve_delivery(
+        key="old", lane="lane-1", mode="send", payload='{"text":"old"}', text="old"
+    )
+    await store.update_delivery(receipt.id, status="accepted", turn_id="turn-old")
+    await store.close()
+    conn = await aiosqlite.connect(db)
+    await conn.execute("ALTER TABLE deliveries DROP COLUMN transport")
+    await conn.execute("ALTER TABLE deliveries DROP COLUMN submission_id")
+    await conn.execute("PRAGMA user_version = 22")
+    await conn.commit()
+    await conn.close()
+    store = await Registry.open(db, now=_clock)
+    try:
+        old = await store.get_delivery(receipt.id)
+        assert old.transport == "turn" and old.turn_id == "turn-old"
+        assert old.status == "accepted" and old.submission_id is None
+        native, _ = await store.reserve_delivery(
+            key="new",
+            lane="lane-1",
+            mode="queue",
+            payload='{"text":"new"}',
+            text="new",
+            transport="native_queue",
+        )
+        await store.update_delivery(native.id, status="accepted", submission_id="native-id")
+        assert (await store.get_delivery(native.id)).submission_id == "native-id"
+        assert native.queue_id is None
+    finally:
+        await store.close()

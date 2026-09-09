@@ -29,9 +29,21 @@ async def reconcile_pending(ctx: Ctx) -> None:
             if receipt.lane == lane_id:
                 await reconcile_receipt(receipt.id, ctx)
         lane = await ctx.registry.find_lane(lane_id)
-        if lane is None or lane.status != "idle":
+        if lane is None or lane.status == "archived":
             return
-        direct = next((r for r in waiting if r.lane == lane_id and r.queue_id is None), None)
+        for receipt in waiting:
+            if receipt.lane == lane_id and receipt.transport == "native_queue":
+                await submit_reserved(receipt.id, ctx)
+        if lane.status != "idle":
+            return
+        direct = next(
+            (
+                r
+                for r in waiting
+                if r.lane == lane_id and r.queue_id is None and r.transport == "turn"
+            ),
+            None,
+        )
         if direct is not None and await submit_reserved(direct.id, ctx):
             return
         await drain_next_queued_message(ctx, lane_id)
@@ -69,7 +81,11 @@ async def reconcile_accepted_after_reconnect(ctx: Ctx) -> None:
 async def reconcile_receipt(delivery_id: str, ctx: Ctx, *, automatic: bool = True) -> None:
     receipt = await ctx.registry.get_delivery(delivery_id)
     if receipt.status == "completed" and receipt.execution_status == "completed":
-        if not automatic and await _refresh_idle_readiness(receipt.lane, ctx):
+        if (
+            not automatic
+            and receipt.transport == "turn"
+            and await _refresh_idle_readiness(receipt.lane, ctx)
+        ):
             from .queue import drain_next_queued_message
 
             await drain_next_queued_message(ctx, receipt.lane)
@@ -96,6 +112,15 @@ async def reconcile_receipt(delivery_id: str, ctx: Ctx, *, automatic: bool = Tru
     expected = json.loads(receipt.payload)["text"]
     try:
         async with asyncio.timeout(8):
+            if receipt.transport == "native_queue":
+                from .native_queue_evidence import find_queued_submission
+
+                submission = await find_queued_submission(ctx, receipt.lane, receipt.id, expected)
+                if submission is not None:
+                    await ctx.registry.update_delivery(
+                        receipt.id, status="accepted", submission_id=submission.id
+                    )
+                    return
             turn, reason = await _find_arrival(ctx, receipt.lane, receipt.id, expected)
     except (ClientError, TimeoutError) as exc:
         turn, reason = None, f"provider history unavailable: {exc}"
@@ -109,7 +134,8 @@ async def reconcile_receipt(delivery_id: str, ctx: Ctx, *, automatic: bool = Tru
                     "inspect history or reconcile again"
                 )[:2000],
             )
-            await _refresh_idle_readiness(receipt.lane, ctx)
+            if receipt.transport == "turn":
+                await _refresh_idle_readiness(receipt.lane, ctx)
             return
         checked = await ctx.registry.get_delivery(delivery_id)
         attention = (
@@ -136,7 +162,7 @@ async def reconcile_receipt(delivery_id: str, ctx: Ctx, *, automatic: bool = Tru
     from .delivery import observe_delivery_execution
 
     await observe_delivery_execution(receipt.lane, turn.id, ctx)
-    if turn.status == "completed":
+    if turn.status == "completed" and receipt.transport == "turn":
         ready = await _refresh_idle_readiness(receipt.lane, ctx)
         if ready and not automatic:
             from .queue import drain_next_queued_message
