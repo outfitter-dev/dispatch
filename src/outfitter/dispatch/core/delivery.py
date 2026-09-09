@@ -8,9 +8,14 @@ from uuid import uuid4
 
 from pydantic import TypeAdapter
 
-from outfitter.dispatch.client.errors import AppServerError, ClientError
+from outfitter.dispatch.client.errors import AppServerError, ClientError, ProtocolError
 from outfitter.dispatch.contracts.context import Ctx
-from outfitter.dispatch.contracts.errors import AuthorityError, NotFoundError, ValidationError
+from outfitter.dispatch.contracts.errors import (
+    AuthorityError,
+    CapabilityUnavailableError,
+    NotFoundError,
+    ValidationError,
+)
 from outfitter.dispatch.registry.models import Lane
 
 from .models import DeliveryLookupInput, DeliveryView, SendInput
@@ -32,14 +37,19 @@ async def reconcile_receipt_request(inp: DeliveryLookupInput, ctx: Ctx) -> Deliv
 
 
 async def send_reserved(inp: SendInput, lane: Lane, text: str, ctx: Ctx) -> DeliveryView:
-    if lane.source != "own":
+    native = lane.source == "attached" and inp.mode == "queue"
+    if lane.source != "own" and not native:
         raise AuthorityError("idempotent delivery currently requires a Dispatch-owned thread")
+    if native and inp.content:
+        raise ValidationError("native attached queue currently supports plain text only")
     mode = inp.mode
     if mode != "send" and mode != "queue":
         raise ValidationError("idempotent delivery supports send or queue")
     settings = await load_turn_start_settings(ctx.registry, lane.id)
     payload = json.dumps(
-        {
+        {"text": text}
+        if native
+        else {
             "text": text,
             "cwd": lane.cwd or ".",
             "settings": _SETTINGS.dump_python(settings, mode="json"),
@@ -55,12 +65,15 @@ async def send_reserved(inp: SendInput, lane: Lane, text: str, ctx: Ctx) -> Deli
         payload=payload,
         text=text,
         delivery_id=delivery_id,
+        transport="native_queue" if native else "turn",
     )
     if created:
         await ctx.registry.log_action(
             mode, lane=lane.id, detail=f"delivery={receipt.id}", outcome="reserved"
         )
-        if mode == "queue" and lane.status == "idle":
+        if native:
+            await submit_reserved(receipt.id, ctx)
+        elif mode == "queue" and lane.status == "idle":
             from .queue import drain_next_queued_message
 
             await drain_next_queued_message(ctx, lane.id)
@@ -73,11 +86,33 @@ async def send_reserved(inp: SendInput, lane: Lane, text: str, ctx: Ctx) -> Deli
 async def submit_reserved(delivery_id: str, ctx: Ctx) -> bool:
     receipt = await ctx.registry.get_delivery(delivery_id)
     payload = json.loads(receipt.payload)
-    settings = _SETTINGS.validate_python(payload["settings"])
     if not await ctx.registry.claim_delivery(delivery_id):
         return False
+    if receipt.transport == "native_queue" and not ctx.policy.allow_attached_writes:
+        await ctx.registry.update_delivery(
+            delivery_id, status="failed", error="attached-write policy revoked before submission"
+        )
+        return True
     provider_call_entered = False
     try:
+        if receipt.transport == "native_queue":
+            async with asyncio.timeout(15):
+                provider_call_entered = True
+                submission = await ctx.client.thread_queue_add(
+                    receipt.lane, payload["text"], client_user_message_id=receipt.id
+                )
+            if (
+                submission.client_user_message_id != receipt.id
+                or len(submission.input) != 1
+                or submission.input[0].type != "text"
+                or submission.input[0].text != payload["text"]
+            ):
+                raise ProtocolError("native queue acknowledgment does not match the reserved input")
+            await ctx.registry.update_delivery(
+                delivery_id, status="accepted", submission_id=submission.id
+            )
+            return True
+        settings = _SETTINGS.validate_python(payload["settings"])
         await ctx.registry.update_lane_status(receipt.lane, "busy")
         async with asyncio.timeout(15):
             provider_call_entered = True
@@ -116,6 +151,11 @@ async def submit_reserved(delivery_id: str, ctx: Ctx) -> bool:
             status="failed" if definite else "ambiguous",
             error=str(exc)[:2000],
         )
+        if definite and receipt.transport == "native_queue":
+            raise CapabilityUnavailableError(
+                f"native queue rejected by the connected Codex provider: {exc}; "
+                f"receipt {receipt.id} is failed; no resume, start or steer fallback"
+            ) from exc
         if definite:
             await ctx.registry.record_turn_request_failed(receipt.lane, str(exc)[:2000])
         return True

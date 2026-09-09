@@ -58,6 +58,7 @@ from outfitter.dispatch.client.models import (
     TurnStatus,
     UserInput,
 )
+from outfitter.dispatch.client.native_queue import QueuedSubmission, ThreadQueuePage
 from outfitter.dispatch.config import CapturePolicy, RuntimePolicy
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.registry.store import Registry
@@ -82,6 +83,29 @@ def _fake_cursor_index(cursor: str | None, prefix: str) -> int:
 
 class FakeLaneClient:
     """An in-memory ``LaneClient`` that records calls and returns canned values."""
+
+    async def thread_queue_add(
+        self, thread_id: str, text: str, *, client_user_message_id: str
+    ) -> QueuedSubmission:
+        self._record(
+            "thread_queue_add",
+            thread_id=thread_id,
+            text=text,
+            client_user_message_id=client_user_message_id,
+        )
+        return QueuedSubmission.model_validate(
+            {
+                "id": "submission-1",
+                "clientUserMessageId": client_user_message_id,
+                "input": [{"type": "text", "text": text}],
+            }
+        )
+
+    async def thread_queue_list(
+        self, thread_id: str, *, cursor: str | None = None, limit: int | None = None
+    ) -> ThreadQueuePage:
+        self._record("thread_queue_list", thread_id=thread_id, cursor=cursor, limit=limit)
+        return ThreadQueuePage(data=[])
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, object]]] = []

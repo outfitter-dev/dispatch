@@ -81,6 +81,13 @@ from .models import (
     TurnSteerParams,
     UserInput,
 )
+from .native_queue import (
+    QueuedSubmission,
+    ThreadQueueAddParams,
+    ThreadQueueAddResult,
+    ThreadQueueListParams,
+    ThreadQueuePage,
+)
 from .router import Router
 from .transport import Transport
 
@@ -343,6 +350,36 @@ class AppServerClient:
             return ThreadResumeResult.model_validate(result)
         except ValidationError as exc:
             raise ProtocolError(f"malformed thread/resume response: {exc}") from exc
+
+    async def thread_queue_list(
+        self, thread_id: str, *, cursor: str | None = None, limit: int | None = None
+    ) -> ThreadQueuePage:
+        result = await self._request(
+            "thread/queue/list",
+            _dump(ThreadQueueListParams(thread_id=thread_id, cursor=cursor, limit=limit)),
+        )
+        try:
+            return ThreadQueuePage.model_validate(result)
+        except ValidationError as exc:
+            raise ProtocolError(f"malformed thread/queue/list response: {exc}") from exc
+
+    async def thread_queue_add(
+        self, thread_id: str, text: str, *, client_user_message_id: str
+    ) -> QueuedSubmission:
+        result = await self._request(
+            "thread/queue/add",
+            _dump(
+                ThreadQueueAddParams(
+                    thread_id=thread_id,
+                    client_user_message_id=client_user_message_id,
+                    input=_user_inputs(text, None),
+                )
+            ),
+        )
+        try:
+            return ThreadQueueAddResult.model_validate(result).queued_submission
+        except ValidationError as exc:
+            raise ProtocolError(f"malformed thread/queue/add response: {exc}") from exc
 
     async def thread_turns_list(
         self,

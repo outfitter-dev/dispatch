@@ -22,7 +22,13 @@ import aiosqlite
 
 from outfitter.dispatch.contracts.errors import DeliveryConflictError, NotFoundError
 
-from .delivery import DeliveryExecutionStatus, DeliveryMode, DeliveryReceipt, DeliveryStatus
+from .delivery import (
+    DeliveryExecutionStatus,
+    DeliveryMode,
+    DeliveryReceipt,
+    DeliveryStatus,
+    DeliveryTransport,
+)
 from .models import (
     SERVER_REQUEST_TEXT_LIMIT,
     ActionAdapter,
@@ -60,7 +66,7 @@ from .models import (
 from .refs import BASE58BTC_ALPHABET, CODEX_REF_SOURCE, codex_ref_payload, make_ref
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 
 class _ReentrantAsyncLock:
@@ -240,6 +246,8 @@ CREATE TABLE IF NOT EXISTS deliveries (
     key TEXT UNIQUE,
     lane TEXT NOT NULL,
     mode TEXT NOT NULL CHECK(mode IN ('send', 'queue')),
+    transport TEXT NOT NULL DEFAULT 'turn',
+    submission_id TEXT,
     payload TEXT NOT NULL,
     status TEXT NOT NULL CHECK(status IN (
         'queued', 'submitting', 'accepted', 'completed', 'failed', 'ambiguous'
@@ -733,6 +741,15 @@ class Registry:
         return self._now().isoformat()
 
     async def _migrate(self, user_version: int) -> None:
+        if user_version < 23:
+            async with self._conn.execute("PRAGMA table_info(deliveries)") as cur:
+                columns = {row["name"] for row in await cur.fetchall()}
+            if "transport" not in columns:
+                await self._conn.execute(
+                    "ALTER TABLE deliveries ADD COLUMN transport TEXT NOT NULL DEFAULT 'turn'"
+                )
+            if "submission_id" not in columns:
+                await self._conn.execute("ALTER TABLE deliveries ADD COLUMN submission_id TEXT")
         if user_version < 3:
             await self._ensure_ref_columns()
             async with self._conn.execute(
@@ -1504,6 +1521,7 @@ class Registry:
         payload: str,
         text: str,
         delivery_id: str | None = None,
+        transport: DeliveryTransport = "turn",
     ) -> tuple[DeliveryReceipt, bool]:
         """Reserve an idempotent delivery and its optional legacy queue row."""
 
@@ -1513,11 +1531,11 @@ class Registry:
             async with self._transaction():
                 await self._conn.execute(
                     "INSERT INTO deliveries "
-                    "(id, key, lane, mode, payload, status, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)",
-                    (receipt_id, key, lane, mode, payload, now, now),
+                    "(id, key, lane, mode, payload, transport, status, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
+                    (receipt_id, key, lane, mode, payload, transport, now, now),
                 )
-                if mode == "queue":
+                if mode == "queue" and transport == "turn":
                     cur = await self._conn.execute(
                         "INSERT INTO queued_messages "
                         "(lane, text, content, status, created_at, updated_at) "
@@ -1534,7 +1552,12 @@ class Registry:
         except aiosqlite.IntegrityError:
             existing = await self.get_delivery_by_key(key) if key is not None else None
             if existing is not None:
-                if (existing.lane, existing.mode, existing.payload) != (lane, mode, payload):
+                if (existing.lane, existing.mode, existing.payload, existing.transport) != (
+                    lane,
+                    mode,
+                    payload,
+                    transport,
+                ):
                     raise DeliveryConflictError(f"delivery key {key!r} is already bound") from None
                 return existing, False
             raise
@@ -1577,7 +1600,14 @@ class Registry:
                 "SELECT 1 FROM deliveries held "
                 "WHERE held.lane = deliveries.lane AND held.id != deliveries.id "
                 "AND held.status IN ('submitting', 'ambiguous')"
-                ") AND (queue_id IS NULL OR (EXISTS ("
+                ") AND (transport != 'native_queue' OR NOT EXISTS ("
+                "SELECT 1 FROM deliveries earlier "
+                "WHERE earlier.lane = deliveries.lane AND earlier.transport = 'native_queue' "
+                "AND earlier.status = 'queued' AND earlier.rowid < deliveries.rowid"
+                ")) AND (transport != 'native_queue' OR NOT EXISTS ("
+                "SELECT 1 FROM queued_messages legacy WHERE legacy.lane = deliveries.lane "
+                "AND legacy.status IN ('pending', 'sending')"
+                ")) AND (queue_id IS NULL OR (EXISTS ("
                 "SELECT 1 FROM queued_messages queued "
                 "WHERE queued.id = deliveries.queue_id AND queued.status = 'pending'"
                 ") AND NOT EXISTS ("
@@ -1606,6 +1636,7 @@ class Registry:
         turn_id: str | None = None,
         error: str | None = None,
         execution_status: DeliveryExecutionStatus | None = None,
+        submission_id: str | None = None,
     ) -> DeliveryReceipt:
         """Record observed delivery progress and update its linked queue row."""
 
@@ -1615,7 +1646,8 @@ class Registry:
                 "UPDATE deliveries SET "
                 "status = CASE WHEN status = 'completed' AND ? = 'accepted' "
                 "THEN status ELSE ? END, "
-                "turn_id = COALESCE(turn_id, ?), error = ?, "
+                "turn_id = COALESCE(turn_id, ?), "
+                "submission_id = COALESCE(submission_id, ?), error = ?, "
                 "execution_status = COALESCE(?, execution_status), updated_at = ? "
                 "WHERE id = ? AND NOT ("
                 "(? IN ('ambiguous', 'submitting', 'failed') "
@@ -1627,6 +1659,7 @@ class Registry:
                     status,
                     status,
                     turn_id,
+                    submission_id,
                     error,
                     execution_status,
                     now,

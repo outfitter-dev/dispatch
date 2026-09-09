@@ -92,6 +92,14 @@ class DeliveryConflictError(DispatchError):
     rpc_code = 1010
 
 
+class CapabilityUnavailableError(DispatchError):
+    """The connected provider cannot perform the requested delivery operation."""
+
+    code = "capability_unavailable"
+    exit_code = 8
+    rpc_code = 1011
+
+
 @dataclass(frozen=True)
 class ErrorProjection:
     """The transport-independent shape every surface renders."""
