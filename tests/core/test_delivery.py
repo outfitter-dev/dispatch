@@ -129,3 +129,49 @@ async def test_concurrent_key_replays_share_receipt_and_conflicting_reuse_fails(
         assert len([call for call in client.calls if call[0] == "turn_start"]) == 1
     finally:
         await store.close()
+
+
+@pytest.mark.parametrize("status", ["failed", "interrupted"])
+@pytest.mark.parametrize("before_ack", [False, True])
+async def test_nested_unsuccessful_completion_preserves_acceptance_and_execution(
+    status: str,
+    before_ack: bool,
+) -> None:
+    from outfitter.dispatch.client.events import project_notification
+    from outfitter.dispatch.core.reactor import Reactor
+    from outfitter.dispatch.core.triggers import TriggerRunner
+
+    store = await Registry.open()
+    try:
+        await store.add_lane(id="target", handle="@target", source="own", status="idle")
+        client = AcceptedClient()
+        ctx = make_ctx(store, client)
+        reactor = Reactor(ctx, TriggerRunner(ctx, lambda: datetime.now(UTC)))
+
+        async def complete() -> None:
+            params: dict[str, object] = {
+                "threadId": "target",
+                "turn": {
+                    "id": "turn-1",
+                    "status": status,
+                    "error": {"message": "terminal error"},
+                },
+            }
+            for event in project_notification("turn/completed", params):
+                await reactor.handle(event)
+
+        if before_ack:
+            client.on_accept = complete
+        ack = await handlers.send_message(
+            SendInput(lane="target", text="work", idempotency_key="key"), ctx
+        )
+        assert ack.delivery
+        if not before_ack:
+            await complete()
+        receipt = await store.get_delivery(ack.delivery.id)
+        assert receipt.status == "accepted"
+        assert receipt.execution_status == status
+        assert receipt.error == "terminal error"
+        assert receipt.turn_id == "turn-1"
+    finally:
+        await store.close()

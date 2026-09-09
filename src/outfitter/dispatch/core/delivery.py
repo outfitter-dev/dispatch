@@ -149,7 +149,7 @@ async def observe_delivery_execution(lane: str, turn_id: str | None, ctx: Ctx) -
         turn = await ctx.registry.get_thread_turn("codex", lane, turn_id)
     except NotFoundError:
         return
-    if turn.status not in ("completed", "failed"):
+    if turn.status not in ("completed", "failed", "interrupted"):
         return
     for receipt in await ctx.registry.delivery_for_turn(lane, turn_id):
         await ctx.registry.update_delivery(
