@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 
-from pytest import MonkeyPatch
+from pytest import MonkeyPatch, raises
 from typer.testing import CliRunner
 
 from outfitter.dispatch.cli import app as cli_app
 from outfitter.dispatch.doctor import DoctorOptions, run_doctor
 from outfitter.dispatch.registry.store import SCHEMA_VERSION, Registry
-from outfitter.dispatch.surfaces.cli import build_cli
+from outfitter.dispatch.surfaces.cli import _backup_registry, build_cli
 
 runner = CliRunner()
 
@@ -111,6 +114,24 @@ def _create_v3_registry(path: Path) -> None:
             PRAGMA user_version = 3;
             """
         )
+
+
+def _create_crashed_wal_registry(path: Path) -> None:
+    script = """
+import os
+import sqlite3
+import sys
+
+with sqlite3.connect(sys.argv[1]) as conn:
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA wal_autocheckpoint = 0")
+    conn.execute("CREATE TABLE committed_marker (value TEXT NOT NULL)")
+    conn.execute("INSERT INTO committed_marker VALUES ('committed-in-wal')")
+    conn.execute("PRAGMA user_version = 3")
+    conn.commit()
+    os._exit(0)
+"""
+    subprocess.run([sys.executable, "-c", script, str(path)], check=True)
 
 
 def test_doctor_reports_missing_console_scripts_and_skips_app_server(
@@ -445,6 +466,86 @@ def test_registry_migrate_command_updates_old_schema(
         columns = {row[1] for row in conn.execute("PRAGMA table_info(lanes)").fetchall()}
     assert version == SCHEMA_VERSION
     assert {"latest_turn_id", "latest_turn_status", "latest_error", "latest_error_at"} <= columns
+
+
+def test_registry_migrate_backup_includes_committed_wal_rows(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "dispatch-home"
+    home.mkdir()
+    db = home / "registry.db"
+    _create_crashed_wal_registry(db)
+    assert db.with_name(f"{db.name}-wal").exists()
+    monkeypatch.setenv("DISPATCH_HOME", str(home))
+    app = build_cli(socket_path=tmp_path / "dispatchd.sock")
+
+    result = runner.invoke(app, ["registry", "migrate", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    backup = Path(payload["backup"])
+    with sqlite3.connect(backup) as conn:
+        rows = conn.execute("SELECT value FROM committed_marker").fetchall()
+    assert rows == [("committed-in-wal",)]
+
+
+def test_registry_migrate_backup_is_private_under_permissive_umask(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "dispatch-home"
+    home.mkdir()
+    db = home / "registry.db"
+    _create_v3_registry(db)
+    db.chmod(0o600)
+    monkeypatch.setenv("DISPATCH_HOME", str(home))
+    app = build_cli(socket_path=tmp_path / "dispatchd.sock")
+
+    previous_umask = os.umask(0)
+    try:
+        result = runner.invoke(app, ["registry", "migrate", "--json"])
+    finally:
+        os.umask(previous_umask)
+
+    assert result.exit_code == 0
+    backup = Path(json.loads(result.output)["backup"])
+    assert backup.stat().st_mode & 0o777 == 0o600
+
+
+def test_registry_backup_projects_destination_collision_as_runtime_error(tmp_path: Path) -> None:
+    source = tmp_path / "registry.db"
+    destination = tmp_path / "registry.db.bak"
+    _create_v3_registry(source)
+    destination.write_text("existing backup")
+
+    with raises(RuntimeError, match=r"^registry backup failed: "):
+        _backup_registry(source, destination)
+
+    assert destination.read_text() == "existing backup"
+
+
+def test_registry_migrate_projects_backup_failure(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    home = tmp_path / "dispatch-home"
+    home.mkdir()
+    db = home / "registry.db"
+    _create_v3_registry(db)
+    monkeypatch.setenv("DISPATCH_HOME", str(home))
+
+    def fail_backup(_source: Path, _destination: Path) -> None:
+        raise RuntimeError("registry backup failed: synthetic failure")
+
+    monkeypatch.setattr("outfitter.dispatch.surfaces.cli._backup_registry", fail_backup)
+    app = build_cli(socket_path=tmp_path / "dispatchd.sock")
+
+    result = runner.invoke(app, ["registry", "migrate", "--json"])
+
+    assert result.exit_code == 8
+    payload = json.loads(result.output)
+    assert payload["status"] == "failed"
+    assert payload["migrated"] is False
+    assert payload["reason"] == "registry backup failed: synthetic failure"
+    assert payload["backup"] is None
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
 
 
 def test_registry_migrate_blocks_while_daemon_running(

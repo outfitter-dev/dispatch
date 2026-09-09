@@ -5,9 +5,11 @@ the daemon over the control socket (sync client; never imports the app-server).
 from __future__ import annotations
 
 import json
+import os
 import socket
 import sqlite3
 from collections.abc import Callable
+from contextlib import closing, suppress
 from functools import partial
 from pathlib import Path
 from typing import Annotated, Literal, cast
@@ -472,7 +474,6 @@ def build_cli(socket_path: Path | None = None) -> typer.Typer:
         ] = False,
     ) -> None:
         import asyncio
-        import shutil
         from datetime import UTC, datetime
 
         from outfitter.dispatch.daemon import lifecycle
@@ -496,19 +497,19 @@ def build_cli(socket_path: Path | None = None) -> typer.Typer:
                 typer.secho(recovery, fg="red", err=True)
             raise typer.Exit(code=8)
 
-        before = _registry_version(db)
         backup_path: str | None = None
-        if backup and db.exists():
-            stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-            backup_file = db.with_name(f"{db.name}.bak-{stamp}")
-            shutil.copy2(db, backup_file)
-            backup_path = str(backup_file)
 
         async def _migrate() -> None:
             store = await Registry.open(db)
             await store.close()
 
         try:
+            before = _registry_version(db)
+            if backup and db.exists():
+                stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+                backup_file = db.with_name(f"{db.name}.bak-{stamp}")
+                _backup_registry(db, backup_file)
+                backup_path = str(backup_file)
             asyncio.run(_migrate())
         except RuntimeError as exc:
             payload = {
@@ -561,3 +562,26 @@ def _registry_version(path: Path) -> int | None:
     with sqlite3.connect(path) as conn:
         row = conn.execute("PRAGMA user_version").fetchone()
     return int(row[0]) if row is not None else None
+
+
+def _backup_registry(source: Path, destination: Path) -> None:
+    """Create a consistent SQLite backup, including committed WAL content."""
+
+    created = False
+    try:
+        fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        created = True
+        try:
+            os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
+        with (
+            closing(sqlite3.connect(source)) as source_conn,
+            closing(sqlite3.connect(destination)) as backup_conn,
+        ):
+            source_conn.backup(backup_conn)
+    except (OSError, sqlite3.Error) as exc:
+        if created:
+            with suppress(OSError):
+                destination.unlink(missing_ok=True)
+        raise RuntimeError(f"registry backup failed: {exc}") from exc
