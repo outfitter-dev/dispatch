@@ -113,9 +113,19 @@ async def reconcile_receipt(delivery_id: str, ctx: Ctx, *, automatic: bool = Tru
     try:
         async with asyncio.timeout(8):
             if receipt.transport == "native_queue":
-                from .native_queue_evidence import find_queued_submission
+                from .native_queue_evidence import NativeQueueConflict, find_queued_submission
 
-                submission = await find_queued_submission(ctx, receipt.lane, receipt.id, expected)
+                try:
+                    submission = await find_queued_submission(
+                        ctx, receipt.lane, receipt.id, expected
+                    )
+                except NativeQueueConflict:
+                    raise
+                except (ClientError, TimeoutError) as exc:
+                    ctx.log.warning(
+                        "delivery.native_queue_check_failed", delivery_id=receipt.id, error=str(exc)
+                    )
+                    submission = None
                 if submission is not None:
                     await ctx.registry.update_delivery(
                         receipt.id, status="accepted", submission_id=submission.id

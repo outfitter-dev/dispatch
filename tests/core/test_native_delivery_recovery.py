@@ -1,10 +1,13 @@
 """Native ambiguity survives restart and resolves only with exact provider facts."""
 
+import asyncio
 from pathlib import Path
+
+import pytest
 
 from outfitter.dispatch.client.errors import TransportError
 from outfitter.dispatch.client.models import ThreadTurn, ThreadTurnsPage
-from outfitter.dispatch.client.native_queue import QueuedSubmission
+from outfitter.dispatch.client.native_queue import QueuedSubmission, ThreadQueuePage
 from outfitter.dispatch.config import RuntimePolicy
 from outfitter.dispatch.core import handlers
 from outfitter.dispatch.core.delivery_reconciliation import reconcile_pending, reconcile_receipt
@@ -50,9 +53,83 @@ async def test_unknown_native_arrival_remains_held_across_restart(tmp_path: Path
         await store.close()
 
 
-async def test_native_history_correlates_completion_after_queue_disappears() -> None:
+@pytest.mark.parametrize(
+    "queue_failure",
+    [
+        None,
+        "transport",
+        "timeout",
+        "stall",
+        "page_budget",
+        "conflict",
+        "duplicate",
+        "cancel",
+        "partial_transport",
+        "partial_stall",
+        "partial_budget",
+    ],
+)
+@pytest.mark.parametrize("acknowledged", [False, True])
+async def test_native_history_correlates_completion_after_queue_disappears(
+    queue_failure: str | None,
+    acknowledged: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("outfitter.dispatch.core.native_queue_evidence.NATIVE_QUEUE_TIMEOUT", 0.01)
+
     class History(LostAck):
+        history_reads = 0
+
+        async def thread_queue_list(
+            self, thread_id: str, *, cursor: str | None = None, limit: int | None = None
+        ) -> ThreadQueuePage:
+            if queue_failure and queue_failure.startswith("partial_"):
+                call = next(payload for name, payload in self.calls if name == "thread_queue_add")
+                if cursor is None:
+                    entry = QueuedSubmission.model_validate(
+                        {
+                            "id": "submission-1",
+                            "clientUserMessageId": call["client_user_message_id"],
+                            "input": [{"type": "text", "text": call["text"]}],
+                        }
+                    )
+                    return ThreadQueuePage(data=[entry], next_cursor="1")
+                if queue_failure == "partial_transport":
+                    raise TransportError("partial queue failure")
+                if queue_failure == "partial_stall":
+                    await asyncio.Event().wait()
+                return ThreadQueuePage(data=[], next_cursor=str(int(cursor) + 1))
+            if queue_failure == "transport":
+                raise TransportError("queue unavailable")
+            if queue_failure == "timeout":
+                raise TimeoutError("queue timeout")
+            if queue_failure == "stall":
+                await asyncio.Event().wait()
+            if queue_failure == "cancel":
+                raise asyncio.CancelledError
+            if queue_failure in {"conflict", "duplicate"}:
+                call = next(payload for name, payload in self.calls if name == "thread_queue_add")
+                entry = QueuedSubmission.model_validate(
+                    {
+                        "id": "submission-1",
+                        "clientUserMessageId": call["client_user_message_id"],
+                        "input": [
+                            {
+                                "type": "text",
+                                "text": "wrong" if queue_failure == "conflict" else call["text"],
+                            }
+                        ],
+                    }
+                )
+                return ThreadQueuePage(
+                    data=[entry] if queue_failure == "conflict" else [entry, entry]
+                )
+            if queue_failure == "page_budget":
+                return ThreadQueuePage(data=[], next_cursor=str(int(cursor or "0") + 1))
+            return ThreadQueuePage(data=[])
+
         async def thread_turns_list(self, thread_id: str, **kwargs: object) -> ThreadTurnsPage:
+            self.history_reads += 1
             call = next(payload for name, payload in self.calls if name == "thread_queue_add")
             return ThreadTurnsPage(
                 data=[
@@ -80,7 +157,26 @@ async def test_native_history_correlates_completion_after_queue_disappears() -> 
             SendInput(lane="target", mode="queue", text="hello"), ctx
         )
         assert first.delivery and first.delivery.status == "ambiguous"
-        await reconcile_receipt(first.delivery.id, ctx)
+        if acknowledged:
+            await store.update_delivery(first.delivery.id, status="accepted")
+        if queue_failure == "cancel":
+            with pytest.raises(asyncio.CancelledError):
+                await reconcile_receipt(first.delivery.id, ctx, automatic=False)
+            assert client.history_reads == 0
+            return
+        await reconcile_receipt(first.delivery.id, ctx, automatic=False)
+        if queue_failure in {
+            "conflict",
+            "duplicate",
+            "partial_transport",
+            "partial_stall",
+            "partial_budget",
+        }:
+            held = await store.get_delivery(first.delivery.id)
+            assert held.status == ("accepted" if acknowledged else "ambiguous")
+            assert held.turn_id is None and client.history_reads == 0
+            return
+        assert client.history_reads == 1
         resolved = await store.get_delivery(first.delivery.id)
         assert resolved.status == "completed" and resolved.turn_id == "turn-1"
         assert resolved.submission_id is None

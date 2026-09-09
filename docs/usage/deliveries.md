@@ -100,6 +100,10 @@ are never acceptance evidence.
 Automatic reconciliation performs at most three checks per ambiguous receipt,
 with two seconds between worker cycles. Each history scan has an eight-second
 deadline, at most four pages of 50 turns, and a 1 MB serialized-history budget.
+Native queue lookup uses at most four seconds within that deadline, leaving time
+for persisted history if the queue is unavailable. Conflicting input, duplicate
+queue identities, or an incomplete scan after matching input remain unresolved
+for inspection rather than falling through.
 Missing entries, truncated history, repeated cursors, missing full items,
 conflicting content and duplicate IDs remain inconclusive. Exhaustion persists
 actionable attention in the receipt and daemon log; it never triggers a resend.
