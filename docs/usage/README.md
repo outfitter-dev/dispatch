@@ -214,7 +214,10 @@ Common recovery paths:
 - Registry schema older than the installed binary: run `dispatch down`, then
   `dispatch registry migrate`, then `dispatch up`. Migration backs up the registry
   by default and refuses to run while the daemon is reachable unless
-  `--allow-running` is explicitly set for a controlled recovery.
+  `--allow-running` is explicitly set for a controlled recovery. The backup is a
+  consistent SQLite snapshot, including committed WAL data, with private file
+  permissions. If its timestamped filename already exists, migration fails
+  without replacing that backup.
 - Registry integrity failure: stop the daemon, back up the database at the path shown
   by doctor, and recreate it or inspect with `sqlite3`.
 - App Server initialize failure in default mode: run `codex app-server --listen stdio://`
