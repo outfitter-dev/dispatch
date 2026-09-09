@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from outfitter.dispatch.client.events import project_notification
 from outfitter.dispatch.core.handlers import send_message
+from outfitter.dispatch.core.history_index import index_codex_thread_read
 from outfitter.dispatch.core.models import SendInput
 from outfitter.dispatch.core.reactor import Reactor
 from outfitter.dispatch.core.triggers import TriggerRunner
@@ -85,7 +86,32 @@ async def _assert_terminal_failure(status: str, expected_error: str) -> None:
         assert lane.latest_error == expected_error
         assert lane.active_turn_id is None
         assert turn.status == status and turn.error == expected_error
+        assert turn.failed_at is not None
+        [indexed_event] = await store.list_provider_events(lane="target")
+        assert indexed_event.summary["status"] == status
         assert not any(name == "turn_start" for name, _ in client.calls)
+    finally:
+        await store.close()
+
+
+async def test_interrupted_history_preserves_terminal_timestamp() -> None:
+    store = await Registry.open()
+    try:
+        lane = await store.add_lane(id="target", handle="@target", source="own")
+        await index_codex_thread_read(
+            store,
+            lane,
+            {
+                "thread": {
+                    "id": "target",
+                    "turns": [{"id": "turn-1", "status": "interrupted", "items": []}],
+                }
+            },
+        )
+        turn = await store.get_thread_turn("codex", "target", "turn-1")
+        assert turn.status == "interrupted"
+        assert turn.failed_at is not None
+        assert turn.completed_at is None
     finally:
         await store.close()
 
