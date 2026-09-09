@@ -73,10 +73,19 @@ refresh execution/readiness for an already accepted receipt. It does not resend
 the request or reset the automatic budget. Changing the caller key is not a safe
 retry for an ambiguous delivery.
 
+A completed receipt can also be reconciled explicitly to retry an unsuccessful
+readiness check. This skips history and the original submission, and drains at
+most one later local queue entry after confirming idle. Failed or interrupted
+execution never authorizes that drain.
+
 After positive acceptance evidence, a separate bounded metadata read may confirm
 the destination is currently idle. Dispatch applies that observation only if
 the captured local thread state is unchanged and no newer submission is active.
 This prevents an old history completion from overwriting a newer busy turn.
+Readiness gets at most three metadata attempts within one eight-second deadline;
+a current busy response or a newer local event ends the check immediately. If
+those attempts fail, queued work stays held until an explicit reconcile or an
+authoritative idle event confirms readiness. There is no unlimited background poll.
 Reconnect also checks acknowledged work whose completion notification may have
 been missed; acceptance survives even when completion history is unavailable.
 

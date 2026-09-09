@@ -12,6 +12,7 @@ from outfitter.dispatch.contracts.context import Ctx
 MAX_CHECKS = 3
 MAX_PAGES = 4
 MAX_HISTORY_BYTES = 1_000_000
+MAX_READINESS_CHECKS = 3
 
 
 async def reconcile_pending(ctx: Ctx) -> None:
@@ -67,6 +68,12 @@ async def reconcile_accepted_after_reconnect(ctx: Ctx) -> None:
 
 async def reconcile_receipt(delivery_id: str, ctx: Ctx, *, automatic: bool = True) -> None:
     receipt = await ctx.registry.get_delivery(delivery_id)
+    if receipt.status == "completed" and receipt.execution_status == "completed":
+        if not automatic and await _refresh_idle_readiness(receipt.lane, ctx):
+            from .queue import drain_next_queued_message
+
+            await drain_next_queued_message(ctx, receipt.lane)
+        return
     acknowledged = (
         receipt.status == "accepted"
         and not automatic
@@ -129,30 +136,45 @@ async def reconcile_receipt(delivery_id: str, ctx: Ctx, *, automatic: bool = Tru
     from .delivery import observe_delivery_execution
 
     await observe_delivery_execution(receipt.lane, turn.id, ctx)
-    await _refresh_idle_readiness(receipt.lane, ctx)
+    if turn.status == "completed":
+        ready = await _refresh_idle_readiness(receipt.lane, ctx)
+        if ready and not automatic:
+            from .queue import drain_next_queued_message
+
+            await drain_next_queued_message(ctx, receipt.lane)
 
 
-async def _refresh_idle_readiness(lane_id: str, ctx: Ctx) -> None:
+async def _refresh_idle_readiness(lane_id: str, ctx: Ctx) -> bool:
     """A historical completion alone cannot establish current destination readiness."""
-    lane = await ctx.registry.find_lane(lane_id)
-    if lane is None:
-        return
     try:
         async with asyncio.timeout(8):
-            result = await ctx.client.thread_read(lane_id, include_turns=False)
-    except (ClientError, TimeoutError):
-        return
-    thread = result.get("thread")
-    if not isinstance(thread, dict) or thread.get("id") != lane_id:
-        return
-    status = thread.get("status")
-    if isinstance(status, dict) and status.get("type") == "idle":
-        await ctx.registry.reconcile_lane_idle(
-            lane_id,
-            lane.updated_at,
-            expected_status=lane.status,
-            expected_active_turn_id=lane.active_turn_id,
-        )
+            for _ in range(MAX_READINESS_CHECKS):
+                lane = await ctx.registry.find_lane(lane_id)
+                if lane is None or lane.status in ("archived", "error"):
+                    return False
+                try:
+                    result = await ctx.client.thread_read(lane_id, include_turns=False)
+                except (ClientError, TimeoutError):
+                    continue
+                thread = result.get("thread")
+                if not isinstance(thread, dict) or thread.get("id") != lane_id:
+                    continue
+                status = thread.get("status")
+                if not isinstance(status, dict):
+                    continue
+                if status.get("type") != "idle":
+                    return False
+                # A newer event winning the CAS ends this check; it is not
+                # permission to immediately overwrite that event on a retry.
+                return await ctx.registry.reconcile_lane_idle(
+                    lane_id,
+                    lane.updated_at,
+                    expected_status=lane.status,
+                    expected_active_turn_id=lane.active_turn_id,
+                )
+    except TimeoutError:
+        pass
+    return False
 
 
 async def _find_arrival(

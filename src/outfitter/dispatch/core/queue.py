@@ -41,7 +41,15 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
     if receipt is not None:
         from .delivery import submit_reserved
 
-        return await submit_reserved(receipt.id, ctx)
+        try:
+            return await submit_reserved(receipt.id, ctx)
+        except Exception:
+            # The submission layer owns receipt certainty; a drain failure must
+            # neither rewrite it as rejected nor stop recovery of other lanes.
+            ctx.log.exception(
+                "queue.reserved_submission_failed", delivery_id=receipt.id, lane=lane.id
+            )
+            return False
     if not await ctx.registry.claim_queued_message(message.id):
         return False
     try:
