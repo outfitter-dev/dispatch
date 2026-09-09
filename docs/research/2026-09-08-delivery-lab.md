@@ -291,8 +291,9 @@ thread 01a083d0-ff23-74d0-b49a-7380fb4f14ba already has an active writer
 
 A subsequent app task read still showed only the original completed browser turn.
 The parent reported no retries, alternate socket attempts or lock bypass, and
-was stopping only its separate test daemon. Shutdown completion was not part of
-the supplied observation.
+confirmed shutdown of only its separate test daemon: custom Dispatch
+`down --json` returned `status=stopped`, `stopped=true`, and socket
+`/tmp/outpost-dispatch-browser-01a083d0/dispatchd.sock`.
 
 This supersedes any assumption that writer interlocks are absent in this tested
 Codex 0.153.4 Desktop topology: an idle task can retain an active writer owner.
