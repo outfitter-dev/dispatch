@@ -268,3 +268,36 @@ execution, receipt acceptance/completion, queue state and callback success/failu
 They do not establish continuous presence or an idle inbound wake subscription.
 A completed turn is execution evidence; a tools inventory or daemon response is
 only capability/reachability evidence. No new monitor or poller was installed.
+
+## Exact Desktop writer boundary: supplied browser task
+
+A subsequent parent-coordinated live test used Matt's explicitly supplied idle
+Desktop-created task `01a083d0-ff23-74d0-b49a-7380fb4f14ba` (`#Dispatch browser
+test`). Matt authorized the custom Dispatch package to attach and send a request
+to navigate to `https://github.com/outfitter-dev/trails/pulls`. This observation
+was reported by the coordinating task; this lab did not repeat the operation.
+
+The parent used the private `custom-reliability` executable, a new
+`DISPATCH_HOME=/tmp/outpost-dispatch-browser-01a083d0`, and the normal Codex home,
+explicitly authorized for this exact target. Only the separate test config set
+`allow_attached_writes=true`. App Server initialization through `doctor` passed.
+Attach succeeded with ref `043fP1`, `writable=true`, and status `idle`.
+
+Exactly one send returned exit 8 with App Server error `-32600`:
+
+```text
+thread 01a083d0-ff23-74d0-b49a-7380fb4f14ba already has an active writer
+```
+
+A subsequent app task read still showed only the original completed browser turn.
+The parent reported no retries, alternate socket attempts or lock bypass, and
+was stopping only its separate test daemon. Shutdown completion was not part of
+the supplied observation.
+
+This supersedes any assumption that writer interlocks are absent in this tested
+Codex 0.153.4 Desktop topology: an idle task can retain an active writer owner.
+Successful attach, Dispatch's writable flag and idle execution state do not
+establish provider write authority. This result is distinct from the earlier
+isolated-home inability to load a Desktop task. It does not establish behavior
+for every topology or justify a global flag change or forced handoff. Continuing
+through app-owned tools would be a different path, not proof of Dispatch send.
