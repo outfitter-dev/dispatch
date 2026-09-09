@@ -110,10 +110,11 @@ refresh execution/readiness for an already accepted receipt. It does not resend
 the request or reset the automatic budget. Changing the caller key is not a safe
 retry for an ambiguous delivery.
 
-A completed receipt can also be reconciled explicitly to retry an unsuccessful
+A completed Dispatch-owned receipt can also be reconciled explicitly to retry an unsuccessful
 readiness check. This skips history and the original submission, and drains at
 most one later local queue entry after confirming idle. Failed or interrupted
-execution never authorizes that drain.
+execution never authorizes that drain. Native queue receipts leave readiness and
+queue draining to the existing app owner, including during manual reconciliation.
 
 After positive acceptance evidence, a separate bounded metadata read may confirm
 the destination is currently idle. Dispatch applies that observation only if

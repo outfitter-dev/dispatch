@@ -74,7 +74,8 @@ async def test_native_history_correlates_completion_after_queue_disappears() -> 
     store = await Registry.open()
     try:
         await store.add_lane(id="target", handle="@target", source="attached", status="busy")
-        ctx = make_ctx(store, History(), policy=RuntimePolicy(allow_attached_writes=True))
+        client = History()
+        ctx = make_ctx(store, client, policy=RuntimePolicy(allow_attached_writes=True))
         first = await handlers.send_message(
             SendInput(lane="target", mode="queue", text="hello"), ctx
         )
@@ -83,6 +84,9 @@ async def test_native_history_correlates_completion_after_queue_disappears() -> 
         resolved = await store.get_delivery(first.delivery.id)
         assert resolved.status == "completed" and resolved.turn_id == "turn-1"
         assert resolved.submission_id is None
+        before = list(client.calls)
+        await reconcile_receipt(first.delivery.id, ctx)
+        assert client.calls == before
         assert (await store.get_lane("target")).status == "busy"
     finally:
         await store.close()
