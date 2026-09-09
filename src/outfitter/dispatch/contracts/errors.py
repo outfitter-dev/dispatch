@@ -84,6 +84,14 @@ class StagingError(DispatchError):
     rpc_code = 1009
 
 
+class DeliveryConflictError(DispatchError):
+    """An idempotency key was reused for a different effective delivery."""
+
+    code = "delivery_conflict"
+    exit_code = 2
+    rpc_code = 1010
+
+
 @dataclass(frozen=True)
 class ErrorProjection:
     """The transport-independent shape every surface renders."""

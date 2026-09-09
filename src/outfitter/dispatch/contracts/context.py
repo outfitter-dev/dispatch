@@ -226,6 +226,7 @@ class LaneClient(Protocol):
         service_tier: str | None = None,
         output_schema: dict[str, object] | None = None,
         personality: Personality | None = None,
+        client_user_message_id: str | None = None,
     ) -> dict[str, object]: ...
 
     async def turn_steer(

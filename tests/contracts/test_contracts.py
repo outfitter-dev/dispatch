@@ -81,10 +81,9 @@ def test_define_op_preserves_intent_and_idempotent() -> None:
     assert ECHO.input is EchoIn
 
 
-def test_registry_legacy_safe_ops_excludes_reads_sharing_write_input() -> None:
-    """A read op whose input model a non-read op shares (a dry-run preview of a
-    write) is NOT safe to send to a daemon that predates the schema handshake —
-    it carries the same skew-sensitive fields the write is gated on."""
+def test_registry_legacy_safe_ops_excludes_unbaselined_and_shared_input_reads() -> None:
+    """Unbaselined reads and reads sharing a write input fail closed against a
+    daemon that predates the schema handshake."""
 
     async def preview_handler(inp: EchoIn, ctx: Ctx) -> EchoOut:
         return EchoOut(echo=inp.text)
@@ -180,6 +179,7 @@ def test_registry_read_safe_ops_is_subset_without_baseline_writes() -> None:
     assert "roster" not in read_safe
     assert "show" not in read_safe
     assert "models" in read_safe
+    assert "delivery-get" not in read_safe
     assert "stop" not in read_safe
     assert "new-plan" not in read_safe
 
@@ -191,6 +191,7 @@ def test_legacy_baseline_partitions_registry_and_matches_current_hashes() -> Non
     against the parent-release daemon), or at release cut to regenerate the
     baseline with ``scripts/gen_legacy_baseline.py``."""
     from outfitter.dispatch.contracts.legacy_baseline import (
+        ADDED_SINCE_PARENT,
         CHANGED_SINCE_PARENT,
         PARENT_OP_SCHEMA_HASHES,
         PARENT_VERSION,
@@ -201,12 +202,14 @@ def test_legacy_baseline_partitions_registry_and_matches_current_hashes() -> Non
     assert PARENT_VERSION
     baseline_ids = set(PARENT_OP_SCHEMA_HASHES)
     registry_ids = set(REGISTRY.ids())
-    overlap = baseline_ids & CHANGED_SINCE_PARENT
-    assert not overlap, f"ops both baselined and marked changed: {sorted(overlap)}"
-    assert baseline_ids | CHANGED_SINCE_PARENT == registry_ids, (
+    drifted_ids = CHANGED_SINCE_PARENT | ADDED_SINCE_PARENT
+    overlap = baseline_ids & drifted_ids
+    assert not overlap, f"ops both baselined and marked changed/added: {sorted(overlap)}"
+    assert not CHANGED_SINCE_PARENT & ADDED_SINCE_PARENT
+    assert baseline_ids | drifted_ids == registry_ids, (
         "legacy_baseline.py does not partition the registry: "
-        f"missing={sorted(registry_ids - baseline_ids - CHANGED_SINCE_PARENT)} "
-        f"stale={sorted((baseline_ids | CHANGED_SINCE_PARENT) - registry_ids)}"
+        f"missing={sorted(registry_ids - baseline_ids - drifted_ids)} "
+        f"stale={sorted((baseline_ids | drifted_ids) - registry_ids)}"
     )
     drifted = sorted(
         op.id

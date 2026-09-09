@@ -9,11 +9,13 @@ from outfitter.dispatch.contracts.errors import NotFoundError, ValidationError
 from outfitter.dispatch.contracts.op import Example, define_op
 from outfitter.dispatch.contracts.registry import OpRegistry
 
-from . import handlers, trigger_handlers
+from . import delivery, handlers, trigger_handlers
 from .models import (
     ActionAck,
     AttachInput,
     CompactInput,
+    DeliveryLookupInput,
+    DeliveryView,
     DiscoverInput,
     Discovery,
     ForkInput,
@@ -52,6 +54,7 @@ from .models import (
     RosterInput,
     SearchInput,
     SearchOutput,
+    SendAck,
     SendInput,
     ServerRequestList,
     ServerRequestListInput,
@@ -359,13 +362,35 @@ SEND = define_op(
         "A raw unmanaged Codex thread id is synced into Dispatch before the message path runs."
     ),
     input=SendInput,
-    output=ActionAck,
+    output=SendAck,
     intent="write",
     idempotent=False,
     handler=handlers.send_message,
     examples=[
         Example("missing", input={"lane": "@nope", "text": "hi"}, raises=NotFoundError),
     ],
+)
+
+DELIVERY_GET = define_op(
+    id="delivery-get",
+    summary="Read the persisted lifecycle of a Dispatch delivery receipt.",
+    input=DeliveryLookupInput,
+    output=DeliveryView,
+    intent="read",
+    idempotent=True,
+    handler=delivery.get_receipt,
+    examples=[Example("missing", input={"receipt_id": "nope"}, raises=NotFoundError)],
+)
+
+DELIVERY_RECONCILE = define_op(
+    id="delivery-reconcile",
+    summary="Run one bounded provider-history reconciliation for a delivery receipt.",
+    input=DeliveryLookupInput,
+    output=DeliveryView,
+    intent="write",
+    idempotent=False,
+    handler=delivery.reconcile_receipt_request,
+    examples=[Example("missing", input={"receipt_id": "nope"}, raises=NotFoundError)],
 )
 
 STOP = define_op(
@@ -940,6 +965,8 @@ _ALL = (
     NEW_PLAN,
     ATTACH,
     SEND,
+    DELIVERY_GET,
+    DELIVERY_RECONCILE,
     STOP,
     SHOW,
     LANE_RENAME,

@@ -544,6 +544,21 @@ async def test_turn_start_sends_service_tier_when_set(
     }
 
 
+async def test_turn_start_preserves_caller_user_message_id(
+    client: tuple[AppServerClient, FakeTransport],
+) -> None:
+    c, fake = client
+    fake.auto = _result_for("turn/start", {"turn": {"id": "turn-1"}})
+    result = await c.turn_start("L1", "go", cwd="/work", client_user_message_id="receipt-1")
+    assert fake.sent[-1]["params"] == {
+        "threadId": "L1",
+        "input": [{"type": "text", "text": "go"}],
+        "cwd": "/work",
+        "clientUserMessageId": "receipt-1",
+    }
+    assert result == {"turn": {"id": "turn-1"}}
+
+
 async def test_turn_start_serializes_mixed_text_and_image_inputs_exactly(
     client: tuple[AppServerClient, FakeTransport],
 ) -> None:

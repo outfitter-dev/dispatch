@@ -72,6 +72,7 @@ def test_action_schema_and_annotations_from_op() -> None:
     assert "$defs" not in str(content_items.get("discriminator", {}))
     assert "caller_thread_id" not in send_schema["properties"]
     assert {s["properties"]["op"]["const"] for s in one_of} >= {
+        "delivery_reconcile",
         "fork",
         "goal_set",
         "compact",
@@ -91,11 +92,31 @@ def test_action_schema_and_annotations_from_op() -> None:
     assert "local" not in search_schema["properties"]
     assert {"tool", "file", "arg_key"} <= set(query_schema["properties"])
     assert {s["properties"]["op"]["const"] for s in lane_read.inputSchema["oneOf"]} >= {
+        "delivery_get",
         "transcript",
         "watch",
         "goal_get",
         "search",
         "query",
+    }
+    assert lane_read.outputSchema is not None
+    delivery_schema = next(
+        schema for schema in lane_read.outputSchema["oneOf"] if schema["title"] == "DeliveryView"
+    )
+    assert "payload" not in delivery_schema["properties"]
+    assert set(delivery_schema["properties"]) >= {
+        "id",
+        "key",
+        "lane",
+        "mode",
+        "status",
+        "execution_status",
+        "turn_id",
+        "queue_id",
+        "error",
+        "reconciliation_attempts",
+        "created_at",
+        "updated_at",
     }
 
     lane_destroy = tools["dispatch_thread_destroy"]

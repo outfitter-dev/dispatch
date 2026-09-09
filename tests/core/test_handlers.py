@@ -804,6 +804,7 @@ class _CompletingBeforeReturnClient(FakeLaneClient):
         service_tier: str | None = None,
         output_schema: dict[str, object] | None = None,
         personality: Personality | None = None,
+        client_user_message_id: str | None = None,
     ) -> dict[str, object]:
         await super().turn_start(
             thread_id,
@@ -820,6 +821,7 @@ class _CompletingBeforeReturnClient(FakeLaneClient):
             service_tier=service_tier,
             output_schema=output_schema,
             personality=personality,
+            client_user_message_id=client_user_message_id,
         )
         await self._store.record_turn_started(thread_id, "turn-race")
         await self._store.record_turn_completed(thread_id, "turn-race")

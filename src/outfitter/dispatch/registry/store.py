@@ -16,11 +16,13 @@ from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 from typing import Any, Concatenate, Literal, Protocol, cast
+from uuid import uuid4
 
 import aiosqlite
 
-from outfitter.dispatch.contracts.errors import NotFoundError
+from outfitter.dispatch.contracts.errors import DeliveryConflictError, NotFoundError
 
+from .delivery import DeliveryExecutionStatus, DeliveryMode, DeliveryReceipt, DeliveryStatus
 from .models import (
     SERVER_REQUEST_TEXT_LIMIT,
     ActionAdapter,
@@ -58,7 +60,7 @@ from .models import (
 from .refs import BASE58BTC_ALPHABET, CODEX_REF_SOURCE, codex_ref_payload, make_ref
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 
 class _ReentrantAsyncLock:
@@ -230,6 +232,34 @@ CREATE TABLE IF NOT EXISTS queued_messages (
     error TEXT,
     FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
 );
+"""
+
+_DELIVERIES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS deliveries (
+    id TEXT PRIMARY KEY,
+    key TEXT UNIQUE,
+    lane TEXT NOT NULL,
+    mode TEXT NOT NULL CHECK(mode IN ('send', 'queue')),
+    payload TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN (
+        'queued', 'submitting', 'accepted', 'completed', 'failed', 'ambiguous'
+    )),
+    execution_status TEXT CHECK(execution_status IN (
+        'inProgress', 'completed', 'failed', 'interrupted'
+    )),
+    turn_id TEXT,
+    queue_id INTEGER UNIQUE,
+    error TEXT,
+    reconciliation_attempts INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE,
+    FOREIGN KEY(queue_id) REFERENCES queued_messages(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_deliveries_lane_status
+ON deliveries(lane, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_deliveries_turn
+ON deliveries(lane, turn_id);
 """
 
 _PROVIDER_THREADS_SCHEMA = """
@@ -644,6 +674,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 );
 {_PROVIDER_HISTORY_SCHEMA}
 {_SERVER_REQUESTS_SCHEMA}
+{_DELIVERIES_SCHEMA}
 """
 
 REGISTRY_SCHEMA_SQL = _SCHEMA
@@ -756,6 +787,11 @@ class Registry:
             await self._ensure_permission_profiles_table()
         if user_version < 21:
             await self._ensure_queued_message_content_column()
+        if user_version < 22:
+            await self._ensure_deliveries_table()
+
+    async def _ensure_deliveries_table(self) -> None:
+        await self._conn.executescript(_DELIVERIES_SCHEMA)
 
     async def _ensure_queued_message_content_column(self) -> None:
         async with self._conn.execute("PRAGMA table_info(queued_messages)") as cur:
@@ -1416,6 +1452,37 @@ class Registry:
             await self._conn.commit()
 
     @_serialized_access
+    async def reconcile_lane_idle(
+        self,
+        lane_id: str,
+        expected_updated_at: datetime,
+        *,
+        expected_status: LaneStatus,
+        expected_active_turn_id: str | None,
+    ) -> bool:
+        """Mark a provider-confirmed idle lane only if no newer event won the race."""
+
+        async with self._transaction():
+            cur = await self._conn.execute(
+                "UPDATE lanes SET status = 'idle', active_turn_id = NULL, updated_at = ? "
+                "WHERE id = ? AND updated_at = ? AND status = ? AND active_turn_id IS ? "
+                "AND status != 'archived' AND NOT EXISTS ("
+                "SELECT 1 FROM deliveries WHERE deliveries.lane = lanes.id "
+                "AND deliveries.status IN ('submitting', 'ambiguous')"
+                ") AND NOT EXISTS ("
+                "SELECT 1 FROM queued_messages WHERE queued_messages.lane = lanes.id "
+                "AND queued_messages.status = 'sending')",
+                (
+                    self._now().isoformat(),
+                    lane_id,
+                    expected_updated_at.isoformat(),
+                    expected_status,
+                    expected_active_turn_id,
+                ),
+            )
+        return cur.rowcount == 1
+
+    @_serialized_access
     async def touch_lane_event(self, lane_id: str, when: datetime | None = None) -> None:
         stamp = (when or self._now()).isoformat()
         async with self._write_lock:
@@ -1424,6 +1491,255 @@ class Registry:
                 (stamp, self._now().isoformat(), lane_id),
             )
             await self._conn.commit()
+
+    # --- deliveries ----------------------------------------------------------
+
+    @_serialized_access
+    async def reserve_delivery(
+        self,
+        *,
+        key: str | None,
+        lane: str,
+        mode: DeliveryMode,
+        payload: str,
+        text: str,
+        delivery_id: str | None = None,
+    ) -> tuple[DeliveryReceipt, bool]:
+        """Reserve an idempotent delivery and its optional legacy queue row."""
+
+        receipt_id = delivery_id or str(uuid4())
+        now = self._now().isoformat()
+        try:
+            async with self._transaction():
+                await self._conn.execute(
+                    "INSERT INTO deliveries "
+                    "(id, key, lane, mode, payload, status, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)",
+                    (receipt_id, key, lane, mode, payload, now, now),
+                )
+                if mode == "queue":
+                    cur = await self._conn.execute(
+                        "INSERT INTO queued_messages "
+                        "(lane, text, content, status, created_at, updated_at) "
+                        "VALUES (?, ?, '[]', 'pending', ?, ?)",
+                        (lane, text, now, now),
+                    )
+                    queue_id = cur.lastrowid
+                    if queue_id is None:
+                        raise RuntimeError("queued message insert did not return an id")
+                    await self._conn.execute(
+                        "UPDATE deliveries SET queue_id = ? WHERE id = ?",
+                        (queue_id, receipt_id),
+                    )
+        except aiosqlite.IntegrityError:
+            existing = await self.get_delivery_by_key(key) if key is not None else None
+            if existing is not None:
+                if (existing.lane, existing.mode, existing.payload) != (lane, mode, payload):
+                    raise DeliveryConflictError(f"delivery key {key!r} is already bound") from None
+                return existing, False
+            raise
+        return await self.get_delivery(receipt_id), True
+
+    @_serialized_access
+    async def get_delivery(self, delivery_id: str) -> DeliveryReceipt:
+        async with self._conn.execute(
+            "SELECT * FROM deliveries WHERE id = ?", (delivery_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            raise NotFoundError(f"no delivery {delivery_id!r}")
+        return _row_to_delivery(row)
+
+    @_serialized_access
+    async def get_delivery_by_key(self, key: str) -> DeliveryReceipt | None:
+        async with self._conn.execute("SELECT * FROM deliveries WHERE key = ?", (key,)) as cur:
+            row = await cur.fetchone()
+        return _row_to_delivery(row) if row is not None else None
+
+    @_serialized_access
+    async def delivery_for_queue(self, queue_id: int) -> DeliveryReceipt | None:
+        async with self._conn.execute(
+            "SELECT * FROM deliveries WHERE queue_id = ?", (queue_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return _row_to_delivery(row) if row is not None else None
+
+    @_serialized_access
+    async def claim_delivery(self, delivery_id: str) -> bool:
+        """Claim one queued delivery while excluding uncertain work on its lane."""
+
+        now = self._now().isoformat()
+        async with self._transaction():
+            cur = await self._conn.execute(
+                "UPDATE deliveries SET status = 'submitting', updated_at = ? "
+                "WHERE id = ? AND status = 'queued' "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM deliveries held "
+                "WHERE held.lane = deliveries.lane AND held.id != deliveries.id "
+                "AND held.status IN ('submitting', 'ambiguous')"
+                ") AND (queue_id IS NULL OR (EXISTS ("
+                "SELECT 1 FROM queued_messages queued "
+                "WHERE queued.id = deliveries.queue_id AND queued.status = 'pending'"
+                ") AND NOT EXISTS ("
+                "SELECT 1 FROM queued_messages earlier "
+                "WHERE earlier.lane = deliveries.lane AND earlier.status = 'pending' "
+                "AND earlier.id < deliveries.queue_id"
+                ")))",
+                (now, delivery_id),
+            )
+            if cur.rowcount != 1:
+                return False
+            await self._conn.execute(
+                "UPDATE queued_messages SET status = 'sending', updated_at = ? "
+                "WHERE id = (SELECT queue_id FROM deliveries WHERE id = ?) "
+                "AND status = 'pending'",
+                (now, delivery_id),
+            )
+        return True
+
+    @_serialized_access
+    async def update_delivery(
+        self,
+        delivery_id: str,
+        *,
+        status: DeliveryStatus,
+        turn_id: str | None = None,
+        error: str | None = None,
+        execution_status: DeliveryExecutionStatus | None = None,
+    ) -> DeliveryReceipt:
+        """Record observed delivery progress and update its linked queue row."""
+
+        now = self._now().isoformat()
+        async with self._transaction():
+            changed = await self._conn.execute(
+                "UPDATE deliveries SET "
+                "status = CASE WHEN status = 'completed' AND ? = 'accepted' "
+                "THEN status ELSE ? END, "
+                "turn_id = COALESCE(turn_id, ?), error = ?, "
+                "execution_status = COALESCE(?, execution_status), updated_at = ? "
+                "WHERE id = ? AND NOT ("
+                "(? IN ('ambiguous', 'submitting', 'failed') "
+                "AND status IN ('accepted', 'completed', 'failed')) "
+                "OR (? = 'accepted' AND status = 'completed') "
+                "OR (status = 'accepted' AND COALESCE(execution_status, '') "
+                "IN ('failed', 'interrupted')))",
+                (
+                    status,
+                    status,
+                    turn_id,
+                    error,
+                    execution_status,
+                    now,
+                    delivery_id,
+                    status,
+                    status,
+                ),
+            )
+            async with self._conn.execute(
+                "SELECT queue_id FROM deliveries WHERE id = ?", (delivery_id,)
+            ) as cur:
+                row = await cur.fetchone()
+            if row is None:
+                raise NotFoundError(f"no delivery {delivery_id!r}")
+            queue_id = row["queue_id"]
+            if (
+                changed.rowcount == 1
+                and queue_id is not None
+                and status in ("accepted", "completed")
+            ):
+                await self._conn.execute(
+                    "UPDATE queued_messages SET status = 'sent', updated_at = ?, error = NULL "
+                    "WHERE id = ?",
+                    (now, queue_id),
+                )
+            elif changed.rowcount == 1 and queue_id is not None and status == "failed":
+                await self._conn.execute(
+                    "UPDATE queued_messages SET status = 'error', updated_at = ?, error = ? "
+                    "WHERE id = ?",
+                    (now, error, queue_id),
+                )
+        return await self.get_delivery(delivery_id)
+
+    @_serialized_access
+    async def lane_delivery_held(self, lane: str) -> bool:
+        async with self._conn.execute(
+            "SELECT 1 FROM deliveries WHERE lane = ? "
+            "AND status IN ('submitting', 'ambiguous') LIMIT 1",
+            (lane,),
+        ) as cur:
+            return await cur.fetchone() is not None
+
+    @_serialized_access
+    async def list_waiting_deliveries(self) -> list[DeliveryReceipt]:
+        async with self._conn.execute(
+            "SELECT * FROM deliveries WHERE status = 'queued' ORDER BY created_at, id"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_delivery(row) for row in rows]
+
+    @_serialized_access
+    async def list_unresolved_deliveries(self) -> list[DeliveryReceipt]:
+        async with self._conn.execute(
+            "SELECT * FROM deliveries WHERE status IN ('submitting', 'ambiguous') "
+            "ORDER BY created_at, id"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_delivery(row) for row in rows]
+
+    @_serialized_access
+    async def list_accepted_unfinished_deliveries(self) -> list[DeliveryReceipt]:
+        async with self._conn.execute(
+            "SELECT * FROM deliveries WHERE status = 'accepted' "
+            "AND (execution_status IS NULL OR execution_status = 'inProgress') "
+            "ORDER BY created_at, id"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_delivery(row) for row in rows]
+
+    @_serialized_access
+    async def delivery_for_turn(self, lane: str, turn_id: str) -> list[DeliveryReceipt]:
+        async with self._conn.execute(
+            "SELECT * FROM deliveries WHERE lane = ? AND turn_id = ? ORDER BY created_at, id",
+            (lane, turn_id),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_delivery(row) for row in rows]
+
+    @_serialized_access
+    async def recover_deliveries(self) -> int:
+        now = self._now().isoformat()
+        async with self._transaction():
+            cur = await self._conn.execute(
+                "UPDATE deliveries SET status = 'ambiguous', updated_at = ? "
+                "WHERE status = 'submitting'",
+                (now,),
+            )
+        return cur.rowcount
+
+    @_serialized_access
+    async def note_delivery_check(
+        self,
+        delivery_id: str,
+        error: str,
+        *,
+        max_attempts: int | None = None,
+    ) -> DeliveryReceipt | None:
+        async with self._transaction():
+            cur = await self._conn.execute(
+                "UPDATE deliveries SET reconciliation_attempts = reconciliation_attempts + 1, "
+                "error = ?, updated_at = ? WHERE id = ? AND status = 'ambiguous' "
+                "AND (? IS NULL OR reconciliation_attempts < ?)",
+                (error, self._now().isoformat(), delivery_id, max_attempts, max_attempts),
+            )
+            if cur.rowcount == 1:
+                return await self.get_delivery(delivery_id)
+            async with self._conn.execute(
+                "SELECT 1 FROM deliveries WHERE id = ?", (delivery_id,)
+            ) as existing:
+                found = await existing.fetchone()
+            if found is None:
+                raise NotFoundError(f"no delivery {delivery_id!r}")
+        return None
 
     # --- queued messages ------------------------------------------------------
 
@@ -1482,7 +1798,9 @@ class Registry:
         async with self._transaction():
             cur = await self._conn.execute(
                 "UPDATE queued_messages SET status = 'sending', updated_at = ? "
-                "WHERE id = ? AND status = 'pending'",
+                "WHERE id = ? AND status = 'pending' AND NOT EXISTS ("
+                "SELECT 1 FROM deliveries WHERE deliveries.lane = queued_messages.lane "
+                "AND deliveries.status IN ('submitting', 'ambiguous'))",
                 (self._now().isoformat(), message_id),
             )
         return cur.rowcount == 1
@@ -1510,7 +1828,9 @@ class Registry:
         async with self._transaction():
             cur = await self._conn.execute(
                 "UPDATE queued_messages SET status = 'pending', updated_at = ? "
-                "WHERE status = 'sending'",
+                "WHERE status = 'sending' AND NOT EXISTS ("
+                "SELECT 1 FROM deliveries WHERE deliveries.queue_id = queued_messages.id "
+                "AND deliveries.status IN ('submitting', 'ambiguous'))",
                 (self._now().isoformat(),),
             )
         return cur.rowcount
@@ -3847,6 +4167,10 @@ def _row_to_queued_message(row: aiosqlite.Row) -> QueuedMessage:
     raw_content = data["content"]
     data["content"] = json.loads(str(raw_content)) if raw_content else []
     return QueuedMessage.model_validate(data)
+
+
+def _row_to_delivery(row: aiosqlite.Row) -> DeliveryReceipt:
+    return DeliveryReceipt.model_validate(_row_dict(row))
 
 
 def _row_to_provider_event(row: aiosqlite.Row) -> ProviderEvent:

@@ -215,7 +215,7 @@ def test_invoke_daemon_allows_baseline_ops_on_parent_version_prehandshake_daemon
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A pre-handshake daemon that self-reports exactly the parent version
-    serves both unshared-input reads (``models``) and baseline-matching ops
+    serves both unchanged reads (``models``) and baseline-matching ops
     (``stop``, write-intent) — the baseline proves that release parses them
     identically, so an operator can still cancel runaway work right after
     upgrading, without restarting the daemon mid-flight."""
@@ -240,9 +240,8 @@ def test_invoke_daemon_blocks_baseline_ops_on_older_prehandshake_daemon(
     """The baseline allowance is proven only against the parent release: a
     pre-handshake daemon reporting an OLDER version (e.g. v0.8.2, whose
     ``send`` had no ``content``) may parse baseline ops differently, so
-    write-intent baseline ops are blocked (exit 8) while reads still pass —
-    v0.10.0 is at the read baseline floor (read schemas proven identical to
-    current from that release on)."""
+    write-intent baseline ops are blocked (exit 8), while unchanged reads remain
+    available from the proven 0.10.0 read baseline floor."""
     calls: list[str] = []
     stopped = False
 

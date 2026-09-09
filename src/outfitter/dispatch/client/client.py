@@ -551,6 +551,7 @@ class AppServerClient:
         service_tier: str | None = None,
         output_schema: dict[str, object] | None = None,
         personality: Personality | None = None,
+        client_user_message_id: str | None = None,
     ) -> dict[str, object]:
         params = TurnStartParams(
             thread_id=thread_id,
@@ -566,6 +567,7 @@ class AppServerClient:
             service_tier=service_tier,
             output_schema=output_schema,
             personality=personality,
+            client_user_message_id=client_user_message_id,
         )
         return await self._request("turn/start", _dump(params))
 

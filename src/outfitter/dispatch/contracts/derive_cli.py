@@ -69,6 +69,8 @@ _SIMPLE_ROUTES: tuple[CliRoute, ...] = (
     CliRoute(("models",), "models"),
     CliRoute(("permissions",), "permissions"),
     CliRoute(("usage",), "usage"),
+    CliRoute(("delivery", "get"), "delivery-get", ("receipt_id",)),
+    CliRoute(("delivery", "reconcile"), "delivery-reconcile", ("receipt_id",)),
     CliRoute(("inbox", "read"), "inbox-read", ("id",)),
     CliRoute(("request", "list"), "server-request-list"),
     CliRoute(("subscriptions",), "subscription-list"),
@@ -534,6 +536,13 @@ def _send_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., No
                 help="Append dispatch attribution and reply hint from CODEX_THREAD_ID.",
             ),
         ] = False,
+        idempotency_key: Annotated[
+            str | None,
+            typer.Option(
+                "--idempotency-key",
+                help="Caller key for replay-safe send or queue delivery.",
+            ),
+        ] = None,
         json: Annotated[
             bool, typer.Option("--json", help="Render machine-readable JSON output.")
         ] = False,
@@ -556,6 +565,8 @@ def _send_command(op: Op, invoke: Invoker, render: Renderer) -> Callable[..., No
         _resolve_image_options(params)
         if intro:
             params["caller_thread_id"] = os.environ.get("CODEX_THREAD_ID")
+        if idempotency_key is not None:
+            params["idempotency_key"] = idempotency_key
         result = invoke(
             op.id,
             params,

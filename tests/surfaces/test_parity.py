@@ -25,6 +25,7 @@ from outfitter.dispatch.contracts.derive_mcp import derive_mcp_projection
 from outfitter.dispatch.contracts.errors import (
     AppServerError,
     AuthorityError,
+    DeliveryConflictError,
     DispatchError,
     LaneBusyError,
     NotFoundError,
@@ -52,6 +53,8 @@ _EXPECTED_CLI_SCHEMA_ROUTES = {
     "list": "roster",
     "list --unmanaged": "discover",
     "get": "show",
+    "delivery get": "delivery-get",
+    "delivery reconcile": "delivery-reconcile",
     "tail": "transcript",
     "history": "history",
     "watch": "watch",
@@ -357,6 +360,7 @@ def test_error_taxonomy_projects_from_one_table() -> None:
         (LaneBusyError("x"), 5, 1005),
         (AuthorityError("x"), 7, 1007),
         (AppServerError("x"), 8, 1008),
+        (DeliveryConflictError("x"), 2, 1010),
     ]
     for exc, exit_code, rpc_code in cases:
         proj = project_error(exc)

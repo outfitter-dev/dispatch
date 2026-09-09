@@ -32,9 +32,16 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
     lane = await ctx.registry.find_lane(lane_id)
     if lane is None or lane.status != "idle":
         return False
+    if await ctx.registry.lane_delivery_held(lane.id):
+        return False
     message = await ctx.registry.next_pending_message(lane.id)
     if message is None:
         return False
+    receipt = await ctx.registry.delivery_for_queue(message.id)
+    if receipt is not None:
+        from .delivery import submit_reserved
+
+        return await submit_reserved(receipt.id, ctx)
     if not await ctx.registry.claim_queued_message(message.id):
         return False
     try:

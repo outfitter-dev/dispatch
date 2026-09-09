@@ -317,8 +317,21 @@ async def test_tool_call_prehandshake_baseline_ops_gated_by_reported_version(
     assert stopped.isError is False
     assert forwarded == ["stop"]
 
+    # This read op was added after the parent release, so it is not eligible
+    # for the pre-handshake read allowance even though older daemons would
+    # reject the unknown method loudly.
+    new_read = await handle_tool_call(
+        Path("/nonexistent.sock"),
+        "dispatch_thread_read",
+        {"op": "delivery_get", "receipt_id": "delivery-1"},
+    )
+    assert new_read.isError is True
+    assert new_read.meta is not None
+    assert new_read.meta["dispatchCode"] == "daemon_stale"
+    assert forwarded == ["stop"]
+
     # Older pre-handshake daemon (e.g. v0.8.2's ``send`` had no ``content``):
-    # baseline write blocked with the actionable restart hint, reads still pass.
+    # Baseline writes are blocked with the actionable restart hint; unchanged reads pass.
     reported_version = "0.10.0"
     blocked = await handle_tool_call(
         Path("/nonexistent.sock"), "dispatch_thread_write", {"op": "stop", "lane": "@a"}

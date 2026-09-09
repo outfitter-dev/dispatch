@@ -760,6 +760,8 @@ uv run dispatch send @docs-review "Run this after the active turn." --queue
 
 Queued images are durable references, not copied blobs: Dispatch stores the normalized local path or HTTPS URL plus bounded validation metadata, never image bytes. It revalidates local files, public URL resolution and content, and model image support at delivery time, so a missing or invalid image fails clearly instead of starting a malformed turn.
 
+For a connector that may repeat a plain-text request, use `send --idempotency-key` and inspect its typed receipt with `delivery get` or `delivery reconcile`. See [reserved text delivery](deliveries.md) for key binding, queue holds, and bounded reconciliation after an uncertain provider outcome.
+
 Use `send --intro` for managed Codex-to-Codex coordination. It appends the
 standard visible Dispatch attribution footer with a Codex thread link and reply
 hint. The sender is derived from `CODEX_THREAD_ID`, so the current Codex thread

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 from outfitter.dispatch.client.events import (
     AccountRateLimitsUpdated,
@@ -41,17 +42,25 @@ class Reactor:
         self._runner = runner
 
     async def run(self) -> None:
-        async with asyncio.TaskGroup() as tasks:
-            tasks.create_task(self._run_lane_events())
-            tasks.create_task(self._run_account_events())
-            tasks.create_task(
-                ServerRequestManager(
-                    self._ctx,
-                    on_approval_attention=lambda lane_id: self._fire_event(
-                        lane_id, "waiting_on_approval"
-                    ),
-                ).run()
-            )
+        from .delivery_reconciliation import run_reconciliation
+
+        reconciliation = asyncio.create_task(run_reconciliation(self._ctx))
+        try:
+            async with asyncio.TaskGroup() as tasks:
+                tasks.create_task(self._run_lane_events())
+                tasks.create_task(self._run_account_events())
+                tasks.create_task(
+                    ServerRequestManager(
+                        self._ctx,
+                        on_approval_attention=lambda lane_id: self._fire_event(
+                            lane_id, "waiting_on_approval"
+                        ),
+                    ).run()
+                )
+        finally:
+            reconciliation.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reconciliation
 
     async def _run_lane_events(self) -> None:
         async for event in self._ctx.client.events(None):
@@ -89,6 +98,10 @@ class Reactor:
         if lane is None:
             return  # an event for a thread dispatch does not track
         await index_codex_lane_event(registry, lane, event, self._ctx.capture)
+        if isinstance(event, TurnCompleted | TurnFailed):
+            from .delivery import observe_delivery_execution
+
+            await observe_delivery_execution(lane.id, event.turn_id, self._ctx)
 
         if isinstance(event, TurnStarted):
             await registry.record_turn_started(lane.id, event.turn_id)

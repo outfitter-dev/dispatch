@@ -635,6 +635,7 @@ class ThreadGoalGetResult(WireModel):
 
 
 class TurnStartParams(WireModel):
+    client_user_message_id: str | None = None
     thread_id: str
     input: list[UserInput]
     cwd: str

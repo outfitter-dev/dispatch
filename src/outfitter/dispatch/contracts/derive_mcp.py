@@ -57,6 +57,7 @@ _GROUPS: tuple[_ToolGroup, ...] = (
             ("goal_get", "goal-get"),
             ("search", "search"),
             ("query", "query"),
+            ("delivery_get", "delivery-get"),
         ),
     ),
     _ToolGroup(
@@ -97,6 +98,7 @@ _GROUPS: tuple[_ToolGroup, ...] = (
             ("sync", "sync"),
             ("rename", "lane-rename"),
             ("send", "send"),
+            ("delivery_reconcile", "delivery-reconcile"),
             ("stop", "stop"),
             ("restore", "restore"),
             ("goal_set", "goal-set"),
