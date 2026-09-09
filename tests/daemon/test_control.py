@@ -74,6 +74,20 @@ async def test_unknown_lane_projects_not_found(socket_path: Path) -> None:
     assert data["dispatchCode"] == "not_found"
 
 
+async def test_keyed_delivery_receipt_round_trips_over_control_socket(socket_path: Path) -> None:
+    await _call(socket_path, "open", {"name": "receipt", "cwd": "/w"})
+    sent = await _call(
+        socket_path, "send", {"lane": "lane-1", "text": "hi", "idempotency_key": "event-1"}
+    )
+    receipt = _result(sent)["delivery"]
+    assert isinstance(receipt, dict)
+    assert receipt["status"] == "accepted"
+    assert isinstance(receipt["created_at"], str)
+    assert isinstance(receipt["updated_at"], str)
+    fetched = await _call(socket_path, "delivery-get", {"receipt_id": receipt["id"]})
+    assert _result(fetched) == receipt
+
+
 async def test_invalid_input_projects_validation_error(socket_path: Path) -> None:
     resp = await _call(socket_path, "open", {})  # missing required 'name'
     data = _error(resp)["data"]

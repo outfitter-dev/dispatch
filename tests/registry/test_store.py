@@ -1820,7 +1820,7 @@ async def test_v17_migration_adds_replace_in_place_provider_capacity_table(
         async with migrated._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
         assert row is not None
-        assert int(row[0]) == SCHEMA_VERSION == 21
+        assert int(row[0]) == SCHEMA_VERSION == 22
     finally:
         await migrated.close()
 

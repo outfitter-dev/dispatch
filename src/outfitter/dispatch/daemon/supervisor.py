@@ -49,6 +49,7 @@ class Supervisor:
         """Run the recover loop, starting from an already-connected client."""
         client = initial
         while True:  # not `while not self._stopped` — stop() flips it during the await below
+            await self._ctx.registry.recover_deliveries()
             self._ctx.client = client
             self._ctx.provider_session_id = uuid4().hex
             self._client = client
@@ -124,6 +125,11 @@ class Supervisor:
             except (ClientError, DispatchError) as exc:
                 await self._ctx.registry.update_lane_status(lane.id, "error")
                 self._ctx.log.warning("lane.restore_failed", lane=lane.id, error=str(exc))
+        from outfitter.dispatch.core.delivery_reconciliation import (
+            reconcile_accepted_after_reconnect,
+        )
+
+        await reconcile_accepted_after_reconnect(self._ctx)
         drained = await drain_idle_queues(self._ctx)
         if drained:
             self._ctx.log.info("queue.drained_on_resume", count=drained)

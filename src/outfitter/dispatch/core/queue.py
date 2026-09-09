@@ -32,9 +32,24 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
     lane = await ctx.registry.find_lane(lane_id)
     if lane is None or lane.status != "idle":
         return False
+    if await ctx.registry.lane_delivery_held(lane.id):
+        return False
     message = await ctx.registry.next_pending_message(lane.id)
     if message is None:
         return False
+    receipt = await ctx.registry.delivery_for_queue(message.id)
+    if receipt is not None:
+        from .delivery import submit_reserved
+
+        try:
+            return await submit_reserved(receipt.id, ctx)
+        except Exception:
+            # The submission layer owns receipt certainty; a drain failure must
+            # neither rewrite it as rejected nor stop recovery of other lanes.
+            ctx.log.exception(
+                "queue.reserved_submission_failed", delivery_id=receipt.id, lane=lane.id
+            )
+            return False
     if not await ctx.registry.claim_queued_message(message.id):
         return False
     try:

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, JsonValue, model_validator
+from pydantic import BaseModel, Field, JsonValue, field_validator, model_validator
 
 from outfitter.dispatch.client.models import (
     ApprovalPolicy,
@@ -17,6 +17,7 @@ from outfitter.dispatch.client.models import (
     ThreadGoalStatus,
     ThreadSandbox,
 )
+from outfitter.dispatch.registry.delivery import DeliveryMode, DeliveryStatus
 from outfitter.dispatch.registry.models import (
     InboxMessageKind,
     InboxMessageState,
@@ -242,11 +243,27 @@ class SendInput(BaseModel):
         default=False,
         description="Prepend a dispatch reply hint derived from the current CODEX_THREAD_ID.",
     )
+    idempotency_key: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description=(
+            "Caller key for replay-safe send or queue delivery. Reusing a key requires "
+            "the same resolved thread, mode, and effective plain-text payload."
+        ),
+    )
     caller_thread_id: str | None = Field(
         default=None,
         exclude=True,
         json_schema_extra={"x-dispatch-internal": True},
     )
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def _reject_blank_idempotency_key(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("idempotency_key must not be blank")
+        return value
 
     @model_validator(mode="after")
     def _requires_content(self) -> SendInput:
@@ -257,7 +274,19 @@ class SendInput(BaseModel):
                 "image content is not supported in context mode; use send, steer, queue, "
                 "or interject"
             )
+        if self.idempotency_key is not None:
+            if self.mode not in ("send", "queue"):
+                raise ValueError("idempotency_key is supported only for send or queue mode")
+            if self.content:
+                raise ValueError("idempotency_key currently supports plain text only")
         return self
+
+
+class DeliveryLookupInput(BaseModel):
+    receipt_id: str = Field(
+        min_length=1,
+        description="Dispatch delivery receipt id.",
+    )
 
 
 class LaneInput(BaseModel):
@@ -1178,10 +1207,31 @@ class GoalView(ManagedThreadIdentity):
     goal: Goal | None = None
 
 
+class DeliveryView(BaseModel):
+    """Public delivery lifecycle without the persisted effective payload."""
+
+    id: str
+    key: str | None = None
+    lane: str
+    mode: DeliveryMode
+    status: DeliveryStatus
+    execution_status: Literal["inProgress", "completed", "failed", "interrupted"] | None = None
+    turn_id: str | None = None
+    queue_id: int | None = None
+    error: str | None = None
+    reconciliation_attempts: int = 0
+    created_at: str
+    updated_at: str
+
+
 class ActionAck(ManagedThreadIdentity):
     op: str
     accepted: bool = True
     detail: str | None = None
+
+
+class SendAck(ActionAck):
+    delivery: DeliveryView | None = None
 
 
 class LaneSyncResult(ManagedThreadIdentity):

@@ -11,10 +11,108 @@ import typer
 from typer.testing import CliRunner
 
 from outfitter.dispatch.contracts.derive_cli import derive_cli
+from outfitter.dispatch.core.models import DeliveryView, SendAck, SendInput, TextContent
 from outfitter.dispatch.core.ops import REGISTRY
 from tests.fixtures import load_json
 
 runner = CliRunner()
+
+
+def test_send_idempotency_key_is_bounded_to_supported_delivery_shape() -> None:
+    accepted = SendInput(lane="@docs", text="hi", mode="queue", idempotency_key="event-1")
+
+    assert accepted.idempotency_key == "event-1"
+    with pytest.raises(ValueError, match="send or queue"):
+        SendInput(lane="@docs", text="hi", mode="steer", idempotency_key="event-1")
+    with pytest.raises(ValueError, match="plain text"):
+        SendInput(
+            lane="@docs",
+            content=[TextContent(text="hi")],
+            idempotency_key="event-1",
+        )
+    with pytest.raises(ValueError):
+        SendInput(lane="@docs", text="hi", idempotency_key=" ")
+
+
+def test_action_ack_exposes_a_public_delivery_receipt_without_payload() -> None:
+    delivery = DeliveryView.model_validate(
+        {
+            "id": "delivery-1",
+            "key": "event-1",
+            "lane": "thread-1",
+            "mode": "send",
+            "payload": "sensitive internal request",
+            "status": "accepted",
+            "turn_id": "turn-1",
+            "queue_id": None,
+            "error": None,
+            "reconciliation_attempts": 0,
+            "created_at": "2026-09-08T12:00:00Z",
+            "updated_at": "2026-09-08T12:00:01Z",
+        }
+    )
+    ack = SendAck.model_construct(delivery=delivery)
+
+    assert ack.delivery == delivery
+    assert "payload" not in delivery.model_dump()
+
+
+def test_delivery_get_routes_receipt_id_to_canonical_read_op() -> None:
+    captured: dict[str, object] = {}
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        captured["op"] = op_id
+        captured["params"] = params
+        return {
+            "id": "delivery-1",
+            "key": "event-1",
+            "lane": "thread-1",
+            "mode": "send",
+            "status": "ambiguous",
+            "turn_id": None,
+            "queue_id": None,
+            "error": "provider acknowledgement unavailable",
+            "reconciliation_attempts": 3,
+            "created_at": "2026-09-08T12:00:00Z",
+            "updated_at": "2026-09-08T12:00:03Z",
+        }
+
+    result = runner.invoke(derive_cli(REGISTRY, invoke), ["delivery", "get", "delivery-1"])
+
+    assert result.exit_code == 0
+    assert captured == {
+        "op": "delivery-get",
+        "params": {"receipt_id": "delivery-1"},
+    }
+
+
+def test_delivery_reconcile_routes_receipt_id_to_canonical_write_op() -> None:
+    captured: dict[str, object] = {}
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        captured["op"] = op_id
+        captured["params"] = params
+        return {
+            "id": "delivery-1",
+            "key": "event-1",
+            "lane": "thread-1",
+            "mode": "send",
+            "status": "ambiguous",
+            "turn_id": None,
+            "queue_id": None,
+            "error": "provider acknowledgement unavailable",
+            "reconciliation_attempts": 4,
+            "created_at": "2026-09-08T12:00:00Z",
+            "updated_at": "2026-09-08T12:00:04Z",
+        }
+
+    result = runner.invoke(derive_cli(REGISTRY, invoke), ["delivery", "reconcile", "delivery-1"])
+
+    assert result.exit_code == 0
+    assert captured == {
+        "op": "delivery-reconcile",
+        "params": {"receipt_id": "delivery-1"},
+    }
 
 
 def test_permissions_options_map_to_authored_contract() -> None:
@@ -115,6 +213,30 @@ def test_send_positional_args_and_mode_flags_map_to_send_contract() -> None:
         "text": "hi",
         "mode": "interject",
         "intro": False,
+    }
+
+
+def test_send_idempotency_key_maps_to_send_contract() -> None:
+    captured: dict[str, object] = {}
+
+    def invoke(op_id: str, params: dict[str, object]) -> dict[str, object]:
+        captured["op"] = op_id
+        captured["params"] = params
+        return {"lane": "L1", "op": "send", "accepted": True}
+
+    result = runner.invoke(
+        derive_cli(REGISTRY, invoke),
+        ["send", "@docs", "hi", "--idempotency-key", "event-1"],
+    )
+
+    assert result.exit_code == 0
+    assert captured["op"] == "send"
+    assert captured["params"] == {
+        "lane": "@docs",
+        "text": "hi",
+        "mode": "send",
+        "intro": False,
+        "idempotency_key": "event-1",
     }
 
 

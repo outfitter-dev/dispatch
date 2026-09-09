@@ -145,6 +145,7 @@ from .models import (
     SearchInput,
     SearchMatch,
     SearchOutput,
+    SendAck,
     SendInput,
     ServerRequestList,
     ServerRequestListInput,
@@ -1389,10 +1390,25 @@ async def send(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
     return ActionAck(**_managed_identity(lane, ctx), op="send")
 
 
-async def send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
+async def send_message(inp: SendInput, ctx: Ctx) -> SendAck:
+    result = await _send_message(inp, ctx)
+    return SendAck.model_validate(result.model_dump())
+
+
+async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
     text = await _apply_send_intro(inp, ctx)
     lane = await _resolve_message_target(ctx, inp.lane)
     _require_writable(lane, ctx)
+    if inp.idempotency_key is not None:
+        from .delivery import send_reserved
+
+        receipt = await send_reserved(inp, lane, text, ctx)
+        return SendAck(
+            **_managed_identity(lane, ctx),
+            op=inp.mode,
+            delivery=receipt,
+            detail=f"delivery {receipt.id}: {receipt.status}",
+        )
     rich: RichInput | None = None
     try:
         rich = await normalize_rich_input_async(

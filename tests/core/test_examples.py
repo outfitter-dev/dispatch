@@ -16,6 +16,8 @@ async def test_registry_has_the_v1_ops() -> None:
         "new-plan",
         "attach",
         "send",
+        "delivery-get",
+        "delivery-reconcile",
         "stop",
         "show",
         "lane-rename",
