@@ -174,7 +174,7 @@ def _correlation_id(event: LaneEvent) -> str | None:
 
 def _summary(event: LaneEvent, capture: CapturePolicy) -> dict[str, object]:
     if isinstance(event, TurnFailed):
-        summary: dict[str, object] = {"status": "failed"}
+        summary: dict[str, object] = {"status": event.execution_status}
         if event.turn_id is not None:
             summary["turn_id"] = event.turn_id
         message = bound_text(event.message, capture)

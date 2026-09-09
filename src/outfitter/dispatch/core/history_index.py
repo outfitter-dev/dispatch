@@ -138,7 +138,7 @@ async def _index_codex_turns(
                 status=status,
                 started_at=created_at,
                 completed_at=now if status == "completed" else None,
-                failed_at=now if status == "failed" else None,
+                failed_at=now if status in ("failed", "interrupted") else None,
                 error=turn_error.text if turn_error is not None else None,
                 completion_source=completion_source if status != "unknown" else None,
                 updated_at=now,
