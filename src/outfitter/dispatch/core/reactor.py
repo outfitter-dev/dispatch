@@ -105,6 +105,7 @@ class Reactor:
                 lane.id,
                 event.turn_id,
                 message.text if message is not None else None,
+                execution_status=event.execution_status,
             )
             await registry.touch_lane_event(lane.id)
             await process_event_subscriptions(self._ctx, lane, event)

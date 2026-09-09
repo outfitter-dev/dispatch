@@ -42,6 +42,7 @@ class TurnCompleted(LaneEvent):
 class TurnFailed(LaneEvent):
     turn_id: str | None = None
     message: str | None = None
+    execution_status: Literal["failed", "interrupted"] = "failed"
 
 
 @dataclass(frozen=True)
@@ -204,6 +205,22 @@ def project_notification(method: str, params: dict[str, object]) -> list[LaneEve
         case "turn/started":
             return [TurnStarted(lane, turn, raw_payload=raw)]
         case "turn/completed":
+            if isinstance(raw_turn, dict):
+                status = raw_turn.get("status")
+                if status in ("failed", "interrupted"):
+                    error = raw_turn.get("error")
+                    message = _str(error, "message") if isinstance(error, dict) else None
+                    return [
+                        TurnFailed(
+                            lane,
+                            turn,
+                            message or f"turn {status}",
+                            "interrupted" if status == "interrupted" else "failed",
+                            raw_payload=raw,
+                        )
+                    ]
+                if status is not None and status != "completed":
+                    return []
             return [TurnCompleted(lane, turn, raw_payload=raw)]
         case "turn/failed":
             return [TurnFailed(lane, turn, _str(params, "message"), raw_payload=raw)]

@@ -14,7 +14,7 @@ from outfitter.dispatch.registry.models import Lane, ThreadItem, ThreadItemRef, 
 from outfitter.dispatch.registry.store import Registry
 
 _CODEX_PROVIDER = "codex"
-_TURN_STATUSES: set[str] = {"started", "completed", "failed", "unknown"}
+_TURN_STATUSES: set[str] = {"started", "completed", "failed", "interrupted", "unknown"}
 
 
 @dataclass(frozen=True)
@@ -182,7 +182,9 @@ async def _index_codex_turns(
     return HistoryIndexCounts(turns=len(indexed_turns), items=len(indexed_items))
 
 
-def _turn_status(value: object) -> Literal["started", "completed", "failed", "unknown"]:
+def _turn_status(
+    value: object,
+) -> Literal["started", "completed", "failed", "interrupted", "unknown"]:
     if value == "inProgress":
         return "started"
     if isinstance(value, str) and value in _TURN_STATUSES:
@@ -205,9 +207,10 @@ def _turn_error(value: object) -> str | None:
 
 
 def _is_error_item(
-    item: dict[str, object], turn_status: Literal["started", "completed", "failed", "unknown"]
+    item: dict[str, object],
+    turn_status: Literal["started", "completed", "failed", "interrupted", "unknown"],
 ) -> bool:
-    if turn_status == "failed":
+    if turn_status in ("failed", "interrupted"):
         return True
     if item.get("error") is not None:
         return True

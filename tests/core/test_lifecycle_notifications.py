@@ -50,3 +50,51 @@ async def test_captured_lifecycle_turn_id_enables_steering() -> None:
         assert lane.latest_turn_status == "completed"
     finally:
         await store.close()
+
+
+async def test_nested_failed_completion_preserves_error_and_never_succeeds() -> None:
+    await _assert_terminal_failure("failed", "provider failed")
+
+
+async def test_nested_interrupted_completion_never_succeeds() -> None:
+    await _assert_terminal_failure("interrupted", "turn interrupted")
+
+
+async def _assert_terminal_failure(status: str, expected_error: str) -> None:
+    store = await Registry.open()
+    try:
+        client = FakeLaneClient()
+        ctx = make_ctx(store, client)
+        await store.add_lane(id="target", handle="@target", source="own", status="busy")
+        await store.record_turn_started("target", "turn-1")
+        await store.enqueue_message(lane="target", text="must not start on unsuccessful completion")
+        reactor = Reactor(ctx, TriggerRunner(ctx, lambda: datetime.now(UTC)))
+        params: dict[str, object] = {
+            "threadId": "target",
+            "turn": {
+                "id": "turn-1",
+                "status": status,
+                "error": {"message": expected_error} if status == "failed" else None,
+            },
+        }
+        for event in project_notification("turn/completed", params):
+            await reactor.handle(event)
+        lane = await store.get_lane("target")
+        turn = await store.get_thread_turn("codex", "target", "turn-1")
+        assert lane.latest_turn_status == status
+        assert lane.latest_error == expected_error
+        assert lane.active_turn_id is None
+        assert turn.status == status and turn.error == expected_error
+        assert not any(name == "turn_start" for name, _ in client.calls)
+    finally:
+        await store.close()
+
+
+async def test_nonterminal_nested_status_is_not_a_successful_completion() -> None:
+    assert (
+        project_notification(
+            "turn/completed",
+            {"threadId": "target", "turn": {"id": "turn-1", "status": "inProgress"}},
+        )
+        == []
+    )

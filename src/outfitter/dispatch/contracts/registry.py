@@ -82,15 +82,23 @@ def registry_read_safe_ops(registry: OpRegistry) -> frozenset[str]:
     the write op is gated on, and a legacy daemon would silently drop the
     ones it does not know, misreporting what the real op would do.
 
-    Eligibility, not a blanket pass: read inputs also evolve (v0.8.1's
+    Newly added read ops are excluded until they appear in a release baseline;
+    this makes a new op fail closed against pre-handshake daemons without
+    disabling unchanged reads. Eligibility is not a blanket pass: read inputs also evolve (v0.8.1's
     ``RosterInput`` had no ``parent``), so :func:`prehandshake_op_allowed`
     additionally requires the daemon to self-report at least
     ``READ_BASELINE_FLOOR`` — the oldest release whose read schemas are proven
     identical to current (evidence in :mod:`.legacy_baseline`).
     """
+    from .legacy_baseline import PARENT_OP_SCHEMA_HASHES
+
     gated_inputs = {op.input for op in registry if op.intent != "read"}
     return frozenset(
-        op.id for op in registry if op.intent == "read" and op.input not in gated_inputs
+        op.id
+        for op in registry
+        if op.intent == "read"
+        and op.input not in gated_inputs
+        and op_schema_hash(op) == PARENT_OP_SCHEMA_HASHES.get(op.id)
     )
 
 
