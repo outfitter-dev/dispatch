@@ -8,7 +8,9 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterator
+from dataclasses import dataclass
 from functools import lru_cache
+from typing import Literal
 
 from .op import Op
 
@@ -16,6 +18,21 @@ CONTROL_META_METHOD = "__dispatch/metadata"
 """Control-socket handshake method: reports version, supported ops, and per-op
 schema fingerprints so clients can detect a stale daemon before forwarding
 input the daemon would silently ignore."""
+
+CONTROL_EXEC_METHOD = "__dispatch/execute"
+"""Protocol-v2 execution method binding an op schema hash to the request the
+receiving daemon executes."""
+
+
+@dataclass(frozen=True)
+class ControlOpCompatibility:
+    """How a client may execute one op after reading daemon metadata."""
+
+    mode: Literal["checked", "legacy", "blocked"]
+    reason: (
+        Literal["method_missing", "prehandshake", "hash_mismatch", "checked_unavailable"] | None
+    ) = None
+    reported_version: object = None
 
 
 class OpRegistry:
@@ -180,6 +197,40 @@ def prehandshake_op_allowed(
     if not baseline_safe:
         return False
     return reported_version == PARENT_VERSION
+
+
+def control_op_compatibility(
+    message: dict[str, object],
+    op_id: str,
+    expected_hash: str | None,
+    *,
+    read_safe: bool,
+    baseline_safe: bool,
+) -> ControlOpCompatibility:
+    """Choose checked execution, proven legacy raw execution, or fail closed."""
+    error = message.get("error")
+    if isinstance(error, dict):
+        if error.get("code") == -32601:
+            return ControlOpCompatibility("blocked", "method_missing")
+        # The metadata failure is preserved as a diagnostic preflight; a v2
+        # checked request remains safe because its receiver performs the gate.
+        return ControlOpCompatibility("checked")
+    result = message.get("result")
+    result_dict = result if isinstance(result, dict) else {}
+    op_schemas = result_dict.get("op_schemas")
+    if isinstance(op_schemas, dict):
+        if op_schemas.get(op_id) != expected_hash:
+            return ControlOpCompatibility("blocked", "hash_mismatch")
+        protocol_version = result_dict.get("protocol_version")
+        if isinstance(protocol_version, int) and protocol_version >= 2:
+            return ControlOpCompatibility("checked")
+        if read_safe or baseline_safe:
+            return ControlOpCompatibility("legacy", reported_version=result_dict.get("version"))
+        return ControlOpCompatibility("blocked", "checked_unavailable", result_dict.get("version"))
+    reported = result_dict.get("version")
+    if prehandshake_op_allowed(reported, read_safe=read_safe, baseline_safe=baseline_safe):
+        return ControlOpCompatibility("legacy", reported_version=reported)
+    return ControlOpCompatibility("blocked", "prehandshake", reported)
 
 
 @lru_cache(maxsize=4)

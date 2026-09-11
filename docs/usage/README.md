@@ -88,8 +88,10 @@ uv run dispatch daemon status
 ```
 
 After an upgrade, a running daemon may be older than the current CLI. If the CLI
-requests an op that the daemon does not know, dispatch treats that as
-daemon/client skew. When `dispatch daemon status` proves the daemon is idle, the
+requests an op the daemon does not know or whose schema differs, dispatch treats
+that as daemon/client skew. Modern requests carry their expected per-op schema;
+the receiving daemon checks it before execution, even if a different daemon
+answered the earlier compatibility probe. When `dispatch daemon status` proves the daemon is idle, the
 CLI restarts it automatically and retries the command once. If any lane is busy
 or waiting on approval, dispatch leaves the daemon alone and asks you to restart
 manually:
@@ -98,6 +100,12 @@ manually:
 uv run dispatch down
 uv run dispatch up
 ```
+
+Proven legacy inspection/drain operations remain available under the existing
+schema and release-baseline checks, with the check and operation on one socket.
+Provider-bearing or otherwise schema-sensitive operations require checked
+execution and never fall back to an older unchecked receiver. MCP reports
+`daemon_stale` with exit code 8 and a restart hint; it does not restart the daemon.
 
 For foreground debugging, run the daemon directly:
 
@@ -205,10 +213,11 @@ Common recovery paths:
 - Stale socket or pidfile: run `dispatch down`, then `dispatch up`. If you are using
   isolated state, confirm `DISPATCH_HOME`, `DISPATCH_SOCKET`, and `DISPATCH_PIDFILE`.
 - Stale daemon/client op mismatch: dispatch restarts and retries once when the
-  daemon is idle. If it reports active work, only the mismatched ops are
-  refused — commands whose schemas the daemon still agrees on (for example
-  `daemon status`, `roster`, `stop`) keep working, so you can inspect and drain
-  the work, then run `dispatch down` and `dispatch up`.
+  daemon is idle. If it reports active work, compatible checked operations and
+  proven legacy inspection/drain operations remain available. Provider-bearing
+  or otherwise schema-sensitive operations require a receiver that supports
+  checked execution. Finish or drain the work, then run `dispatch down` and
+  `dispatch up`.
 - Registry schema newer than the installed binary: upgrade with
   `uv tool upgrade outfitter-dispatch` before starting the daemon.
 - Registry schema older than the installed binary: run `dispatch down`, then
