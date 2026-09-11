@@ -36,3 +36,4 @@ Files are `NNNN-slug.md`. Copy [`template.md`](template.md) to start one. Keep t
 | [0025](0025-provider-capacity-observations-are-latest-value-snapshots.md) | Provider Capacity Observations Are Latest-Value Snapshots | Accepted |
 | [0026](0026-claude-control-uses-resume-processes-and-hooks.md) | Claude Control Uses Resume Processes and Hooks | Proposed |
 | [0027](0027-optional-shared-app-server-socket.md) | Optional Shared App Server Socket Attachment | Proposed |
+| [0028](0028-stations-own-provider-bindings-and-durable-execution.md) | Stations Own Provider Bindings and Durable Execution | Proposed |

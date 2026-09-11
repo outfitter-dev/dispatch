@@ -4,6 +4,8 @@ A local control plane for orchestrating Codex agent lanes (threads) over the Cod
 
 Status: approved design, implemented through v0 and updated for dispatch-local refs / flat thread CLI. Companion research (schema provenance currently `codex-cli 0.147.0`): [`docs/research/app-server-verification.md`](../research/app-server-verification.md) and [`docs/research/orchestration-thesis.md`](../research/orchestration-thesis.md). Decisions: [`docs/adrs/`](../adrs/). Execution ledger: [`../../.agents/plans/v0/RETRO.md`](../../.agents/plans/v0/RETRO.md).
 
+The next provider/network evolution is proposed in [ADR-0028](../adrs/0028-stations-own-provider-bindings-and-durable-execution.md), with a [separate execution plan](../../.agents/plans/stations-providers/PLAN.md). The one-Codex-connection architecture below remains the implemented baseline until those slices pass their gates.
+
 ## Naming
 
 - Distribution (PyPI): `outfitter-dispatch` · Import package: `outfitter.dispatch` (PEP 420 namespace) · CLI binary: `dispatch` · daemon binary: `dispatchd`.
