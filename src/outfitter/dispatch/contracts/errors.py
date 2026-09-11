@@ -100,6 +100,14 @@ class CapabilityUnavailableError(DispatchError):
     rpc_code = 1011
 
 
+class DaemonStaleError(DispatchError):
+    """The receiving daemon's op contract differs from the caller's contract."""
+
+    code = "daemon_stale"
+    exit_code = 8
+    rpc_code = 1012
+
+
 @dataclass(frozen=True)
 class ErrorProjection:
     """The transport-independent shape every surface renders."""

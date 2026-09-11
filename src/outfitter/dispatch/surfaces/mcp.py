@@ -19,7 +19,13 @@ from mcp.types import CallToolResult, TextContent, Tool
 
 from outfitter.dispatch import config
 from outfitter.dispatch.contracts.derive_mcp import McpProjection, derive_mcp_projection
-from outfitter.dispatch.contracts.registry import CONTROL_META_METHOD
+from outfitter.dispatch.contracts.errors import DaemonStaleError, project_error
+from outfitter.dispatch.contracts.registry import (
+    CONTROL_EXEC_METHOD,
+    CONTROL_META_METHOD,
+    ControlOpCompatibility,
+    control_op_compatibility,
+)
 
 _METHOD_NOT_FOUND = -32601
 
@@ -41,16 +47,7 @@ async def call_daemon(
     except OSError as exc:
         return _io_error(f"daemon unreachable: {exc}")
     try:
-        writer.write((json.dumps({"id": 1, "method": method, "params": params}) + "\n").encode())
-        await asyncio.wait_for(writer.drain(), timeout)
-        line = await asyncio.wait_for(reader.readline(), timeout)
-        if not line:
-            return _io_error("no response from daemon")
-        try:
-            parsed: dict[str, object] = json.loads(line)
-        except json.JSONDecodeError:
-            return _io_error("malformed response from daemon")
-        return parsed
+        return await _stream_request(reader, writer, method, params, timeout)
     except (TimeoutError, OSError) as exc:
         return _io_error(f"daemon I/O failed: {exc}")
     finally:
@@ -83,28 +80,43 @@ async def handle_tool_call(
     # ``extra="ignore"`` and would silently drop fields it does not know. Ops
     # whose schemas match stay usable even when other ops drifted.
     op = REGISTRY.get(method)
-    skew = await _daemon_op_skew(
+    compatibility = await _daemon_op_compatibility(
         socket_path,
         op.id,
         op_schema_hash(op),
         read_safe=op.id in registry_read_safe_ops(REGISTRY),
         baseline_safe=op.id in registry_legacy_safe_ops(REGISTRY),
     )
+    skew = _compatibility_problem(compatibility, op.id)
     if skew is not None:
-        return CallToolResult(
-            isError=True,
-            content=[
-                TextContent(
-                    type="text",
-                    text=f"{skew}; restart it (`dispatch down && dispatch up`), then retry.",
-                )
-            ],
-            _meta={"code": -32601, "dispatchCode": "daemon_stale", "exitCode": 8},
+        return _stale_tool_error(skew)
+    if compatibility.mode == "legacy":
+        response, compatibility = await _call_daemon_bound(
+            socket_path,
+            method,
+            params,
+            op_schema_hash(op),
+            read_safe=op.id in registry_read_safe_ops(REGISTRY),
+            baseline_safe=op.id in registry_legacy_safe_ops(REGISTRY),
         )
-    response = await call_daemon(socket_path, method, params)
+        skew = _compatibility_problem(compatibility, op.id)
+        if skew is not None:
+            return _stale_tool_error(skew)
+    else:
+        response = await call_daemon(
+            socket_path,
+            CONTROL_EXEC_METHOD,
+            {"op": method, "params": params, "op_schema_hash": op_schema_hash(op)},
+        )
     error = response.get("error")
     if isinstance(error, dict):
+        if compatibility.mode == "checked" and error.get("code") == _METHOD_NOT_FOUND:
+            return _stale_tool_error(
+                f"dispatch daemon does not support checked execution for op {op.id!r}"
+            )
         data = error.get("data")
+        if isinstance(data, dict) and data.get("dispatchCode") == DaemonStaleError.code:
+            return _stale_tool_error(str(error.get("message")))
         meta = data if isinstance(data, dict) else {}
         return CallToolResult(
             isError=True,
@@ -147,53 +159,121 @@ def run_mcp(socket_path: Path | None = None) -> None:
     asyncio.run(_serve(socket_path if socket_path is not None else config.socket_path()))
 
 
-async def _daemon_op_skew(
+async def _daemon_op_compatibility(
     socket_path: Path,
     op_id: str,
     expected_hash: str,
     *,
     read_safe: bool,
     baseline_safe: bool,
-) -> str | None:
-    """Describe daemon/MCP schema skew for ONE op, or ``None`` when safe to send.
+) -> ControlOpCompatibility:
+    """Read metadata and choose the allowed execution mode for one op.
 
-    Mirrors the CLI pre-flight: only this op's fingerprint gates the call, so
-    hash-matching ops stay usable against a busy stale daemon. A daemon that
-    predates the handshake reports no hashes; ``read_safe`` ops pass when it
-    self-reports at least the read baseline floor, ``baseline_safe`` ops
-    (schema unchanged since the parent release, such as ``stop``) only when
-    it self-reports exactly the parent version, and a daemon reporting no
-    version at all (no metadata method, <= 0.8.1) gets nothing (see
-    :func:`prehandshake_op_allowed`). Everything else — notably the ops
-    whose schema drifted, like ``new``/``new-plan`` with ``provider`` — is
-    treated as skewed. Any other probe failure also returns ``None`` — the op
-    call that follows surfaces it with the normal projection.
+    The shared contract policy classifies the response as checked, proven
+    legacy, or blocked; this async function owns only the metadata transport.
     """
-    from outfitter.dispatch.contracts.registry import prehandshake_op_allowed
-
     response = await call_daemon(socket_path, CONTROL_META_METHOD, {})
-    error = response.get("error")
-    if isinstance(error, dict):
-        if error.get("code") == _METHOD_NOT_FOUND and not prehandshake_op_allowed(
-            None, read_safe=read_safe, baseline_safe=baseline_safe
-        ):
-            return "dispatch daemon predates the op-schema handshake (older than this MCP server)"
-        return None
-    result = response.get("result")
-    op_schemas = result.get("op_schemas") if isinstance(result, dict) else None
-    if not isinstance(op_schemas, dict):
-        reported = result.get("version") if isinstance(result, dict) else None
-        if prehandshake_op_allowed(reported, read_safe=read_safe, baseline_safe=baseline_safe):
-            return None
-        version = f"version {reported}" if isinstance(reported, str) else "unreported version"
-        return (
-            f"dispatch daemon predates the op-schema handshake "
-            f"({version}, older than this MCP server)"
+    return control_op_compatibility(
+        response,
+        op_id,
+        expected_hash,
+        read_safe=read_safe,
+        baseline_safe=baseline_safe,
+    )
+
+
+async def _call_daemon_bound(
+    socket_path: Path,
+    op_id: str,
+    params: dict[str, object],
+    expected_hash: str,
+    *,
+    read_safe: bool,
+    baseline_safe: bool,
+    timeout: float = 30.0,
+) -> tuple[dict[str, object], ControlOpCompatibility]:
+    """Repeat legacy admission and execute on the same established socket."""
+    try:
+        reader, writer = await asyncio.open_unix_connection(str(socket_path))
+    except OSError as exc:
+        return _io_error(f"daemon unreachable: {exc}"), ControlOpCompatibility("checked")
+    try:
+        metadata = await _stream_request(reader, writer, CONTROL_META_METHOD, {}, timeout)
+        compatibility = control_op_compatibility(
+            metadata,
+            op_id,
+            expected_hash,
+            read_safe=read_safe,
+            baseline_safe=baseline_safe,
         )
-    if op_schemas.get(op_id) == expected_hash:
+        if compatibility.mode == "blocked":
+            return {}, compatibility
+        if compatibility.mode == "checked":
+            checked_params: dict[str, object] = {
+                "op": op_id,
+                "params": params,
+                "op_schema_hash": expected_hash,
+            }
+            response = await _stream_request(
+                reader, writer, CONTROL_EXEC_METHOD, checked_params, timeout
+            )
+        else:
+            response = await _stream_request(reader, writer, op_id, params, timeout)
+        return response, compatibility
+    except (TimeoutError, OSError) as exc:
+        return _io_error(f"daemon I/O failed: {exc}"), ControlOpCompatibility("checked")
+    finally:
+        writer.close()
+        with contextlib.suppress(Exception):
+            await writer.wait_closed()
+
+
+async def _stream_request(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    method: str,
+    params: dict[str, object],
+    timeout: float,
+) -> dict[str, object]:
+    writer.write((json.dumps({"id": 1, "method": method, "params": params}) + "\n").encode())
+    await asyncio.wait_for(writer.drain(), timeout)
+    line = await asyncio.wait_for(reader.readline(), timeout)
+    if not line:
+        return _io_error("no response from daemon")
+    try:
+        parsed: object = json.loads(line)
+    except json.JSONDecodeError:
+        return _io_error("malformed response from daemon")
+    return parsed if isinstance(parsed, dict) else _io_error("malformed response from daemon")
+
+
+def _compatibility_problem(compatibility: ControlOpCompatibility, op_id: str) -> str | None:
+    if compatibility.mode != "blocked":
         return None
-    return (
-        f"dispatch daemon op schemas do not match this MCP server for op {op_id!r} (stale daemon)"
+    if compatibility.reason == "hash_mismatch":
+        return f"dispatch daemon op schemas do not match this MCP server for op {op_id!r}"
+    reported = compatibility.reported_version
+    version = f"version {reported}" if isinstance(reported, str) else "unreported version"
+    if compatibility.reason == "checked_unavailable":
+        return f"dispatch daemon lacks checked execution required for op {op_id!r} ({version})"
+    return f"dispatch daemon predates the op-schema handshake ({version})"
+
+
+def _stale_tool_error(message: str) -> CallToolResult:
+    projection = project_error(DaemonStaleError(message))
+    return CallToolResult(
+        isError=True,
+        content=[
+            TextContent(
+                type="text",
+                text=f"{message}; restart it (`dispatch down && dispatch up`), then retry.",
+            )
+        ],
+        _meta={
+            "code": projection.rpc_code,
+            "dispatchCode": projection.code,
+            "exitCode": projection.exit_code,
+        },
     )
 
 

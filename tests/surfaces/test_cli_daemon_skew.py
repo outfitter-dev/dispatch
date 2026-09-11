@@ -17,6 +17,7 @@ import typer
 
 from outfitter.dispatch.contracts.legacy_baseline import PARENT_VERSION
 from outfitter.dispatch.contracts.registry import (
+    CONTROL_EXEC_METHOD,
     CONTROL_META_METHOD,
     registry_legacy_safe_ops,
     registry_read_safe_ops,
@@ -27,6 +28,7 @@ from outfitter.dispatch.surfaces import cli
 _LOCAL_HASHES: dict[str, str] = {
     "new": "hash-new",
     "new-plan": "hash-new-plan",
+    "models": "hash-models",
     "query": "hash-query",
     "roster": "hash-roster",
     "stop": "hash-stop",
@@ -39,12 +41,44 @@ _READ_SAFE_OPS = registry_read_safe_ops(REGISTRY)
 _LEGACY_SAFE_OPS = registry_legacy_safe_ops(REGISTRY)
 
 
+@pytest.fixture(autouse=True)
+def _fake_bound_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep policy tests focused while production uses one real socket."""
+
+    def bound(
+        socket: Path,
+        op_id: str,
+        expected_hash: str,
+        params: dict[str, object],
+        *,
+        read_safe: bool,
+        baseline_safe: bool,
+    ) -> tuple[dict[str, object], str | None, bool]:
+        metadata = cli._control_request(socket, CONTROL_META_METHOD, {})
+        skew, checked = cli._assess_daemon_op(
+            metadata,
+            op_id,
+            expected_hash,
+            read_safe=read_safe,
+            baseline_safe=baseline_safe,
+        )
+        if skew is not None:
+            return {}, skew, checked
+        method = CONTROL_EXEC_METHOD if checked else op_id
+        request_params: dict[str, object] = (
+            {"op": op_id, "params": params, "op_schema_hash": expected_hash} if checked else params
+        )
+        return cli._control_request(socket, method, request_params), None, checked
+
+    monkeypatch.setattr(cli, "_control_request_bound", bound)
+
+
 def _local_hashes() -> dict[str, str]:
     return dict(_LOCAL_HASHES)
 
 
 def _meta(op_schemas: dict[str, str] | None, version: str | None = "0.0.0") -> dict[str, object]:
-    result: dict[str, object] = {"protocol_version": 1, "supported_ops": []}
+    result: dict[str, object] = {"protocol_version": 2, "supported_ops": []}
     if version is not None:
         result["version"] = version
     if op_schemas is not None:
@@ -92,7 +126,7 @@ def test_invoke_daemon_restarts_idle_daemon_on_schema_hash_mismatch(
     # The op is never forwarded to the stale daemon (its Pydantic models would
     # silently drop fields such as ``provider``): metadata → status → restart →
     # metadata → op.
-    assert calls == [CONTROL_META_METHOD, "status", CONTROL_META_METHOD, "new"]
+    assert calls == [CONTROL_META_METHOD, "status", CONTROL_META_METHOD, CONTROL_EXEC_METHOD]
     assert len(stopped) == 1
     assert len(started) == 1
 
@@ -157,7 +191,12 @@ def test_invoke_daemon_allows_hash_matching_ops_on_busy_stale_daemon(
     assert _invoke(tmp_path / "dispatchd.sock", "roster", {}) == {"ok": True}
     assert _invoke(tmp_path / "dispatchd.sock", "stop", {"lane": "@a"}) == {"ok": True}
     # Matching ops go straight through: no idle probe, no restart attempt.
-    assert calls == [CONTROL_META_METHOD, "roster", CONTROL_META_METHOD, "stop"]
+    assert calls == [
+        CONTROL_META_METHOD,
+        CONTROL_EXEC_METHOD,
+        CONTROL_META_METHOD,
+        CONTROL_EXEC_METHOD,
+    ]
     assert stopped is False
 
 
@@ -412,10 +451,16 @@ def test_invoke_daemon_allows_hash_matching_new_plan_on_hash_capable_daemon(
     own fingerprint, like every other op."""
     calls: list[str] = []
 
-    def request(_socket: Path, method: str, _params: dict[str, object]) -> dict[str, object]:
+    def request(_socket: Path, method: str, request_params: dict[str, object]) -> dict[str, object]:
         calls.append(method)
         if method == CONTROL_META_METHOD:
             return _meta(_local_hashes())
+        assert method == CONTROL_EXEC_METHOD
+        assert request_params == {
+            "op": "new-plan",
+            "params": {"provider": "claude"},
+            "op_schema_hash": "hash-new-plan",
+        }
         return {"id": 1, "result": {"ok": True}}
 
     monkeypatch.setattr(cli, "_control_request", request)
@@ -423,7 +468,7 @@ def test_invoke_daemon_allows_hash_matching_new_plan_on_hash_capable_daemon(
     result = _invoke(tmp_path / "dispatchd.sock", "new-plan", {"provider": "claude"})
 
     assert result == {"ok": True}
-    assert calls == [CONTROL_META_METHOD, "new-plan"]
+    assert calls == [CONTROL_META_METHOD, CONTROL_EXEC_METHOD]
 
 
 def test_invoke_daemon_retries_stale_daemon_only_once(
@@ -498,8 +543,11 @@ def test_invoke_daemon_falls_back_to_method_not_found_restart(
             return _meta(_local_hashes())
         if method == "status":
             return {"id": 1, "result": {"lanes": 0, "idle": 0, "busy": 0, "active": 0}}
-        if method == "query" and not restarted:
-            return {"id": 1, "error": {"code": -32601, "message": "unknown op 'query'"}}
+        if method == CONTROL_EXEC_METHOD and not restarted:
+            return {
+                "id": 1,
+                "error": {"code": -32601, "message": "unknown op '__dispatch/execute'"},
+            }
         return {"id": 1, "result": {"ok": True}}
 
     def stop(_socket_path: Path, _pidfile: Path) -> bool:
@@ -517,7 +565,13 @@ def test_invoke_daemon_falls_back_to_method_not_found_restart(
     result = _invoke(tmp_path / "dispatchd.sock", "query", {})
 
     assert result == {"ok": True}
-    assert calls == [CONTROL_META_METHOD, "query", "status", CONTROL_META_METHOD, "query"]
+    assert calls == [
+        CONTROL_META_METHOD,
+        CONTROL_EXEC_METHOD,
+        "status",
+        CONTROL_META_METHOD,
+        CONTROL_EXEC_METHOD,
+    ]
 
 
 def test_invoke_daemon_does_not_treat_unknown_current_cli_typos_as_skew(

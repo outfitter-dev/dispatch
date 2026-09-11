@@ -21,7 +21,11 @@ from typer.main import get_command
 
 from outfitter.dispatch import config
 from outfitter.dispatch.contracts.derive_cli import derive_cli
-from outfitter.dispatch.contracts.registry import CONTROL_META_METHOD, prehandshake_op_allowed
+from outfitter.dispatch.contracts.registry import (
+    CONTROL_EXEC_METHOD,
+    CONTROL_META_METHOD,
+    control_op_compatibility,
+)
 from outfitter.dispatch.version import package_version
 
 CLI_SURFACE_CONTROL_PATHS: tuple[tuple[str, ...], ...] = (
@@ -81,13 +85,23 @@ def invoke_daemon(
     parent release (``new``/``new-plan``), and EVERY op on a daemon so old it
     lacks ``__dispatch/metadata`` entirely (<= 0.8.1).
     """
-    skew = _daemon_op_skew(
-        socket_path,
-        op_id,
-        op_schema_hashes().get(op_id),
-        read_safe=op_id in read_safe_ops,
-        baseline_safe=op_id in legacy_safe_ops,
-    )
+    if op_id not in current_ops:
+        message, skew, checked = _control_request(socket_path, op_id, params), None, False
+    else:
+        expected_hash = op_schema_hashes().get(op_id)
+        if expected_hash is None:
+            typer.secho(
+                f"dispatch: local schema hash unavailable for op {op_id!r}", fg="red", err=True
+            )
+            raise typer.Exit(code=8)
+        message, skew, checked = _control_request_bound(
+            socket_path,
+            op_id,
+            expected_hash,
+            params,
+            read_safe=op_id in read_safe_ops,
+            baseline_safe=op_id in legacy_safe_ops,
+        )
     if skew is not None:
         if retry_on_stale and _restart_stale_daemon_if_idle(socket_path, skew):
             return invoke_daemon(
@@ -106,7 +120,6 @@ def invoke_daemon(
             err=True,
         )
         raise typer.Exit(code=8)
-    message = _control_request(socket_path, op_id, params)
     error = message.get("error")
     if isinstance(error, dict):
         if (
@@ -127,7 +140,23 @@ def invoke_daemon(
                 params,
                 retry_on_stale=False,
             )
+        if checked and _is_method_not_found(error):
+            typer.secho(
+                f"dispatch: daemon does not support checked execution for op {op_id!r}; "
+                "run `dispatch down && dispatch up`, then retry.",
+                fg="red",
+                err=True,
+            )
+            raise typer.Exit(code=8)
         data = error.get("data")
+        if isinstance(data, dict) and data.get("dispatchCode") == "daemon_stale":
+            typer.secho(
+                f"dispatch: {error.get('message')}; "
+                "run `dispatch down && dispatch up`, then retry.",
+                fg="red",
+                err=True,
+            )
+            raise typer.Exit(code=8)
         exit_code = data.get("exitCode") if isinstance(data, dict) else None
         typer.secho(f"dispatch: {error.get('message')}", fg="red", err=True)
         raise typer.Exit(code=exit_code if isinstance(exit_code, int) else 1)
@@ -138,13 +167,11 @@ def invoke_daemon(
 def _control_request(
     socket_path: Path, method: str, params: dict[str, object]
 ) -> dict[str, object]:
-    request = json.dumps({"id": 1, "method": method, "params": params}) + "\n"
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(30.0)  # never hang on a dead/half-writing daemon (mirrors MCP)
             sock.connect(str(socket_path))
-            sock.sendall(request.encode())
-            line = _recv_line(sock)
+            return _socket_request(sock, method, params)
     except OSError as exc:
         typer.secho(
             f"dispatch: cannot reach daemon at {socket_path} ({exc}). Is dispatchd running?",
@@ -153,6 +180,59 @@ def _control_request(
         )
         raise typer.Exit(code=8) from exc
 
+
+def _control_request_bound(
+    socket_path: Path,
+    op_id: str,
+    expected_hash: str,
+    params: dict[str, object],
+    *,
+    read_safe: bool,
+    baseline_safe: bool,
+) -> tuple[dict[str, object], str | None, bool]:
+    """Preflight and execute an op on one connection.
+
+    Protocol-v2 daemons receive the checked execution envelope. Legacy raw ops
+    are sent only when fresh metadata on this exact socket proves the existing
+    read/baseline allowance.
+    """
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(30.0)
+            sock.connect(str(socket_path))
+            metadata = _socket_request(sock, CONTROL_META_METHOD, {})
+            skew, checked = _assess_daemon_op(
+                metadata,
+                op_id,
+                expected_hash,
+                read_safe=read_safe,
+                baseline_safe=baseline_safe,
+            )
+            if skew is not None:
+                return {}, skew, checked
+            if checked:
+                request_params: dict[str, object] = {
+                    "op": op_id,
+                    "params": params,
+                    "op_schema_hash": expected_hash,
+                }
+                return _socket_request(sock, CONTROL_EXEC_METHOD, request_params), None, True
+            return _socket_request(sock, op_id, params), None, False
+    except OSError as exc:
+        typer.secho(
+            f"dispatch: cannot reach daemon at {socket_path} ({exc}). Is dispatchd running?",
+            fg="red",
+            err=True,
+        )
+        raise typer.Exit(code=8) from exc
+
+
+def _socket_request(
+    sock: socket.socket, method: str, params: dict[str, object]
+) -> dict[str, object]:
+    request = json.dumps({"id": 1, "method": method, "params": params}) + "\n"
+    sock.sendall(request.encode())
+    line = _recv_line(sock)
     try:
         message: object = json.loads(line)
     except json.JSONDecodeError as exc:
@@ -169,48 +249,37 @@ def _is_method_not_found(error: dict[str, object]) -> bool:
     return error.get("code") == _METHOD_NOT_FOUND
 
 
-def _daemon_op_skew(
-    socket_path: Path,
+def _assess_daemon_op(
+    message: dict[str, object],
     op_id: str,
     expected_hash: str | None,
     *,
     read_safe: bool,
     baseline_safe: bool,
-) -> str | None:
-    """Describe daemon/CLI schema skew for ONE op, or ``None`` when safe to send.
-
-    Only this op's fingerprint gates the call: whole-registry drift alone never
-    blocks an op whose own schema matches, so hash-matching ops (status, roster,
-    stop, ...) stay usable against a busy stale daemon. A daemon that predates
-    the handshake reports no hashes; ``read_safe`` ops pass when it
-    self-reports at least the read baseline floor, ``baseline_safe`` ops
-    (schema unchanged since the parent release, such as ``stop``) only when
-    it self-reports exactly the parent version, and a daemon reporting no
-    version at all (no metadata method, <= 0.8.1) gets nothing (see
-    :func:`prehandshake_op_allowed`). Everything else — notably the ops whose
-    schema drifted, like ``new``/``new-plan`` with ``provider`` — is treated as
-    skewed. Any other probe failure also returns ``None`` — the op call that
-    follows surfaces it with the normal projection.
-    """
-    message = _control_request(socket_path, CONTROL_META_METHOD, {})
-    error = message.get("error")
-    if isinstance(error, dict):
-        if _is_method_not_found(error) and not prehandshake_op_allowed(
-            None, read_safe=read_safe, baseline_safe=baseline_safe
-        ):
-            return "daemon predates the op-schema handshake (older than this CLI)"
-        return None
-    result = message.get("result")
-    op_schemas = result.get("op_schemas") if isinstance(result, dict) else None
-    if not isinstance(op_schemas, dict):
-        reported = result.get("version") if isinstance(result, dict) else None
-        if prehandshake_op_allowed(reported, read_safe=read_safe, baseline_safe=baseline_safe):
-            return None
-        version = f"version {reported}" if isinstance(reported, str) else "unreported version"
-        return f"daemon predates the op-schema handshake ({version}, older than this CLI)"
-    if op_schemas.get(op_id) == expected_hash:
-        return None
-    return f"daemon op schemas do not match this CLI for op {op_id!r} (stale daemon)"
+) -> tuple[str | None, bool]:
+    compatibility = control_op_compatibility(
+        message,
+        op_id,
+        expected_hash,
+        read_safe=read_safe,
+        baseline_safe=baseline_safe,
+    )
+    if compatibility.mode == "checked":
+        return None, True
+    if compatibility.mode == "legacy":
+        return None, False
+    if compatibility.reason == "hash_mismatch":
+        return f"daemon op schemas do not match this CLI for op {op_id!r} (stale daemon)", True
+    if compatibility.reason == "method_missing":
+        return "daemon predates the op-schema handshake (older than this CLI)", False
+    reported = compatibility.reported_version
+    version = f"version {reported}" if isinstance(reported, str) else "unreported version"
+    if compatibility.reason == "checked_unavailable":
+        return (
+            f"daemon lacks checked execution required for op {op_id!r} ({version}, stale daemon)",
+            False,
+        )
+    return f"daemon predates the op-schema handshake ({version}, older than this CLI)", False
 
 
 def _restart_stale_daemon_if_idle(socket_path: Path, problem: str) -> bool:

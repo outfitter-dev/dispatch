@@ -10,7 +10,12 @@ import pytest_asyncio
 from mcp.types import TextContent
 
 from outfitter.dispatch.contracts.derive_mcp import derive_mcp_projection
-from outfitter.dispatch.contracts.registry import CONTROL_META_METHOD, OpRegistry
+from outfitter.dispatch.contracts.registry import (
+    CONTROL_EXEC_METHOD,
+    CONTROL_META_METHOD,
+    ControlOpCompatibility,
+    OpRegistry,
+)
 from outfitter.dispatch.core.ops import REGISTRY
 from outfitter.dispatch.daemon.control import ControlServer
 from outfitter.dispatch.registry.store import Registry
@@ -310,6 +315,31 @@ async def test_tool_call_prehandshake_baseline_ops_gated_by_reported_version(
 
     monkeypatch.setattr(mcp, "call_daemon", fake_call_daemon)
 
+    async def fake_bound(
+        socket_path: Path,
+        op_id: str,
+        params: dict[str, object],
+        expected_hash: str,
+        *,
+        read_safe: bool,
+        baseline_safe: bool,
+        timeout: float = 30.0,
+    ) -> tuple[dict[str, object], ControlOpCompatibility]:
+        from outfitter.dispatch.contracts.registry import control_op_compatibility
+
+        metadata = await fake_call_daemon(socket_path, CONTROL_META_METHOD, {}, timeout)
+        compatibility = control_op_compatibility(
+            metadata,
+            op_id,
+            expected_hash,
+            read_safe=read_safe,
+            baseline_safe=baseline_safe,
+        )
+        response = await fake_call_daemon(socket_path, op_id, params, timeout)
+        return response, compatibility
+
+    monkeypatch.setattr(mcp, "_call_daemon_bound", fake_bound)
+
     # Parent-version daemon: the baseline proves ``stop`` parses identically.
     stopped = await handle_tool_call(
         Path("/nonexistent.sock"), "dispatch_thread_write", {"op": "stop", "lane": "@a"}
@@ -365,6 +395,40 @@ async def test_tool_call_prehandshake_baseline_ops_gated_by_reported_version(
     assert isinstance(first_read, TextContent)
     assert "version 0.9.0" in first_read.text
     assert forwarded == ["stop", "models"]
+
+
+async def test_hash_capable_tool_call_uses_checked_execution_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_call_daemon(
+        _socket_path: Path, method: str, params: dict[str, object], _timeout: float = 30.0
+    ) -> dict[str, object]:
+        calls.append((method, params))
+        if method == CONTROL_META_METHOD:
+            from outfitter.dispatch.contracts.registry import registry_op_schema_hashes
+
+            return {
+                "id": 1,
+                "result": {
+                    "protocol_version": 2,
+                    "op_schemas": registry_op_schema_hashes(REGISTRY),
+                },
+            }
+        return {"id": 1, "result": {"lanes": []}}
+
+    monkeypatch.setattr(mcp, "call_daemon", fake_call_daemon)
+
+    result = await handle_tool_call(
+        Path("/nonexistent.sock"), "dispatch_thread_read", {"op": "roster"}
+    )
+
+    assert result.isError is False
+    assert calls[1][0] == CONTROL_EXEC_METHOD
+    assert calls[1][1]["op"] == "roster"
+    assert calls[1][1]["params"] == {}
+    assert isinstance(calls[1][1]["op_schema_hash"], str)
 
 
 async def test_tool_call_rejects_unknown_grouped_action(socket_path: Path) -> None:
