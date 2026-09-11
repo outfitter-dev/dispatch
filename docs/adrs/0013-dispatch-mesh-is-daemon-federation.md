@@ -4,7 +4,7 @@ slug: dispatch-mesh-is-daemon-federation
 title: Dispatch Mesh Is Daemon Federation
 status: proposed
 created: 2026-06-03
-updated: 2026-06-03
+updated: 2026-09-11
 owners: ['[galligan](https://github.com/galligan)']
 ---
 
@@ -20,14 +20,15 @@ Codex App Server is local to a machine/account/runtime. Trying to share `~/.code
 
 The mesh federates dispatch daemons, not Codex App Servers.
 
-Each machine runs its own `dispatchd`, owns its own local Codex App Server, account, filesystem, approvals, registry, and lane authority policy. The mesh exchanges dispatch-level envelopes: lane messages, op requests, status snapshots, event summaries, artifacts where explicitly allowed, and acknowledgements.
+Each station runs its own `dispatchd` and owns its local provider bindings, accounts, filesystem authority, approvals, registry and lane policy. A station is a runtime boundary; a host may contain isolated stations. The network exchanges Dispatch-level envelopes and bounded selected state. [ADR-0028](0028-stations-own-provider-bindings-and-durable-execution.md) defines the shared station/provider identity and execution foundation; this remains proposed network behavior.
 
 Remote lanes are addressable but not local:
 
 - Local handles remain local.
-- Remote lanes are addressed with a peer namespace, such as `@mini:builder`.
+- Existing `@project:name` handle syntax keeps its meaning. A separate station selector qualifies a stable station-local Dispatch thread key; exact CLI grammar remains a contract decision.
 - The local daemon routes remote ops to the owning peer daemon.
 - The remote daemon authorizes and executes the op locally.
+- Targets pin network, station, station incarnation and Dispatch thread identity. Provider binding/native session resolution stays within the station.
 - Remote events are relayed as normalized dispatch events, not raw app-server streams.
 
 The mesh must preserve local sovereignty: no remote peer receives implicit access to another machine's filesystem, shell, app-server, or account. Remote command execution means "invoke an authorized dispatch op remotely," not arbitrary shell by default.
