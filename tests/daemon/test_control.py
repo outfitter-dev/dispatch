@@ -14,6 +14,8 @@ from pathlib import Path
 import pytest_asyncio
 
 from outfitter.dispatch.contracts.registry import (
+    CONTROL_EXEC_METHOD,
+    op_schema_hash,
     registry_op_schema_hashes,
     registry_schema_hash,
 )
@@ -116,10 +118,81 @@ async def test_unknown_op_is_method_not_found(socket_path: Path) -> None:
     assert _error(resp)["code"] == -32601
 
 
+async def test_checked_execution_validates_receiving_op_hash_before_handler(
+    socket_path: Path,
+) -> None:
+    op = REGISTRY.get("open")
+    opened = await _call(
+        socket_path,
+        CONTROL_EXEC_METHOD,
+        {
+            "op": "open",
+            "params": {"name": "checked", "cwd": "/w"},
+            "op_schema_hash": op_schema_hash(op),
+        },
+    )
+
+    assert _result(opened)["handle"] == "@checked"
+
+
+async def test_checked_execution_rejects_mismatched_hash_without_calling_handler(
+    socket_path: Path,
+) -> None:
+    rejected = await _call(
+        socket_path,
+        CONTROL_EXEC_METHOD,
+        {
+            "op": "open",
+            "params": {"name": "unchecked", "cwd": "/w"},
+            "op_schema_hash": "stale",
+        },
+    )
+
+    error = _error(rejected)
+    data = error["data"]
+    assert isinstance(data, dict)
+    assert data["dispatchCode"] == "daemon_stale"
+    assert data["exitCode"] == 8
+    roster = await _call(socket_path, "roster", {})
+    assert _result(roster)["lanes"] == []
+
+
+async def test_checked_execution_rejects_malformed_envelope_without_calling_handler(
+    socket_path: Path,
+) -> None:
+    rejected = await _call(
+        socket_path,
+        CONTROL_EXEC_METHOD,
+        {"op": "open", "params": {"name": "unchecked", "cwd": "/w"}},
+    )
+
+    data = _error(rejected)["data"]
+    assert isinstance(data, dict)
+    assert data["dispatchCode"] == "validation"
+    roster = await _call(socket_path, "roster", {})
+    assert _result(roster)["lanes"] == []
+
+
+async def test_checked_execution_rejects_unknown_op_without_calling_handler(
+    socket_path: Path,
+) -> None:
+    rejected = await _call(
+        socket_path,
+        CONTROL_EXEC_METHOD,
+        {"op": "frobnicate", "params": {}, "op_schema_hash": "hash"},
+    )
+
+    error = _error(rejected)
+    data = error["data"]
+    assert isinstance(data, dict)
+    assert data["dispatchCode"] == "daemon_stale"
+    assert data["exitCode"] == 8
+
+
 async def test_control_metadata_reports_version_and_supported_ops(socket_path: Path) -> None:
     resp = await _call(socket_path, "__dispatch/metadata", {})
     result = _result(resp)
-    assert result["protocol_version"] == 1
+    assert result["protocol_version"] == 2
     assert isinstance(result["version"], str)
     supported_ops = result["supported_ops"]
     assert isinstance(supported_ops, list)

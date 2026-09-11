@@ -15,11 +15,17 @@ import json
 from pathlib import Path
 
 from outfitter.dispatch.contracts.context import Ctx
-from outfitter.dispatch.contracts.errors import project_error
+from outfitter.dispatch.contracts.errors import (
+    DaemonStaleError,
+    ValidationError,
+    project_error,
+)
 from outfitter.dispatch.contracts.execute import execute
 from outfitter.dispatch.contracts.registry import (
+    CONTROL_EXEC_METHOD,
     CONTROL_META_METHOD,
     OpRegistry,
+    op_schema_hash,
     registry_op_schema_hashes,
     registry_schema_hash,
 )
@@ -27,7 +33,7 @@ from outfitter.dispatch.version import package_version
 
 _METHOD_NOT_FOUND = -32601
 _INVALID_REQUEST = -32600
-_CONTROL_PROTOCOL_VERSION = 1
+_CONTROL_PROTOCOL_VERSION = 2
 
 
 class ControlServer:
@@ -56,20 +62,29 @@ class ControlServer:
             }
         raw_params = message.get("params")
         params = raw_params if isinstance(raw_params, dict) else {}
+        checked_hash: str | None = None
+        if method == CONTROL_EXEC_METHOD:
+            try:
+                method, params, checked_hash = _checked_execution(params)
+            except ValidationError as exc:
+                return _projected_error(mid, exc)
         try:
             op = self._registry.get(method)
         except KeyError:
+            if checked_hash is not None:
+                return _projected_error(
+                    mid,
+                    DaemonStaleError(f"daemon does not support the caller's checked op {method!r}"),
+                )
             return _error(mid, _METHOD_NOT_FOUND, f"unknown op {method!r}")
         try:
+            if checked_hash is not None and checked_hash != op_schema_hash(op):
+                raise DaemonStaleError(
+                    f"daemon op schema does not match the caller for op {op.id!r}"
+                )
             result = await execute(op, params, self._ctx)
         except Exception as exc:  # surface boundary: project every error (ADR-0001)
-            proj = project_error(exc)
-            return _error(
-                mid,
-                proj.rpc_code,
-                proj.message,
-                data={"dispatchCode": proj.code, "exitCode": proj.exit_code},
-            )
+            return _projected_error(mid, exc)
         return {"id": mid, "result": result}
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -110,3 +125,30 @@ def _error(
     if data is not None:
         error["data"] = data
     return {"id": mid, "error": error}
+
+
+def _checked_execution(
+    params: dict[str, object],
+) -> tuple[str, dict[str, object], str]:
+    if set(params) != {"op", "params", "op_schema_hash"}:
+        raise ValidationError("invalid checked execution envelope")
+    op_id = params["op"]
+    op_params = params["params"]
+    schema_hash = params["op_schema_hash"]
+    if (
+        not isinstance(op_id, str)
+        or not isinstance(op_params, dict)
+        or not isinstance(schema_hash, str)
+    ):
+        raise ValidationError("invalid checked execution envelope")
+    return op_id, op_params, schema_hash
+
+
+def _projected_error(mid: object, exc: BaseException) -> dict[str, object]:
+    proj = project_error(exc)
+    return _error(
+        mid,
+        proj.rpc_code,
+        proj.message,
+        data={"dispatchCode": proj.code, "exitCode": proj.exit_code},
+    )
