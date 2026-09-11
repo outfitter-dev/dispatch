@@ -1,14 +1,16 @@
 # Claude provider implementation plan
 
-Status: implementation-ready provider boundary and headless fallback;
+Status: Claude transport plan; shared provider boundary depends on DIS-79–82 and DIS-70;
 Crew-derived Agent View cockpit is the preferred coexistence candidate, blocked
 on DIS-54 zmx/receipt proof; no production implementation
 Evidence: [`claude-control-plane-verification.md`](../research/claude-control-plane-verification.md)  
 Decision: [ADR-0026](../adrs/0026-claude-control-uses-resume-processes-and-hooks.md)
 
+Shared foundation update (September 11, 2026): [ADR-0028](../adrs/0028-stations-own-provider-bindings-and-durable-execution.md) and [the station/provider plan](../../.agents/plans/stations-providers/PLAN.md) now own provider-neutral identity, guarded routing, immutable reservations and common evidence. DIS-50 consumes DIS-79–82 and DIS-70 rather than implementing a separate migration. This plan retains Claude-specific transport, cockpit and coexistence ownership; those prerequisites do not block the isolated Hermes API proof. The detailed provider boundary below is proposed shape, not completed runtime code.
+
 ## Outcome
 
-Add Claude as a fixed second execution provider beneath Dispatch's authored ops.
+Add Claude as a fixed execution provider beneath Dispatch's authored ops.
 The preferred coexistence target preserves Claude's Agent View background owner
 and drives its guarded quick-reply UI through one persistent zmx-hosted
 unscoped `claude agents` cockpit. This is one global shared cockpit per local
@@ -30,7 +32,7 @@ or renamed approximations.
 ## Decisions already settled
 
 - One `dispatchd` remains the control authority. It owns a fixed provider manager
-  with Codex and Claude runtimes.
+  with binding-scoped native runtimes, including Codex and Claude.
 - Codex continues to use the existing single App Server client. Claude does not
   go through App Server.
 - Claude's verified headless transport is one exclusive persistent `claude
@@ -101,9 +103,9 @@ class ProviderRuntime(Protocol):
 
 
 class ProviderManager(Protocol):
-    def runtime(self, provider: ProviderId) -> ProviderRuntime: ...
+    def runtime(self, binding_id: str) -> ProviderRuntime: ...
     def capabilities(
-        self, provider: ProviderId, session: ProviderSession | None
+        self, binding_id: str, session: ProviderSession | None
     ) -> ProviderCapabilities: ...
 ```
 
@@ -121,14 +123,15 @@ provider runtime before acting. No surface imports a provider runtime.
 ```python
 @dataclass(frozen=True)
 class ProviderIdentity:
-    provider: Literal["codex", "claude"]
+    provider: ProviderId
+    binding_id: str
     provider_session_id: str
 
 
 @dataclass(frozen=True)
 class MessageEnvelope:
     dispatch_message_id: UUID
-    lane_id: UUID
+    lane_id: str
     identity: ProviderIdentity
     attempt: int
     text: str
@@ -138,6 +141,7 @@ class MessageEnvelope:
 @dataclass(frozen=True)
 class ProviderEventEnvelope:
     provider: ProviderId
+    binding_id: str
     provider_session_id: str
     process_generation: UUID
     event_type: str
@@ -150,7 +154,9 @@ class ProviderEventEnvelope:
     normalized: Mapping[str, JsonScalar]
 ```
 
-The text exists only in the outbound message/queue record under the current
+These sketches consume the shared DIS-80–82 contracts; DIS-50 does not author a
+second request envelope or reducer. Binding IDs refer to the configured runtime
+namespace, never endpoint addresses or credentials. The text exists only in the outbound message/queue record under the current
 product contract. Hook ingestion receives bounded normalized facts, not a
 durable prompt digest or raw prompt/tool/message content. The helper generates one
 `source_delivery_id` per invocation and reuses it for bounded socket retries; the
@@ -162,7 +168,7 @@ pairs hook starts/responses but is not present in the raw hook payload.
 `ProviderEventEnvelope` is the provider-neutral reactor input; it generalizes the
 current Codex-shaped `LaneEvent` rather than creating a parallel reducer. Each
 runtime emits envelopes into a merged `ProviderManager.events()` stream. The
-reactor resolves `(provider, provider_session_id)` to the local lane key, persists
+reactor resolves `(provider, binding_id, provider_session_id)` to the local lane key, persists
 the provider event, runs the common receipt/runtime/attention reducer, and then
 publishes a compatibility `LaneEvent` carrying the local lane key to existing
 subscriptions and triggers. Codex's current event indexer becomes the Codex
@@ -285,67 +291,63 @@ corroboration only; raw transcript content remains out of bounds.
 
 ## Identity and registry migration
 
-The existing `lanes.id` is both Dispatch identity and Codex thread ID. Split
-those concepts before routing Claude.
+DIS-79 owns the complete additive binding migration before Claude routing is
+enabled. Follow [ADR-0028's public identity and selector contract](../adrs/0028-stations-own-provider-bindings-and-durable-execution.md#public-identity-and-selector-compatibility).
+DIS-50 consumes that schema; it must not create a competing lane-only identity
+table or migrate shared history independently.
 
-### Schema changes
+### Shared schema dependency
 
-- Keep the physical `lanes.id` column and all existing foreign keys unchanged;
-  reinterpret it as the stable Dispatch-local lane key. Existing values remain
-  valid local keys, so SQLite does not need a risky primary-key/table rebuild.
-- Add `lane_provider_identities(lane_id TEXT PRIMARY KEY REFERENCES lanes(id) ON
-  DELETE CASCADE, provider TEXT NOT NULL CHECK(provider IN ('codex','claude')),
-  provider_session_id TEXT NOT NULL, UNIQUE(provider, provider_session_id))`.
-- In one `BEGIN IMMEDIATE` migration, create the table, backfill every existing
-  lane as `('codex', lanes.id)`, verify row counts and uniqueness, then commit.
-  Any failed assertion rolls back the entire migration.
-- New lanes allocate a random local `lanes.id` and insert the provider identity in
-  the same transaction before any provider mutation. All child tables continue to
-  reference that local key without rebuild or dual-write.
-- Public outputs add `provider`, `provider_session_id`, and `lane_key`. The legacy
-  `id`/`lane` fields continue to expose `lanes.id`; for existing Codex rows this is
-  unchanged, while callers must use `provider_session_id` for provider identity.
-  Contract examples and one release-note deprecation remove the old "full Codex
-  thread ID" promise before any future field rename.
-- Allocate refs with provider-specific source/payload. Never hash a Claude UUID
-  through `codex_ref_payload()`.
-- Qualify raw provider selectors (`claude:<uuid>`, `codex:<thread-id>`). An
-  unqualified managed ref remains safe; an unqualified unmanaged provider ID is
-  rejected once multiple providers are enabled.
+- Preserve all existing Codex lane keys, refs and child foreign keys, including
+  the full Codex ID escape hatch. New default-Codex lanes keep that behavior.
+- Scope native identity and every normalized-history/event/receipt uniqueness
+  rule, query and join by stable runtime binding as well as provider/native ID.
+  Endpoint or credential changes never silently rebind stored sessions.
+- Allocate Claude Dispatch keys in the non-Codex namespace and store native
+  identity through the shared schema before any provider mutation. Keep `id`
+  and existing `lane` output aliases stable; expose `provider`, `binding_id` and
+  `provider_session_id` as additive local metadata. Do not add `lane_key` or
+  invent a provider-qualified selector grammar in this slice.
+- Select managed Claude threads through refs, Dispatch keys or existing labels.
+  Bare native Claude UUIDs are unsupported until an explicit binding-scoped
+  lookup contract exists. Observed-only identities remain separate from writable
+  enrollment.
 
 `provider_threads` already stores provider topology independently of lane
 authority. Reuse it for metadata discovery; discovery never creates a writable
 lane.
 
-Rollback before provider rows exist drops only `lane_provider_identities`. After
-Claude rows exist, rollback disables Claude launches and retains the additive
-table/read compatibility; it never deletes lanes or provider identities. Migration
-tests start from the prior schema with lanes plus every child-table relationship,
-exercise upgrade and failed-assertion rollback, and verify foreign keys/public
-Codex outputs byte-for-byte.
+DIS-79 owns WAL-safe backup, transactional backfill/rollback and collision tests.
+After non-Codex rows exist, rollback disables new provider execution while
+retaining additive data/read compatibility; it never deletes lanes or native
+identities. DIS-50 verifies Claude integration against that already-tested schema.
 
 ### Runtime state additions
 
-DIS-50 adds three focused tables; it does not put process-manager state into the
-provider-neutral `lane_runtime_state` reducer row:
+DIS-50 may add the following Claude-specific state where the shared schema does
+not already express it. Keep process-manager details outside the provider-neutral
+`lane_runtime_state` reducer row:
 
-- `provider_runtime_sessions`: one row per lane, keyed by `lane_id`, with provider,
+- Runtime session state: one row per lane, keyed by `lane_id` with its binding,
   current generation, pid/pgid/start identity, effective cwd, active attempt ID,
   readiness/confidence, hook health/last timestamp, and recovery state/reason.
-- `provider_transport_attempts`: append-only attempts keyed by random `attempt_id`,
-  with unique `(lane_id, dispatch_message_id, attempt_number)`, generation,
+- Claude transport evidence linked to the existing local delivery/attempt, with
+  unique `(lane_id, dispatch_message_id, attempt_number)`, generation,
   frame-write state, transport state, provider-message state, prompt ID, Stop
   occurrence, hook settlement, uncertainty reason, terminal/result/exit facts,
   and optional audited resolution actor/time/reason. A partial unique index permits
   only one nonterminal attempt per lane.
-- `provider_runtime_artifacts`: generation/path ownership and the cleanup state
+- Runtime artifact state: generation/path ownership and the cleanup state
   machine defined below, keyed by `(lane_id, generation, path)`.
 
-Foreign keys target the local lane key with cascade only for explicit lane
-deletion. DIS-50 owns creation, migration, idempotent request lookup, basic
-monotonic transitions, restart recovery, and uncertainty. DIS-51 hardens replay,
-late/out-of-order event reduction, StopFailure, indexes, and fixture breadth; it
-does not invent or replace the attempt/session tables.
+Foreign keys target the reviewed shared lane/binding and delivery identities,
+with cascade only for explicit lane deletion. DIS-79 owns common identity
+migration, DIS-81 owns request reservation/lookup, and DIS-82 owns common
+transitions. Reuse the existing delivery ledger rather than creating a second
+attempt authority. DIS-50 owns only necessary Claude-specific state migrations,
+transport, receipt interpretation and recovery. DIS-51 hardens Claude replay,
+late/out-of-order evidence, StopFailure, indexes and fixture breadth against
+those shared contracts.
 
 ## Claude runtime and supervision
 
@@ -663,9 +665,10 @@ provider = "claude"
 Execution provider is distinct from Codex `model_provider`. Initial vocabulary is
 fixed to `codex|claude`; omitting it remains Codex.
 
-DIS-50 adds the canonical authored `provider` enum to `new` because the vertical
-slice needs an invocable entry point. It updates contract examples and CLI/MCP
-canonical projection only; no shorthand is required for the first slice.
+The canonical authored `provider` enum already exists at the source baseline;
+Claude execution is guarded off. DIS-50 enables its Claude path only after the
+shared gates and Claude proofs pass, and updates contract examples and derived
+CLI/MCP projection. No shorthand is required for the first slice.
 
 DIS-49 projects `--claude` and `--codex` as CLI-only shorthands for
 `new --provider`. Conflicting/multiple selector forms fail before any worktree,
@@ -699,7 +702,8 @@ ingestion, retry, or general concurrency knobs.
 
 - provider manager resolution and typed unsupported errors;
 - capability intersection and surface parity;
-- provider-qualified selectors and migration compatibility;
+- binding-scoped identity/routing, managed selector compatibility, migration
+  compatibility, and rejection of unsupported native-ID lookups;
 - monotonic receipt transitions and duplicate/out-of-order hooks;
 - one-writer lease, request-ID dedupe, queue claim/reset;
 - generation fencing, hook-settlement, occurrence ordering, and stale-event rejection;
@@ -826,8 +830,8 @@ requirements. DIS-54 blocks enablement and DIS-50 acceptance.
 
 One PR, not an abstraction-only precursor:
 
-- lane identity migration and provider-qualified routing;
-- fixed provider manager with existing Codex adapter;
+- consume DIS-79 binding identity migration and DIS-80 guarded routing;
+- add the Claude adapter to the shared fixed provider manager;
 - exclusive persistent stream runtime plus post-exit resume owner;
 - generated per-process settings and content-minimizing hook with preflight;
 - persisted random request ID and monotonic processing/completion receipt;
@@ -846,7 +850,7 @@ Dispatch never resumes behind an attached human. No raw content is retained.
 
 - attempt table/generation fencing;
 - hook health, StopFailure, late/out-of-order events;
-- provider-scoped dedupe and receipt monotonicity migration;
+- binding-scoped Claude evidence dedupe and monotonic receipt cases;
 - bounded provider event fixtures and privacy tests.
 
 ### 4. DIS-52 — Queue and attention

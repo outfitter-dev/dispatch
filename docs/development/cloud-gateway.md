@@ -1,7 +1,50 @@
 # Dispatch Cloud Gateway
 
-Status: exploratory design note
-Date: 2026-06-30
+Status: proposed direction; no gateway implemented
+Updated: 2026-09-11
+
+## Current contract and sequence
+
+[ADR-0028](../adrs/0028-stations-own-provider-bindings-and-durable-execution.md) and [the station/provider plan](../../.agents/plans/stations-providers/PLAN.md) govern implementation. The first external proof is authenticated remote MCP with a tiny manifest derived from canonical ops and synthetic read-only inventory (DIS-89). It can run independently of the Hermes adapter. Evaluate one Worker and a SQLite-backed Durable Object; broader service choices remain uncommitted.
+
+After identity, local reservation and evidence gates pass, implement an authorized station directory (DIS-90), then queued plain text to existing threads through a durable mailbox (DIS-91). Add explicit direct HTTPS over Tailscale using the same operation identity and receiver admission (DIS-92). SSH is not the application transport. The initial routes never automatically fall back or retarget an offline destination.
+
+The following is an illustrative admission record, not a hand-authored public op or final wire schema. Trusted authentication context comes from ingress outside model-editable tool arguments. The actual op name and input fields must be derived from the registry.
+
+```text
+Gateway admission (immutable)
+  operation_id
+  authenticated scope: network_id, principal_id, delegation evidence
+  caller_key (dedupe namespace: network + principal + caller key)
+  target: station_id, station_incarnation, existing Dispatch thread_id
+  canonical op + submitted arguments + op schema hash/contract version
+  requested settings + work expiry
+  submitted_request_digest
+
+Station admission (immutable after first reservation)
+  operation_id -> local_delivery_id (atomic mapping in local registry)
+  pinned Dispatch thread -> binding_id + native session identity
+  submitted_request_digest
+  permitted effective settings + effective_request_digest
+  local authority decision + reservation order
+
+Later observations (separate facts)
+  provider acceptance / native run identity
+  execution evidence / terminal outcome / uncertainty
+```
+
+The gateway cannot freeze settings known only at the station. The station freezes them once, retains the original expiry, and rechecks mutable authorization immediately before execution. A changed retry conflicts; missing acknowledgments do not authorize a second provider call. Mailbox delivery and leases never grant local writer authority. Gateway acceptance, local reservation, provider acceptance and execution are distinct receipt layers; there is no distributed transaction or exactly-once promise.
+
+Network `thread_id` is the stable managed Dispatch key. A station resolves local binding/native identity; native provider IDs are not a portable remote selector. Published inventory includes bounded source/age/partiality and station epoch/sequence/tombstones under an explicit metadata policy. Raw history, secrets, paths and tool output stay local by default.
+
+Real client/auth compatibility, gateway trust, delegation lifetime, retention and rollout must be resolved before remote writes. A gateway processing plaintext is not end-to-end confidential from that gateway. Creation, goal start, stop/steer, approval responses, routing pools, automatic fallback, Slack and Linear ingress, and a broader multi-service deployment require later scoped decisions. A local op capability does not automatically join the remote allowlist.
+
+## Archived June 30 exploration
+
+The appendix below preserves prior reasoning and alternatives. All schemas, examples, prescriptions and phases inside it are historical and non-normative, including machine/repository routing, fallback, goal start/stop and Slack/Linear-first rollout. They must not be used as implementation requirements; the current contract above supersedes them.
+
+<details>
+<summary>Historical gateway exploration and option inventory</summary>
 
 This note sketches an optional always-on Dispatch Gateway for external work
 surfaces such as Slack, Linear, and future team tools. It is not an
@@ -59,7 +102,7 @@ decisions:
 The Cloud Gateway is another transport and control plane around those concepts,
 not a second contract system.
 
-## Cloudflare fit
+## Cloudflare options considered
 
 Cloudflare is a plausible first host because its current platform primitives map
 well to this shape:
@@ -189,7 +232,7 @@ paths. Each machine maps repo keys to local paths in local config.
 
 ### Invocation envelope
 
-The canonical queued request:
+Superseded June 30 request sketch (not the current admission contract):
 
 ```json
 {
@@ -501,7 +544,7 @@ hard.
   slash-command/app-mention surface?
 - What event detail is safe to send back to shared channels by default?
 
-## Suggested phases
+## Historical phase proposal (superseded)
 
 ### Phase 0 - decision and spike
 
@@ -544,7 +587,7 @@ hard.
 - Add assignment/fallback policy.
 - Add per-team route ownership and admin controls.
 
-## Non-goals for the first implementation
+## Historical non-goals
 
 - Running Codex in Cloudflare.
 - Exposing arbitrary shell execution from Slack or Linear.
@@ -561,3 +604,5 @@ giving those surfaces unsafe authority. It should provide always-on ingress,
 inspectable routing, durable queues, and a configuration UI. Local `dispatchd`
 should continue to own execution, local policy, repo access, Codex App Server,
 and final authorization.
+
+</details>
