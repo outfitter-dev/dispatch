@@ -119,6 +119,12 @@ def test_action_schema_and_annotations_from_op() -> None:
         "created_at",
         "updated_at",
     }
+    lane_detail_schema = next(
+        schema for schema in lane_read.outputSchema["anyOf"] if schema["title"] == "LaneDetail"
+    )
+    attention_schema = lane_detail_schema["properties"]["attention"]
+    assert set(attention_schema["properties"]) == {"held", "kind", "reason"}
+    assert "attention_detail" not in lane_detail_schema["properties"]
 
     lane_destroy = tools["dispatch_thread_destroy"]
     assert lane_destroy.annotations is not None

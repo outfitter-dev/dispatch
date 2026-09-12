@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
+
+from pydantic import ValidationError as PydanticValidationError
 
 from outfitter.dispatch.client.hermes import (
     HermesAttentionEvent,
@@ -49,6 +52,8 @@ ObservationSink = Callable[[ProviderObservation], Awaitable[object]]
 HERMES_ACTIONS = frozenset({ProviderAction.LAUNCH, ProviderAction.SEND})
 HERMES_OBSERVED_TEXT_CHARS = 32_000
 HERMES_ATTENTION_MEMBER_LIMIT = 64
+HERMES_GENERATION_QUARANTINE_REASON = "owned Hermes gateway generation changed"
+HERMES_LAUNCH_MAPPING_QUARANTINE_REASON = "Hermes launch mapping is missing or invalid"
 
 
 @dataclass(frozen=True)
@@ -366,6 +371,78 @@ class HermesLaneAdapter:
                 truncated=len(bounded) != len(text),
             )
         )
+
+
+async def quarantine_stale_hermes_lanes(
+    registry: Registry,
+    *,
+    binding_id: str,
+    current_generation: str,
+) -> tuple[str, ...]:
+    """Hold every pre-existing Hermes lane before publishing a new generation."""
+
+    if not current_generation:
+        raise ValueError("current Hermes generation cannot be empty")
+    quarantined: list[str] = []
+    for lane in await registry.list_lanes(include_archived=True):
+        if lane.provider != "hermes" or lane.binding_id != binding_id or lane.source != "own":
+            continue
+        launch = None
+        with contextlib.suppress(NotFoundError, PydanticValidationError, TypeError, ValueError):
+            launch = await registry.get_lane_launch(lane.id)
+        if launch is not None and launch.generation == current_generation:
+            continue
+
+        current = await registry.get_lane_runtime_state(lane.id)
+        detail = _attention_detail(current.attention_detail if current else None)
+        detail["quarantine"] = {
+            "current_generation": current_generation,
+            "frozen_generation": launch.generation if launch is not None else None,
+            "reason": (
+                HERMES_GENERATION_QUARANTINE_REASON
+                if launch is not None
+                else HERMES_LAUNCH_MAPPING_QUARANTINE_REASON
+            ),
+            "source": "provider_generation",
+        }
+        status: LaneStatus = (
+            "archived"
+            if lane.status == "archived"
+            else current.status
+            if current is not None and current.needs_attention
+            else "waiting_tool"
+        )
+        attention_kind = (
+            current.attention_kind
+            if current is not None and current.needs_attention
+            else "native_client_capability_unavailable"
+        )
+        await registry.update_lane_status(lane.id, status)
+        await registry.upsert_lane_runtime_state(
+            LaneRuntimeState(
+                lane=lane.id,
+                provider=lane.provider,
+                binding_id=lane.binding_id,
+                provider_thread_id=(
+                    lane.provider_session_id
+                    or (launch.stored_session_id if launch is not None else None)
+                    or lane.id
+                ),
+                status=status,
+                active_turn_id=current.active_turn_id if current else lane.active_turn_id,
+                latest_turn_id=current.latest_turn_id if current else lane.latest_turn_id,
+                latest_turn_status=(
+                    current.latest_turn_status if current else lane.latest_turn_status
+                ),
+                needs_attention=True,
+                attention_kind=attention_kind,
+                attention_detail=json.dumps(detail, sort_keys=True, separators=(",", ":")),
+                updated_at=registry.now_iso(),
+                last_event_at=current.last_event_at if current else None,
+            )
+        )
+        quarantined.append(lane.id)
+    return tuple(quarantined)
 
 
 async def apply_hermes_delivery_observation(
@@ -715,18 +792,25 @@ async def _sync_runtime_state(registry: Registry, lane_id: str, observed_at: str
 
 
 def _attention_members(raw: str | None) -> list[dict[str, object]]:
-    if raw is None:
+    members = _attention_detail(raw).get("members")
+    if not isinstance(members, list):
         return []
+    return [dict(member) for member in members if isinstance(member, dict)]
+
+
+def _attention_detail(raw: str | None) -> dict[str, object]:
+    if raw is None:
+        return {"members": []}
     try:
         value: object = json.loads(raw)
     except json.JSONDecodeError:
-        return []
+        return {"members": []}
     if not isinstance(value, dict):
-        return []
+        return {"members": []}
     raw_members = value.get("members")
     if not isinstance(raw_members, list):
-        return []
-    return [dict(member) for member in raw_members if isinstance(member, dict)]
+        value["members"] = []
+    return dict(value)
 
 
 def _attention_member_key(member: dict[str, object]) -> tuple[object, object, object]:

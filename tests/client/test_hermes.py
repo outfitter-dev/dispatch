@@ -338,6 +338,44 @@ async def test_pre_ack_overflow_is_explicit_partial_uncertainty() -> None:
         await client.close()
 
 
+async def test_terminal_pre_ack_overflow_followed_by_eof_remains_unknown() -> None:
+    transport = FakeTransport()
+    activity: list[HermesEvent] = []
+
+    def submit(_request: dict[str, object]) -> list[dict[str, object]]:
+        asyncio.get_running_loop().call_soon(transport.eof)
+        return [
+            _event("message.start", "runtime-1", "turn-1"),
+            _event(
+                "message.complete",
+                "runtime-1",
+                "turn-1",
+                status="complete",
+                text="terminal-looking",
+            ),
+        ]
+
+    client = await _negotiated_client(
+        transport,
+        responder=submit,
+        max_pre_ack_events=1,
+        max_pre_ack_bytes=1_000,
+    )
+    client.set_activity_handler(activity.append)
+    try:
+        result = await client.submit_prompt(runtime_session_id="runtime-1", text="hello")
+
+        assert isinstance(result, HermesSubmissionUnknown)
+        assert "stream closed" in result.error
+        assert [event.type for event in activity] == ["message.start", "message.complete"]
+        assert [message["method"] for message in transport.sent] == [
+            "gateway.capabilities",
+            "prompt.submit",
+        ]
+    finally:
+        await client.close()
+
+
 async def test_pre_ack_events_are_isolated_by_runtime_and_turn_identity() -> None:
     transport = FakeTransport()
     activity: list[HermesEvent] = []

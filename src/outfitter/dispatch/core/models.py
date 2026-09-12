@@ -1152,8 +1152,15 @@ class LaunchPlan(BaseModel):
     )
 
 
+class LaneAttentionView(BaseModel):
+    held: bool = False
+    kind: str | None = None
+    reason: str | None = None
+
+
 class LaneDetail(LaneRef):
     active_turn_id: str | None = None
+    attention: LaneAttentionView = Field(default_factory=LaneAttentionView)
     latest_turn: LatestTurnView = Field(default_factory=LatestTurnView)
     sync: LaneSyncView = Field(default_factory=LaneSyncView)
     model: ThreadModelView = Field(default_factory=ThreadModelView)

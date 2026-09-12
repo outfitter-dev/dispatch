@@ -37,7 +37,6 @@ class ProviderWorker:
     owns_process: bool
     run: Callable[[], Awaitable[None]]
     close: Callable[[str | None], Awaitable[None]]
-    quarantine_on_generation_change: bool = False
 
 
 @dataclass(frozen=True)
@@ -149,22 +148,6 @@ class ProviderManager:
             )
             close_task: asyncio.Future[None] = asyncio.ensure_future(worker.close(generation))
             self._late_close_tasks.add(close_task)
-            return
-        previous = self._snapshots[(provider, binding_id)]
-        if (
-            worker.quarantine_on_generation_change
-            and previous.connection_generation is not None
-            and previous.connection_generation != generation
-        ):
-            self._set_state(
-                worker,
-                "quarantined",
-                reason=(
-                    "provider process generation changed; existing sessions require "
-                    "explicit safe resumption"
-                ),
-                generation=generation,
-            )
             return
         self._router.register_adapter(adapter)
         self._set_state(worker, "ready", generation=generation)
