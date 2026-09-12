@@ -8,11 +8,13 @@ their own operation-shaped methods without implementing ``LaneClient``.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
+from outfitter.dispatch.client.errors import AppServerError, ClientError, ProtocolError
 from outfitter.dispatch.client.events import (
     AccountRateLimitsUpdated,
     LaneEvent,
@@ -53,8 +55,11 @@ from outfitter.dispatch.client.models import (
 from outfitter.dispatch.client.native_queue import QueuedSubmission, ThreadQueuePage
 from outfitter.dispatch.contracts.context import LaneClient
 from outfitter.dispatch.contracts.errors import CapabilityUnavailableError
+from outfitter.dispatch.registry.delivery import DeliveryTransport
 from outfitter.dispatch.registry.models import Lane
 from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
+
+from .turn_settings import TurnStartSettings
 
 if TYPE_CHECKING:
     from outfitter.dispatch.contracts.context import Ctx
@@ -101,6 +106,43 @@ class ProviderTarget:
     provider: str
     binding_id: str
     native_session_id: str
+
+
+@dataclass(frozen=True)
+class PreparedProviderRequest:
+    """One immutable provider call persisted before submission."""
+
+    target: ProviderTarget
+    action: ProviderAction
+    transport: DeliveryTransport
+    correlation_id: str
+    text: str
+    cwd: str | None = None
+    settings: TurnStartSettings | None = None
+
+
+@dataclass(frozen=True)
+class ProviderSubmissionAccepted:
+    status: Literal["accepted"] = "accepted"
+    submission_id: str | None = None
+    turn_id: str | None = None
+
+
+@dataclass(frozen=True)
+class ProviderSubmissionRejected:
+    error: str
+    status: Literal["rejected"] = "rejected"
+
+
+@dataclass(frozen=True)
+class ProviderSubmissionUnknown:
+    error: str
+    status: Literal["unknown"] = "unknown"
+
+
+ProviderSubmissionResult = (
+    ProviderSubmissionAccepted | ProviderSubmissionRejected | ProviderSubmissionUnknown
+)
 
 
 @dataclass(frozen=True)
@@ -305,6 +347,67 @@ class CodexLaneAdapter:
         return await self.client.thread_queue_add(
             self._native(target), text, client_user_message_id=client_user_message_id
         )
+
+    async def submit_prepared(self, request: PreparedProviderRequest) -> ProviderSubmissionResult:
+        """Submit one frozen Codex request and classify only admission evidence."""
+
+        try:
+            async with asyncio.timeout(15):
+                if request.transport == "native_queue":
+                    if request.action != ProviderAction.QUEUE_NATIVE:
+                        raise ValueError("native queue request has the wrong provider action")
+                    submission = await self.queue_add(
+                        request.target,
+                        request.text,
+                        client_user_message_id=request.correlation_id,
+                    )
+                    if (
+                        submission.client_user_message_id != request.correlation_id
+                        or len(submission.input) != 1
+                        or submission.input[0].type != "text"
+                        or submission.input[0].text != request.text
+                    ):
+                        raise ProtocolError(
+                            "native queue acknowledgment does not match the reserved input"
+                        )
+                    return ProviderSubmissionAccepted(submission_id=submission.id)
+
+                if request.action != ProviderAction.SEND:
+                    raise ValueError("turn request has the wrong provider action")
+                if request.cwd is None or request.settings is None:
+                    raise ValueError("turn request is missing frozen cwd or settings")
+                settings = request.settings
+                result = await self.start_turn(
+                    request.target,
+                    request.text,
+                    cwd=request.cwd,
+                    client_user_message_id=request.correlation_id,
+                    permission_profile=settings.permission_profile,
+                    approval_policy=settings.approval_policy,
+                    approvals_reviewer=settings.approvals_reviewer,
+                    sandbox_policy=settings.sandbox_policy,
+                    effort=settings.effort,
+                    summary=settings.summary,
+                    model=settings.model,
+                    service_tier=settings.service_tier,
+                    output_schema=settings.output_schema,
+                    personality=settings.personality,
+                )
+                turn = result.get("turn")
+                turn_id = turn.get("id") if isinstance(turn, dict) else None
+                if not isinstance(turn_id, str):
+                    turn_id = result.get("turnId")
+                submission_id = result.get("submissionId")
+                return ProviderSubmissionAccepted(
+                    submission_id=submission_id if isinstance(submission_id, str) else None,
+                    turn_id=turn_id if isinstance(turn_id, str) else None,
+                )
+        except AppServerError as exc:
+            if exc.code in {-32600, -32601, -32602}:
+                return ProviderSubmissionRejected(error=str(exc))
+            return ProviderSubmissionUnknown(error=str(exc))
+        except (ClientError, TimeoutError) as exc:
+            return ProviderSubmissionUnknown(error=str(exc))
 
     async def queue_list(
         self, target: ProviderTarget, *, cursor: str | None = None, limit: int | None = None
@@ -651,21 +754,32 @@ class ProviderRouter:
             raise CapabilityUnavailableError(
                 f"lane {lane.id!r} has no provider session identity for {action.value}"
             )
-        adapter = self._adapters.get((lane.provider, lane.binding_id))
+        target = ProviderTarget(
+            lane_id=lane.id,
+            provider=lane.provider,
+            binding_id=lane.binding_id,
+            native_session_id=native_id,
+        )
+        return self.route_target(target, action)
+
+    def route_target(self, target: ProviderTarget, action: ProviderAction) -> ProviderRoute:
+        """Route an already frozen target without resolving mutable lane metadata."""
+
+        adapter = self._adapters.get((target.provider, target.binding_id))
         if adapter is None:
             raise CapabilityUnavailableError(
-                f"provider binding {lane.provider}:{lane.binding_id} execution is not supported "
-                "because the binding is not registered"
+                f"provider binding {target.provider}:{target.binding_id} execution is not "
+                "supported because the binding is not registered"
             )
         if not adapter.facts.supports(action):
             raise CapabilityUnavailableError(
                 f"{action.value} is unsupported by provider binding "
-                f"{lane.provider}:{lane.binding_id}"
+                f"{target.provider}:{target.binding_id}"
             )
         if (
-            lane.provider == "codex"
-            and lane.binding_id == DEFAULT_CODEX_BINDING_ID
-            and native_id != lane.id
+            target.provider == "codex"
+            and target.binding_id == DEFAULT_CODEX_BINDING_ID
+            and target.native_session_id != target.lane_id
         ):
             raise CapabilityUnavailableError(
                 "default-Codex provider session identity does not match the stable lane id"
@@ -674,15 +788,10 @@ class ProviderRouter:
         if not availability.ready:
             raise CapabilityUnavailableError(
                 availability.reason
-                or f"provider binding {lane.provider}:{lane.binding_id} is unavailable"
+                or f"provider binding {target.provider}:{target.binding_id} is unavailable"
             )
         return ProviderRoute(
-            target=ProviderTarget(
-                lane_id=lane.id,
-                provider=lane.provider,
-                binding_id=lane.binding_id,
-                native_session_id=native_id,
-            ),
+            target=target,
             action=action,
             adapter=adapter,
             availability=availability,

@@ -78,7 +78,7 @@ from .refs import (
 )
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 DEFAULT_CODEX_BINDING_ID = "codex-default"
 
 
@@ -276,6 +276,7 @@ CREATE TABLE IF NOT EXISTS deliveries (
     mode TEXT NOT NULL CHECK(mode IN ('send', 'queue')),
     transport TEXT NOT NULL DEFAULT 'turn',
     submission_id TEXT,
+    submitted_payload TEXT,
     payload TEXT NOT NULL,
     status TEXT NOT NULL CHECK(status IN (
         'queued', 'submitting', 'accepted', 'completed', 'failed', 'ambiguous'
@@ -870,6 +871,8 @@ class Registry:
             await self._ensure_deliveries_table()
         if user_version < 24:
             await self._ensure_binding_scope_v24()
+        if user_version < 25:
+            await self._ensure_delivery_submitted_payload_column()
 
     async def _ensure_binding_scope_v24(self) -> None:
         """Add binding identity without changing stable lane keys or local row ids."""
@@ -978,7 +981,7 @@ class Registry:
                 violations = await cur.fetchall()
             if violations:
                 raise RuntimeError(f"v24 foreign key check failed: {violations!r}")
-            await self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self._conn.execute("PRAGMA user_version = 24")
             await self._conn.commit()
         except BaseException:
             await self._conn.rollback()
@@ -992,6 +995,12 @@ class Registry:
 
     async def _ensure_deliveries_table(self) -> None:
         await self._conn.executescript(_DELIVERIES_SCHEMA)
+
+    async def _ensure_delivery_submitted_payload_column(self) -> None:
+        async with self._conn.execute("PRAGMA table_info(deliveries)") as cur:
+            columns = {str(row["name"]) for row in await cur.fetchall()}
+        if "submitted_payload" not in columns:
+            await self._conn.execute("ALTER TABLE deliveries ADD COLUMN submitted_payload TEXT")
 
     async def _ensure_queued_message_content_column(self) -> None:
         async with self._conn.execute("PRAGMA table_info(queued_messages)") as cur:
@@ -1783,6 +1792,7 @@ class Registry:
         mode: DeliveryMode,
         payload: str,
         text: str,
+        submitted_payload: str | None = None,
         delivery_id: str | None = None,
         transport: DeliveryTransport = "turn",
     ) -> tuple[DeliveryReceipt, bool]:
@@ -1794,9 +1804,20 @@ class Registry:
             async with self._transaction():
                 await self._conn.execute(
                     "INSERT INTO deliveries "
-                    "(id, key, lane, mode, payload, transport, status, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
-                    (receipt_id, key, lane, mode, payload, transport, now, now),
+                    "(id, key, lane, mode, submitted_payload, payload, transport, status, "
+                    "created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
+                    (
+                        receipt_id,
+                        key,
+                        lane,
+                        mode,
+                        submitted_payload,
+                        payload,
+                        transport,
+                        now,
+                        now,
+                    ),
                 )
                 if mode == "queue" and transport == "turn":
                     cur = await self._conn.execute(
@@ -1815,12 +1836,18 @@ class Registry:
         except aiosqlite.IntegrityError:
             existing = await self.get_delivery_by_key(key) if key is not None else None
             if existing is not None:
-                if (existing.lane, existing.mode, existing.payload, existing.transport) != (
-                    lane,
-                    mode,
-                    payload,
-                    transport,
-                ):
+                exact_submitted_replay = (
+                    existing.submitted_payload is not None
+                    and submitted_payload is not None
+                    and existing.submitted_payload == submitted_payload
+                )
+                legacy_effective_replay = (
+                    existing.submitted_payload is None
+                    and submitted_payload is None
+                    and (existing.lane, existing.mode, existing.payload, existing.transport)
+                    == (lane, mode, payload, transport)
+                )
+                if not exact_submitted_replay and not legacy_effective_replay:
                     raise DeliveryConflictError(f"delivery key {key!r} is already bound") from None
                 return existing, False
             raise

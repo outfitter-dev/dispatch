@@ -249,7 +249,7 @@ class SendInput(BaseModel):
         max_length=200,
         description=(
             "Caller key for replay-safe send or queue delivery. Reusing a key requires "
-            "the same resolved thread, mode, and effective plain-text payload."
+            "the same submitted selector, mode, plain-text input, and options."
         ),
     )
     caller_thread_id: str | None = Field(
@@ -274,11 +274,6 @@ class SendInput(BaseModel):
                 "image content is not supported in context mode; use send, steer, queue, "
                 "or interject"
             )
-        if self.idempotency_key is not None:
-            if self.mode not in ("send", "queue"):
-                raise ValueError("idempotency_key is supported only for send or queue mode")
-            if self.content:
-                raise ValueError("idempotency_key currently supports plain text only")
         return self
 
 

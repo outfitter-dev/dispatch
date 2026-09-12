@@ -1501,6 +1501,23 @@ async def send_message(inp: SendInput, ctx: Ctx) -> SendAck:
 
 
 async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
+    if inp.idempotency_key is not None:
+        from .delivery import find_replay
+
+        replay = await find_replay(inp, ctx)
+        if replay is not None:
+            receipt, lane = replay
+            return SendAck(
+                **_managed_identity(lane, ctx),
+                op=receipt.mode,
+                delivery=receipt,
+                detail=f"delivery {receipt.id}: {receipt.status}",
+            )
+        if inp.mode not in ("send", "queue"):
+            raise ValidationError("idempotent delivery supports send or queue")
+        if inp.content:
+            raise ValidationError("structured content is not supported for idempotent delivery")
+
     text = await _apply_send_intro(inp, ctx)
     # Initial history sync may resume the thread; native queue must retain its owner.
     lane = await _resolve_message_target(ctx, inp.lane, sync=inp.mode != "queue")
@@ -1519,6 +1536,9 @@ async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
         from .delivery import send_reserved
 
         receipt = await send_reserved(inp, lane, text, ctx)
+        reserved_lane = await ctx.registry.find_lane(receipt.lane)
+        if reserved_lane is not None:
+            lane = reserved_lane
         return SendAck(
             **_managed_identity(lane, ctx),
             op=inp.mode,

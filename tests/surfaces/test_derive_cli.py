@@ -18,18 +18,18 @@ from tests.fixtures import load_json
 runner = CliRunner()
 
 
-def test_send_idempotency_key_is_bounded_to_supported_delivery_shape() -> None:
+def test_send_idempotency_key_shape_is_validated_at_the_handler_boundary() -> None:
     accepted = SendInput(lane="@docs", text="hi", mode="queue", idempotency_key="event-1")
 
     assert accepted.idempotency_key == "event-1"
-    with pytest.raises(ValueError, match="send or queue"):
-        SendInput(lane="@docs", text="hi", mode="steer", idempotency_key="event-1")
-    with pytest.raises(ValueError, match="plain text"):
-        SendInput(
-            lane="@docs",
-            content=[TextContent(text="hi")],
-            idempotency_key="event-1",
-        )
+    assert (
+        SendInput(lane="@docs", text="hi", mode="steer", idempotency_key="event-1").mode == "steer"
+    )
+    assert SendInput(
+        lane="@docs",
+        content=[TextContent(text="hi")],
+        idempotency_key="event-1",
+    ).content
     with pytest.raises(ValueError):
         SendInput(lane="@docs", text="hi", idempotency_key=" ")
 

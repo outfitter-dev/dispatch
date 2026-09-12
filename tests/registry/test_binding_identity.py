@@ -538,7 +538,7 @@ async def test_v23_migration_preserves_keys_ids_and_foreign_keys(tmp_path: Path)
             "item_id",
         }
         async with store._conn.execute("PRAGMA user_version") as cur:
-            assert int((await cur.fetchone())[0]) == 24  # type: ignore[index]
+            assert int((await cur.fetchone())[0]) == 25  # type: ignore[index]
     finally:
         await store.close()
 
