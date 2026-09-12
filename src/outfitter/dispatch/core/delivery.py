@@ -59,18 +59,18 @@ def submitted_payload(inp: SendInput) -> str:
     )
 
 
-def _encode_prepared(request: PreparedProviderRequest) -> str:
+def encode_prepared_request(request: PreparedProviderRequest) -> str:
     return _canonical_json(
         {
             "version": 1,
             # Retained at top level for the bounded v23 reconciliation reader.
             "text": request.text,
-            "request": _PREPARED.dump_python(request, mode="json"),
+            "request": _PREPARED.dump_python(request, mode="json", exclude_none=True),
         }
     )
 
 
-def _decode_prepared(receipt: DeliveryReceipt) -> PreparedProviderRequest:
+def decode_prepared_request(receipt: DeliveryReceipt) -> PreparedProviderRequest:
     payload = json.loads(receipt.payload)
     if payload.get("version") == 1 and isinstance(payload.get("request"), dict):
         return _PREPARED.validate_python(payload["request"])
@@ -108,7 +108,7 @@ def _legacy_replay_matches(inp: SendInput, receipt: DeliveryReceipt) -> bool:
     if inp.lane != receipt.lane or inp.mode != receipt.mode or inp.intro or inp.content:
         return False
     try:
-        return _decode_prepared(receipt).text == (inp.text or "")
+        return decode_prepared_request(receipt).text == (inp.text or "")
     except (KeyError, TypeError, ValueError):
         return False
 
@@ -118,9 +118,16 @@ async def find_replay(inp: SendInput, ctx: Ctx) -> tuple[DeliveryView, Lane] | N
 
     if inp.idempotency_key is None:
         return None
-    receipt = await ctx.registry.get_delivery_by_key(inp.idempotency_key)
-    if receipt is None:
+    binding = await ctx.registry.get_caller_key_binding(inp.idempotency_key)
+    if binding is None:
         return None
+    kind, record = binding
+    if kind == "launch":
+        raise DeliveryConflictError(
+            f"delivery key {inp.idempotency_key!r} is already bound to a lane launch"
+        )
+    assert isinstance(record, DeliveryReceipt)
+    receipt = record
     matches = (
         receipt.submitted_payload == submitted_payload(inp)
         if receipt.submitted_payload is not None
@@ -154,7 +161,41 @@ async def reconcile_receipt_request(inp: DeliveryLookupInput, ctx: Ctx) -> Deliv
 
 async def send_reserved(inp: SendInput, lane: Lane, text: str, ctx: Ctx) -> DeliveryView:
     native = lane.source == "attached" and inp.mode == "queue"
-    route = route_lane(ctx, lane, ProviderAction.QUEUE_NATIVE if native else ProviderAction.SEND)
+    action = ProviderAction.QUEUE_NATIVE if native else ProviderAction.SEND
+    if lane.provider == "hermes":
+        runtime = await ctx.registry.get_lane_runtime_state(lane.id)
+        if runtime is not None and runtime.needs_attention:
+            raise CapabilityUnavailableError(
+                "Hermes thread has an unresolved native attention hold; no submission was attempted"
+            )
+        if await ctx.registry.lane_delivery_held(lane.id):
+            raise CapabilityUnavailableError(
+                "Hermes thread has an unresolved delivery; no submission was attempted"
+            )
+        launch = await ctx.registry.get_lane_launch(lane.id)
+        if (
+            launch.status != "created"
+            or launch.runtime_session_id is None
+            or launch.stored_session_id is None
+        ):
+            raise CapabilityUnavailableError(
+                "Hermes lane creation is incomplete or held; no submission was attempted"
+            )
+        target = ProviderTarget(
+            lane_id=lane.id,
+            provider=lane.provider,
+            binding_id=lane.binding_id,
+            native_session_id=launch.stored_session_id,
+            runtime_session_id=launch.runtime_session_id,
+            generation=launch.generation,
+        )
+        route = router_for(ctx).route_submission_target(target, action)
+        assert target.generation is not None
+        route.recheck_generation(target.generation)
+    else:
+        route = router_for(ctx).route_submission_target(
+            route_lane(ctx, lane, action).target, action
+        )
     route.recheck()
     if lane.source != "own" and not native:
         raise AuthorityError("idempotent delivery currently requires a Dispatch-owned thread")
@@ -163,7 +204,11 @@ async def send_reserved(inp: SendInput, lane: Lane, text: str, ctx: Ctx) -> Deli
     mode = inp.mode
     if mode != "send" and mode != "queue":
         raise ValidationError("idempotent delivery supports send or queue")
-    settings = None if native else await load_turn_start_settings(ctx.registry, lane.id)
+    settings = (
+        None
+        if native or lane.provider == "hermes"
+        else await load_turn_start_settings(ctx.registry, lane.id)
+    )
     delivery_id = str(uuid4())
     request = PreparedProviderRequest(
         target=route.target,
@@ -179,7 +224,7 @@ async def send_reserved(inp: SendInput, lane: Lane, text: str, ctx: Ctx) -> Deli
         lane=lane.id,
         mode=mode,
         submitted_payload=submitted_payload(inp),
-        payload=_encode_prepared(request),
+        payload=encode_prepared_request(request),
         text=text,
         delivery_id=delivery_id,
         transport="native_queue" if native else "turn",
@@ -209,7 +254,7 @@ async def submit_reserved(delivery_id: str, ctx: Ctx) -> bool:
     lane = await ctx.registry.find_lane(receipt.lane)
     if lane is None:
         raise NotFoundError(f"no managed thread {receipt.lane!r}")
-    request = _decode_prepared(receipt)
+    request = decode_prepared_request(receipt)
     if not await ctx.registry.claim_delivery(delivery_id):
         return False
     provider_call_entered = False
@@ -249,11 +294,15 @@ async def submit_reserved(delivery_id: str, ctx: Ctx) -> bool:
         elif lane.source != "own":
             raise AuthorityError("reserved turn submission requires a Dispatch-owned thread")
 
-        route = router_for(ctx).route_target(request.target, request.action)
+        route = router_for(ctx).route_submission_target(request.target, request.action)
         route.recheck()
+        if request.target.generation is not None:
+            route.recheck_generation(request.target.generation)
         if receipt.transport == "turn":
             await ctx.registry.update_lane_status(receipt.lane, "busy")
         route.recheck()
+        if request.target.generation is not None:
+            route.recheck_generation(request.target.generation)
         provider_call_entered = True
         result = await route.adapter.submit_prepared(request)
         if isinstance(result, ProviderSubmissionRejected):
@@ -303,6 +352,8 @@ async def submit_reserved(delivery_id: str, ctx: Ctx) -> bool:
                 generation=route.availability.generation,
                 source="submit_result",
                 received_at=datetime.fromisoformat(ctx.registry.now_iso()),
+                partial=result.evidence_partial,
+                reason=result.uncertainty_reason,
             )
         )
         if result.turn_id is not None:

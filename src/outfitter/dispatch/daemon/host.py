@@ -16,8 +16,22 @@ import structlog
 from outfitter.dispatch.client.client import AppServerClient
 from outfitter.dispatch.client.transport import StdioTransport, UnixSocketTransport
 from outfitter.dispatch.codex_compat import inspect_codex_binary
-from outfitter.dispatch.config import app_server_socket_path, capture_policy, runtime_policy
+from outfitter.dispatch.config import (
+    DEFAULT_HERMES_BINDING_ID,
+    app_server_socket_path,
+    capture_policy,
+    hermes_binding_config,
+    runtime_policy,
+)
 from outfitter.dispatch.contracts.context import Ctx
+from outfitter.dispatch.core.hermes import (
+    HERMES_ACTIONS,
+    HermesLaneAdapter,
+    apply_hermes_activity_observation,
+    apply_hermes_attention_observation,
+    apply_hermes_delivery_observation,
+    apply_hermes_transcript_observation,
+)
 from outfitter.dispatch.core.ops import REGISTRY
 from outfitter.dispatch.core.providers import ALL_CODEX_ACTIONS, ProviderDurability, ProviderRouter
 from outfitter.dispatch.core.reactor import Reactor
@@ -26,6 +40,7 @@ from outfitter.dispatch.core.triggers import TriggerRunner
 from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID, Registry
 
 from .control import ControlServer
+from .hermes_worker import HermesWorkerSupervisor
 from .provider_manager import ProviderManager, ProviderWorker
 from .supervisor import Supervisor
 
@@ -107,6 +122,49 @@ async def run_daemon(socket_path: Path, db_path: Path) -> None:
             close=supervisor.stop,
         )
     )
+    try:
+        hermes_binding = hermes_binding_config()
+    except (OSError, ValueError) as exc:
+        provider_router.register_unavailable(
+            provider="hermes",
+            binding_id=DEFAULT_HERMES_BINDING_ID,
+            supported_actions=HERMES_ACTIONS,
+            reason=f"invalid Hermes binding configuration: {exc}",
+            durability=ProviderDurability(local_reservation=True, native_evidence=True),
+        )
+    else:
+        if hermes_binding is not None:
+            hermes_supervisor = HermesWorkerSupervisor(
+                hermes_binding,
+                adapter_factory=lambda client, generation, _capabilities: HermesLaneAdapter(
+                    client,
+                    generation=generation,
+                    observe=lambda observation: apply_hermes_delivery_observation(
+                        store, provider_router, observation
+                    ),
+                    observe_attention=lambda observation: apply_hermes_attention_observation(
+                        store, provider_router, observation
+                    ),
+                    observe_transcript=lambda observation: apply_hermes_transcript_observation(
+                        store, provider_router, observation
+                    ),
+                    observe_activity=lambda observation: apply_hermes_activity_observation(
+                        store, provider_router, observation
+                    ),
+                ),
+                mark_ready=lambda adapter: provider_manager.mark_ready(
+                    "hermes", DEFAULT_HERMES_BINDING_ID, adapter
+                ),
+            )
+            provider_manager.add(
+                hermes_supervisor.provider_worker(
+                    supported_actions=HERMES_ACTIONS,
+                    durability=ProviderDurability(
+                        local_reservation=True,
+                        native_evidence=True,
+                    ),
+                )
+            )
     ctx.provider_manager = provider_manager
 
     socket_path.parent.mkdir(parents=True, exist_ok=True)

@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+import anyio
 import pytest
 import pytest_asyncio
+from mcp import ClientSession
+from mcp.shared.message import SessionMessage
 from mcp.types import TextContent
 
 from outfitter.dispatch.contracts.derive_mcp import derive_mcp_projection
@@ -58,6 +63,43 @@ async def test_tool_calls_open_send_roster(socket_path: Path) -> None:
     roster = await handle_tool_call(socket_path, "dispatch_thread_read", {"op": "roster"})
     assert roster.structuredContent is not None
     assert len(roster.structuredContent["lanes"]) == 1
+
+
+async def test_sdk_validates_grouped_send_output_with_nested_capabilities(
+    socket_path: Path,
+) -> None:
+    opened = await handle_tool_call(
+        socket_path, "dispatch_thread_write", {"op": "open", "name": "alpha", "cwd": "/w"}
+    )
+    assert not opened.isError
+
+    server = mcp.build_server(socket_path)
+    client_send, server_receive = anyio.create_memory_object_stream[SessionMessage](0)
+    server_send, client_receive = anyio.create_memory_object_stream[SessionMessage | Exception](0)
+    server_task = asyncio.create_task(
+        server.run(server_receive, server_send, server.create_initialization_options())
+    )
+    try:
+        async with ClientSession(client_receive, client_send) as session:
+            await session.initialize()
+            tools = await session.list_tools()
+            thread_write = next(
+                tool for tool in tools.tools if tool.name == "dispatch_thread_write"
+            )
+            assert thread_write.outputSchema is not None
+
+            result = await session.call_tool(
+                "dispatch_thread_write",
+                {"op": "send", "lane": "lane-1", "text": "hi", "idempotency_key": "send-1"},
+            )
+
+        assert result.structuredContent is not None
+        assert result.structuredContent["capabilities"]["send"] is True
+        assert result.structuredContent["delivery"]["key"] == "send-1"
+    finally:
+        server_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await server_task
 
 
 async def test_tool_calls_transcript_goal_and_compact(socket_path: Path) -> None:

@@ -230,4 +230,7 @@ def _action_input_schema(action: str, op: Op) -> dict[str, Any]:
 
 
 def _output_schema(ops: tuple[tuple[str, Op], ...]) -> dict[str, Any]:
-    return {"oneOf": [op.output.model_json_schema() for _, op in ops]}
+    # Local refs would otherwise resolve from this grouped root instead of from
+    # their Pydantic schema fragment. Outputs also share base-model shapes and
+    # carry no action discriminator, so a valid result may match several ops.
+    return {"anyOf": [inline_local_refs(op.output.model_json_schema()) for _, op in ops]}

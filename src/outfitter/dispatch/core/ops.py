@@ -246,6 +246,8 @@ NEW = define_op(
                     },
                 },
                 "subscription": None,
+                "launch": None,
+                "delivery": None,
             },
         ),
         Example(
@@ -277,6 +279,7 @@ NEW_PLAN = define_op(
                 "provider_launch_supported": True,
                 "provider_readiness": "ready",
                 "provider_readiness_reason": None,
+                "launch": None,
                 "workspace": {
                     "mode": "none",
                     "resolved_mode": "none",
