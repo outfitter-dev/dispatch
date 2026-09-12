@@ -119,15 +119,16 @@ def test_registry_legacy_safe_ops_excludes_unbaselined_and_shared_input_reads() 
 def test_registry_legacy_safe_ops_real_registry_gates_new_plan() -> None:
     """``new`` and ``new-plan`` carry the drifted ``NewInput`` (``provider``),
     so neither is exempt on a pre-handshake daemon; unchanged reads like ``models``
-    stay safe, and baseline-matching writes like ``stop`` stay usable so a
-    pre-handshake daemon with active work can still be drained."""
+    remain classified as safe, while the changed ``status`` output is excluded.
+    Baseline-matching writes like ``archive`` stay usable so a pre-handshake
+    daemon can still be controlled."""
     from outfitter.dispatch.core.ops import REGISTRY
 
     safe = registry_legacy_safe_ops(REGISTRY)
     assert "models" in safe
     assert "roster" not in safe
     assert "show" not in safe
-    assert "status" in safe
+    assert "status" not in safe
     assert "archive" in safe  # write-intent, with schema unchanged since the parent release
     assert "stop" not in safe
     assert "new" not in safe

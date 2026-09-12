@@ -194,7 +194,7 @@ async def refresh_codex_capacity(ctx: Ctx) -> ProviderCapacityObservation:
     route = router_for(ctx).route_binding(
         "codex", DEFAULT_CODEX_BINDING_ID, ProviderAction.ACCOUNT_READ
     )
-    route.recheck(ctx.provider_session_id or None)
+    route.recheck()
     observed_at = ctx.registry.now_iso()
     existing = await ctx.registry.get_provider_capacity_observation("codex")
     try:
@@ -231,7 +231,7 @@ async def refresh_codex_capacity(ctx: Ctx) -> ProviderCapacityObservation:
             )
         )
 
-    route.recheck(ctx.provider_session_id or None)
+    route.recheck()
     limits_result, usage_result = await asyncio.gather(
         route.adapter.account_rate_limits_read(),
         route.adapter.account_usage_read(),

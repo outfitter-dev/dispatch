@@ -43,20 +43,20 @@ class ServerRequestManager:
     ) -> None:
         self._ctx = ctx
         self._on_approval_attention = on_approval_attention
-        if not ctx.provider_session_id:
-            ctx.provider_session_id = uuid4().hex
+        if not ctx.connection_generation:
+            ctx.connection_generation = uuid4().hex
         self._timeouts: set[asyncio.Task[None]] = set()
 
     async def run(self) -> None:
         route = router_for(self._ctx).route_binding(
             "codex", DEFAULT_CODEX_BINDING_ID, ProviderAction.SERVER_REQUEST_STREAM
         )
-        route.recheck(self._ctx.provider_session_id or None)
+        route.recheck()
         stale_open = await self._ctx.registry.list_open_server_requests_except_session(
-            self._ctx.provider_session_id
+            self._ctx.connection_generation
         )
         recovered = await self._ctx.registry.fail_open_server_requests_except_session(
-            self._ctx.provider_session_id
+            self._ctx.connection_generation
         )
         if recovered:
             self._ctx.log.warning("server_request.recovered_stale", count=recovered)
@@ -104,7 +104,7 @@ class ServerRequestManager:
         timeout = self._ctx.policy.interactive_request_timeout_seconds
         observation = await self._ctx.registry.observe_server_request_once(
             ServerRequest(
-                provider_session_id=self._ctx.provider_session_id,
+                provider_session_id=self._ctx.connection_generation,
                 provider_thread_id=request.lane_id,
                 lane=lane.id if lane is not None else None,
                 request_id=request.request_id,
@@ -169,7 +169,7 @@ async def respond_to_server_request(
     request = await ctx.registry.get_server_request_by_id(request_id)
     if request is None:
         raise NotFoundError(f"no interactive request {request_id!r}")
-    if request.provider_session_id != ctx.provider_session_id:
+    if request.provider_session_id != ctx.connection_generation:
         raise ValidationError("interactive request belongs to a closed App Server connection")
     if request.state != "pending":
         raise ValidationError(f"interactive request is already {request.state}")
@@ -193,13 +193,13 @@ async def _send_response(ctx: Ctx, request: ServerRequest, plan: PlannedResponse
     route = router_for(ctx).route_binding(
         request.provider, request.binding_id, ProviderAction.SERVER_REQUEST_RESPONSE
     )
-    route.recheck(request.provider_session_id)
+    route.recheck_generation(request.provider_session_id)
     local_id = _local_id(request)
     claimed = await ctx.registry.claim_server_request_by_id(local_id)
     if claimed is None:
         return False
     try:
-        route.recheck(ctx.provider_session_id or None)
+        route.recheck()
         await route.adapter.respond_server_request(
             claimed.request_id,
             result=plan.result,

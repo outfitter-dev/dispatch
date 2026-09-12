@@ -250,9 +250,9 @@ async def _refresh_idle_readiness(lane_id: str, ctx: Ctx) -> bool:
                 if route is None:
                     return False
                 try:
-                    route.recheck(ctx.provider_session_id or None)
+                    route.recheck()
                     result = await route.adapter.read(route.target, include_turns=False)
-                    route.recheck(ctx.provider_session_id or None)
+                    route.recheck()
                 except CapabilityUnavailableError:
                     return False
                 except (ClientError, TimeoutError):
@@ -304,7 +304,7 @@ async def _find_arrival(
     mismatch = False
     total_bytes = 0
     for _ in range(MAX_PAGES):
-        route.recheck(ctx.provider_session_id or None)
+        route.recheck()
         page = await route.adapter.turns_list(
             route.target,
             cursor=cursor,

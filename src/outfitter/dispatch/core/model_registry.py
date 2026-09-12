@@ -69,9 +69,9 @@ async def _read_model_catalog(ctx: Ctx, *, source: str) -> ModelCatalogSnapshot:
     model_route = router_for(ctx).route_binding(
         "codex", DEFAULT_CODEX_BINDING_ID, ProviderAction.MODEL_READ
     )
-    config_route.recheck(ctx.provider_session_id or None)
+    config_route.recheck()
     config = await config_route.adapter.config_read()
-    model_route.recheck(ctx.provider_session_id or None)
+    model_route.recheck()
     models = await model_route.adapter.model_list()
     now = ctx.registry.now_iso()
     entries = [
@@ -100,7 +100,7 @@ async def resolve_model_settings(
         route = router_for(ctx).route_binding(
             "codex", DEFAULT_CODEX_BINDING_ID, ProviderAction.CONFIG_READ
         )
-        route.recheck(ctx.provider_session_id or None)
+        route.recheck()
         config = await route.adapter.config_read()
         configured_tier = config.service_tier
         return ResolvedModelSettings(
@@ -203,7 +203,7 @@ def _catalog_entry(
         provider=config.model_provider or "openai",
         display_name=model.display_name or model.name,
         description=model.description,
-        is_default=model.is_default,
+        is_default=model.id == config.model or model.is_default,
         hidden=model.hidden,
         default_reasoning_effort=model.default_reasoning_effort,
         supported_reasoning_efforts=model.supported_reasoning_efforts,

@@ -1076,6 +1076,13 @@ class LaunchPlan(BaseModel):
     name: str = Field(description="Resolved display name (after prefix/presets).")
     handle: str = Field(description="Resolved @handle the lane would receive.")
     cwd: str = Field(description="Resolved working directory.")
+    provider: str = Field(description="Resolved execution provider.")
+    binding_id: str = Field(description="Resolved local provider binding.")
+    provider_launch_supported: bool | None = Field(
+        default=None, description="Cached launch support, or unknown when no binding is cached."
+    )
+    provider_readiness: Literal["ready", "unavailable", "unknown"] = "unknown"
+    provider_readiness_reason: str | None = None
     workspace: WorkspaceView = Field(description="Workspace preflight plan.")
     packet: str | None = Field(default=None, description="Resolved packet directory, if any.")
     settings: LaunchSettingsView = Field(description="Effective lane settings.")
@@ -1525,6 +1532,17 @@ class StatusInput(BaseModel):
     pass
 
 
+class ProviderBindingStatusView(BaseModel):
+    provider: str
+    binding_id: str
+    state: Literal["configured", "starting", "ready", "unavailable", "stopped", "quarantined"]
+    reason: str | None = None
+    last_error: str | None = None
+    observed_at: str
+    connection_generation: str | None = None
+    owns_process: bool
+
+
 class StatusOutput(BaseModel):
     lanes: int
     idle: int
@@ -1533,6 +1551,7 @@ class StatusOutput(BaseModel):
     active: int = 0
     triggers: int
     triggers_enabled: int
+    providers: list[ProviderBindingStatusView] = Field(default_factory=list)
 
 
 class LogInput(BaseModel):

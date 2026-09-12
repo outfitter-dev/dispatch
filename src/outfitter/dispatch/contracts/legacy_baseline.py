@@ -41,8 +41,8 @@ read-safe op):
 - ``0.9.0`` — only ``usage`` output still drifted (predates the runtime
   summary fields).
 - ``0.10.0`` and ``0.11.0`` — every baselined read-safe op's input AND output
-  schema is identical to current. Newly added read ops are excluded from the
-  pre-handshake allowance until they appear in a release baseline.
+  schema is identical to current. Newly added or changed read ops are excluded
+  from the pre-handshake allowance until they appear in a release baseline.
 
 Raise this floor (or regenerate the evidence) whenever a read-safe op's schema
 changes; the release-cut baseline test only proves parity with
@@ -65,6 +65,7 @@ CHANGED_SINCE_PARENT: frozenset[str] = frozenset(
         "roster",
         "send",
         "show",
+        "status",
         "stop",
         "sync",
         "transcript",
@@ -98,7 +99,6 @@ PARENT_OP_SCHEMA_HASHES: dict[str, str] = {
     "unsubscribe": "0d2203429b98ed3614707287c4f424f58813c02664aad35743cbb7bbe82eb6da",
     "archive": "164ef5d176c8c1c90a95627bc6695d6f7632b0adf68919d8cccf63599b03a475",
     "restore": "164ef5d176c8c1c90a95627bc6695d6f7632b0adf68919d8cccf63599b03a475",
-    "status": "4c9f6d7a774c4b4d06d0da9743eb55113c13cc323e6a47f6bbeb3fa94145bc48",
     "log": "fa720f3eb8c816d2045d996ac49b1a51217872215d660566b40e19a6ed1a8d66",
     "trigger-add": "ceef3ef04f635e1bc3af4b9b019e6c7a253d26ef5221fcbacbaa60f1a5950d0f",
     "trigger-list": "069e694fddbfe050c430ba8762a1630b34d4880381d4f8a023e8c788fcb4356a",
