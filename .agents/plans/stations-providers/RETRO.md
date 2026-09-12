@@ -63,3 +63,8 @@ The native HTTP Runs probe passed keyed replay/conflict, two-turn continuity, ca
 - The initial adapter must preserve unknown outcomes without retransmission and quarantine stored sessions after an owner generation change until supported safe resume exists. This concrete upstream limit does not prevent the correctly bounded same-generation implementation after DIS-80/81/82 pass.
 
 No merge, release, installed Dispatch registry migration, runtime replacement or service deployment occurred. The owned native processes were temporary proof clients using the existing default profile; existing Desktop and API services remained running.
+
+### Native request-correlation prerequisite
+
+- A subsequent source-pinned audit of Hermes `939e45c91d751fadd94dcd1b873ac3cb44846213` found an idle-check/claim race with unsolicited single-start heartbeat and bot turns. Sequence fencing, a streaming acknowledgment and `running:false` do not prove which prompt produced an arbitrary terminal event.
+- DIS-94 is actively preparing an isolated upstream additive `prompt_turn_correlation_v1` contract: atomic admission with an owner token and a native turn id echoed in start, terminal, error and retained evidence. It is not installed or verified. Until it is adopted, Dispatch must refuse durable Hermes send receipts rather than infer success. The existing two-turn/cwd probe remains valid native continuity evidence; generation quarantine and unknown-outcome handling remain separate limits.
