@@ -50,6 +50,7 @@ from outfitter.dispatch.registry.models import (
     InboxMessage,
     Lane,
     LaneModelSettings,
+    LaneRuntimeState,
     LaneSource,
     LaneStatus,
     LaneSync,
@@ -72,6 +73,10 @@ from . import queue
 from .backfill import backfill_codex_history
 from .capacity import refresh_codex_capacity
 from .claude_capacity import refresh_claude_capacity
+from .hermes import (
+    HERMES_GENERATION_QUARANTINE_REASON,
+    HERMES_LAUNCH_MAPPING_QUARANTINE_REASON,
+)
 from .hermes_launch import (
     HermesLaunchOutcome,
     create_hermes_lane,
@@ -119,6 +124,7 @@ from .models import (
     InboxListInput,
     InboxMessageView,
     InboxReadInput,
+    LaneAttentionView,
     LaneCapabilities,
     LaneDetail,
     LaneInput,
@@ -289,12 +295,57 @@ def _has_write_authority(lane: Lane, ctx: Ctx) -> bool:
     return lane.source == "own" or ctx.policy.allow_attached_writes
 
 
-def _can_write(lane: Lane, ctx: Ctx) -> bool:
-    return _provider_supports(lane, ctx, ProviderAction.SEND) and _has_write_authority(lane, ctx)
+def _has_runtime_write_hold(lane: Lane, runtime: LaneRuntimeState | None) -> bool:
+    return lane.provider == "hermes" and runtime is not None and runtime.needs_attention
 
 
-def _capabilities(lane: Lane, ctx: Ctx) -> LaneCapabilities:
-    writable = _has_write_authority(lane, ctx)
+def _runtime_attention_reason(lane: Lane, runtime: LaneRuntimeState | None) -> str | None:
+    if runtime is None or not runtime.needs_attention:
+        return None
+    if lane.provider != "hermes":
+        return "thread has an unresolved attention hold"
+    try:
+        detail: object = json.loads(runtime.attention_detail or "null")
+    except json.JSONDecodeError:
+        detail = None
+    if isinstance(detail, dict):
+        quarantine = detail.get("quarantine")
+        if isinstance(quarantine, dict):
+            reason = quarantine.get("reason")
+            if reason in {
+                HERMES_GENERATION_QUARANTINE_REASON,
+                HERMES_LAUNCH_MAPPING_QUARANTINE_REASON,
+            }:
+                return str(reason)
+    if runtime.attention_kind == "human_or_sensitive_input":
+        return "Hermes thread requires human or sensitive native input"
+    if runtime.attention_kind == "native_client_capability_unavailable":
+        return "Hermes native client capability is unavailable"
+    return "Hermes thread has an unresolved native attention hold"
+
+
+def _attention_view(lane: Lane, runtime: LaneRuntimeState | None) -> LaneAttentionView:
+    if runtime is None or not runtime.needs_attention:
+        return LaneAttentionView()
+    return LaneAttentionView(
+        held=True,
+        kind=runtime.attention_kind,
+        reason=_runtime_attention_reason(lane, runtime),
+    )
+
+
+def _can_write(lane: Lane, ctx: Ctx, runtime: LaneRuntimeState | None = None) -> bool:
+    return (
+        not _has_runtime_write_hold(lane, runtime)
+        and _provider_supports(lane, ctx, ProviderAction.SEND)
+        and _has_write_authority(lane, ctx)
+    )
+
+
+def _capabilities(
+    lane: Lane, ctx: Ctx, runtime: LaneRuntimeState | None = None
+) -> LaneCapabilities:
+    writable = _has_write_authority(lane, ctx) and not _has_runtime_write_hold(lane, runtime)
 
     def effective(action: ProviderAction) -> bool:
         return writable and _provider_supports(lane, ctx, action)
@@ -317,9 +368,13 @@ def _capabilities(lane: Lane, ctx: Ctx) -> LaneCapabilities:
     )
 
 
-def _write_locked_reason(lane: Lane, ctx: Ctx) -> str | None:
-    if _can_write(lane, ctx):
+def _write_locked_reason(
+    lane: Lane, ctx: Ctx, runtime: LaneRuntimeState | None = None
+) -> str | None:
+    if _can_write(lane, ctx, runtime):
         return None
+    if _has_runtime_write_hold(lane, runtime):
+        return _runtime_attention_reason(lane, runtime)
     if not _provider_supports(lane, ctx, ProviderAction.SEND):
         return f"provider binding {lane.provider}:{lane.binding_id} execution is not supported"
     if lane.source == "attached":
@@ -327,7 +382,7 @@ def _write_locked_reason(lane: Lane, ctx: Ctx) -> str | None:
     return "thread is not writable"
 
 
-def _ref(lane: Lane, ctx: Ctx) -> LaneRef:
+def _ref(lane: Lane, ctx: Ctx, runtime: LaneRuntimeState | None = None) -> LaneRef:
     facts = router_for(ctx).facts_for_lane(lane)
     provider_state = ProviderStateView(
         ownership=lane.source,
@@ -354,10 +409,10 @@ def _ref(lane: Lane, ctx: Ctx) -> LaneRef:
         source=lane.source,
         status=lane.status,
         cwd=lane.cwd,
-        writable=_can_write(lane, ctx),
-        capabilities=_capabilities(lane, ctx),
+        writable=_can_write(lane, ctx, runtime),
+        capabilities=_capabilities(lane, ctx, runtime),
         provider_state=provider_state,
-        write_locked_reason=_write_locked_reason(lane, ctx),
+        write_locked_reason=_write_locked_reason(lane, ctx, runtime),
     )
 
 
@@ -527,10 +582,11 @@ def _list_item(
     sync: LaneSync | None,
     model: LaneModelSettings | None,
     ctx: Ctx,
+    runtime: LaneRuntimeState | None = None,
     topology: ThreadTopologyView | None = None,
 ) -> LaneListItem:
     return LaneListItem(
-        **_ref(lane, ctx).model_dump(),
+        **_ref(lane, ctx, runtime).model_dump(),
         sync=_sync_view(sync),
         latest_turn=_latest_turn_view(lane),
         model=_model_view(model, sync),
@@ -714,11 +770,12 @@ def _hermes_workspace(cwd: str, *, existing: bool) -> WorkspaceView:
     )
 
 
-def _new_hermes_output(outcome: HermesLaunchOutcome, ctx: Ctx) -> NewLane:
+async def _new_hermes_output(outcome: HermesLaunchOutcome, ctx: Ctx) -> NewLane:
     lane = outcome.lane
     delivery = _delivery_view(outcome)
+    runtime = await ctx.registry.get_lane_runtime_state(lane.id)
     return NewLane(
-        **_ref(lane, ctx).model_dump(),
+        **_ref(lane, ctx, runtime).model_dump(),
         message_accepted=(delivery is not None and delivery.status in {"accepted", "completed"}),
         goal_set=False,
         staged=StageView(),
@@ -888,7 +945,7 @@ def _launch_image_views(rich: RichInput) -> list[LaunchImageView]:
 async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
     replay = await find_launch_replay(inp, ctx)
     if replay is not None:
-        return _new_hermes_output(replay, ctx)
+        return await _new_hermes_output(replay, ctx)
     launch = resolve_launch(inp)
     _require_launchable_provider(launch.resolved.settings.provider)
     _validate_launch(launch)
@@ -904,7 +961,7 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
             detail=launch.resolved.display_name,
             outcome=outcome.launch.status,
         )
-        return _new_hermes_output(outcome, ctx)
+        return await _new_hermes_output(outcome, ctx)
     launch_route = router_for(ctx).route_launch(
         launch.resolved.settings.provider, ProviderAction.LAUNCH
     )
@@ -2197,6 +2254,7 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
     lane = resolved.lane
     sync = await ctx.registry.get_lane_sync(lane.id)
     model_settings = await ctx.registry.get_lane_model_settings(lane.id)
+    runtime = await ctx.registry.get_lane_runtime_state(lane.id)
     transcript: list[TranscriptItem] = []
     if inp.topology:
         topology_route = route_lane(ctx, lane, ProviderAction.TOPOLOGY)
@@ -2247,8 +2305,9 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
             transcript = _transcript_from_thread(result, limit=inp.max_items)
     topology = await lane_topology_views(ctx.registry, [lane], max_nodes=inp.topology_limit)
     return LaneDetail(
-        **_ref(lane, ctx).model_dump(),
+        **_ref(lane, ctx, runtime).model_dump(),
         active_turn_id=lane.active_turn_id,
+        attention=_attention_view(lane, runtime),
         latest_turn=_latest_turn_view(lane),
         sync=_sync_view(sync),
         model=_model_view(model_settings, sync),
@@ -3301,6 +3360,16 @@ async def roster(inp: RosterInput, ctx: Ctx) -> Roster:
         lanes = [lane for lane in lanes if lane.id in selected_ids]
     syncs = await ctx.registry.get_lane_sync_many([lane.id for lane in lanes])
     models = await ctx.registry.get_lane_model_settings_many([lane.id for lane in lanes])
+    hermes_lanes = [lane for lane in lanes if lane.provider == "hermes"]
+    runtimes = dict(
+        zip(
+            (lane.id for lane in hermes_lanes),
+            await asyncio.gather(
+                *(ctx.registry.get_lane_runtime_state(lane.id) for lane in hermes_lanes)
+            ),
+            strict=True,
+        )
+    )
     topology = await lane_topology_views(ctx.registry, lanes, max_nodes=inp.topology_limit)
     return Roster(
         lanes=[
@@ -3309,6 +3378,7 @@ async def roster(inp: RosterInput, ctx: Ctx) -> Roster:
                 syncs.get(lane.id),
                 models.get(lane.id),
                 ctx,
+                runtimes.get(lane.id),
                 topology.get(lane.id),
             )
             for lane in lanes

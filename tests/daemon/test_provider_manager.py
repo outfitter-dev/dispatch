@@ -301,7 +301,7 @@ async def test_shared_core_failure_is_fatal_instead_of_provider_local() -> None:
     await manager.stop()
 
 
-def test_unproven_provider_generation_change_is_quarantined() -> None:
+def test_fenced_provider_generation_change_publishes_replacement_binding() -> None:
     router = ProviderRouter(())
     manager = ProviderManager(router, structlog.get_logger())
 
@@ -320,7 +320,6 @@ def test_unproven_provider_generation_change_is_quarantined() -> None:
             owns_process=True,
             run=idle,
             close=close,
-            quarantine_on_generation_change=True,
         )
     )
     manager.mark_ready(
@@ -346,6 +345,6 @@ def test_unproven_provider_generation_change_is_quarantined() -> None:
         ),
     )
 
-    assert manager.snapshot("hermes", "owned").state == "quarantined"
-    with pytest.raises(CapabilityUnavailableError, match="generation changed"):
-        router.route_binding("hermes", "owned", ProviderAction.READ)
+    assert manager.snapshot("hermes", "owned").state == "ready"
+    route = router.route_binding("hermes", "owned", ProviderAction.READ)
+    assert route.availability.generation == "hermes-2"

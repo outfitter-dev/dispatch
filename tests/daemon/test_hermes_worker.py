@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import structlog
 
 from outfitter.dispatch.client.hermes import (
     HermesClient,
@@ -22,6 +23,7 @@ from outfitter.dispatch.core.providers import (
     ProviderBindingAdapter,
     ProviderBindingFacts,
     ProviderDurability,
+    ProviderRouter,
 )
 from outfitter.dispatch.daemon.hermes_worker import (
     HERMES_GATEWAY_MODULE,
@@ -30,6 +32,7 @@ from outfitter.dispatch.daemon.hermes_worker import (
     OwnedHermesTransport,
     WorkerHermesClient,
 )
+from outfitter.dispatch.daemon.provider_manager import ProviderManager
 
 
 @dataclass(frozen=True)
@@ -280,10 +283,15 @@ async def test_worker_negotiates_before_ready_and_projects_provider_worker(tmp_p
         assert generation == "generation-1"
         return adapter
 
+    async def mark_ready(ready_adapter: ProviderBindingAdapter) -> None:
+        assert transport.started is True
+        assert client.started is True
+        ready.append(ready_adapter)
+
     supervisor = HermesWorkerSupervisor(
         _binding(tmp_path),
         adapter_factory=adapter_factory,
-        mark_ready=ready.append,
+        mark_ready=mark_ready,
         transport_factory=cast(Any, transport_factory),
         client_factory=cast(Any, client_factory),
     )
@@ -302,7 +310,6 @@ async def test_worker_negotiates_before_ready_and_projects_provider_worker(tmp_p
     assert worker.provider == "hermes"
     assert worker.binding_id == "hermes-default"
     assert worker.owns_process is True
-    assert worker.quarantine_on_generation_change is True
 
     await supervisor.close("stale-generation")
     assert client.closed.is_set() is False
@@ -319,10 +326,14 @@ async def test_worker_closes_started_transport_when_negotiation_fails(tmp_path: 
             raise HermesProtocolError("missing capabilities")
 
     client = FailedClient(object())
+
+    async def fail_ready(_adapter: ProviderBindingAdapter) -> None:
+        pytest.fail("worker must not become ready")
+
     supervisor = HermesWorkerSupervisor(
         _binding(tmp_path),
         adapter_factory=lambda *_args: _Adapter("never"),
-        mark_ready=lambda _adapter: pytest.fail("worker must not become ready"),
+        mark_ready=fail_ready,
         transport_factory=cast(Any, lambda _binding: transport),
         client_factory=cast(Any, lambda _transport: client),
     )
@@ -349,13 +360,16 @@ async def test_worker_stopped_during_spawn_never_constructs_or_publishes_client(
     transport = BlockedTransport()
     ready: list[ProviderBindingAdapter] = []
 
+    async def mark_ready(adapter: ProviderBindingAdapter) -> None:
+        ready.append(adapter)
+
     def fail_client_factory(_transport: HermesTransport) -> WorkerHermesClient:
         pytest.fail("a stopped worker must not construct its Hermes client")
 
     supervisor = HermesWorkerSupervisor(
         _binding(tmp_path),
         adapter_factory=lambda *_args: _Adapter("never"),
-        mark_ready=ready.append,
+        mark_ready=mark_ready,
         transport_factory=cast(Any, lambda _binding: transport),
         client_factory=fail_client_factory,
     )
@@ -367,3 +381,79 @@ async def test_worker_stopped_during_spawn_never_constructs_or_publishes_client(
 
     assert ready == []
     assert transport.closed == [None, "generation-1"]
+
+
+async def test_gateway_exit_closes_and_drains_before_binding_becomes_unavailable(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+
+    class ExitedClient(_FakeClient):
+        async def start(self) -> None:
+            events.append("client-start")
+
+        async def wait_closed(self) -> None:
+            events.append("gateway-exit")
+
+        async def close(self) -> None:
+            events.append("client-close")
+
+    class OrderedAdapter(_Adapter):
+        async def close_observers(self) -> None:
+            events.append("observer-drain")
+
+    class OrderedManager(ProviderManager):
+        def mark_unavailable(
+            self,
+            provider: str,
+            binding_id: str,
+            reason: str,
+            *,
+            generation: str | None = None,
+            quarantined: bool = False,
+        ) -> None:
+            events.append("unavailable")
+            super().mark_unavailable(
+                provider,
+                binding_id,
+                reason,
+                generation=generation,
+                quarantined=quarantined,
+            )
+
+    transport = _FakeOwnedTransport(object())
+    client = ExitedClient(object())
+    adapter = OrderedAdapter("generation-1")
+    router = ProviderRouter(())
+    manager = OrderedManager(router, structlog.get_logger())
+
+    async def mark_ready(ready_adapter: ProviderBindingAdapter) -> None:
+        manager.mark_ready("hermes", "hermes-default", ready_adapter)
+
+    supervisor = HermesWorkerSupervisor(
+        _binding(tmp_path),
+        adapter_factory=lambda *_args: adapter,
+        mark_ready=mark_ready,
+        transport_factory=cast(Any, lambda _binding: transport),
+        client_factory=cast(Any, lambda _transport: client),
+    )
+    manager.add(
+        supervisor.provider_worker(
+            supported_actions=frozenset({ProviderAction.LAUNCH, ProviderAction.SEND}),
+            durability=ProviderDurability(local_reservation=True, native_evidence=True),
+        )
+    )
+
+    manager.start()
+    async with asyncio.timeout(1):
+        while manager.snapshot("hermes", "hermes-default").state != "unavailable":
+            await asyncio.sleep(0)
+
+    assert events == [
+        "client-start",
+        "gateway-exit",
+        "client-close",
+        "observer-drain",
+        "unavailable",
+    ]
+    await manager.stop()
