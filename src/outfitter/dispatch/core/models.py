@@ -49,7 +49,7 @@ QueryDateField = Literal["created_at", "updated_at"]
 HistoryView = Literal["auto", "overview", "summary", "items", "tools", "files"]
 WorkspaceSetupMode = Literal["auto", "skip", "run"]
 WorktreeMode = Literal["none", "create"]
-ExecutionProvider = Literal["codex", "claude"]
+ExecutionProvider = Literal["codex", "claude", "hermes"]
 THREAD_SELECTOR_DESCRIPTION = (
     "Thread selector: dispatch ref, full Codex thread id, or unique handle/title."
 )
@@ -100,7 +100,7 @@ class NewInput(BaseModel):
     provider: ExecutionProvider | None = Field(
         default=None,
         description=(
-            "Execution provider that runs the new lane: codex (default) or claude. "
+            "Execution provider that runs the new lane: codex (default), claude, or hermes. "
             "Distinct from the Codex App Server model_provider."
         ),
     )
@@ -115,6 +115,12 @@ class NewInput(BaseModel):
     )
     send: bool = Field(
         default=True, description="Send the initial turn when text or rich content is present."
+    )
+    idempotency_key: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="Caller key for replay-safe Hermes lane creation.",
     )
     cwd: str | None = Field(default=None, description="Working directory for config discovery.")
     prefix: str | None = Field(default=None, description="Name prefix template.")
@@ -200,6 +206,13 @@ class NewInput(BaseModel):
         exclude=True,
         json_schema_extra={"x-dispatch-internal": True},
     )
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def _reject_blank_idempotency_key(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("idempotency_key must not be blank")
+        return value
 
     @model_validator(mode="after")
     def _permission_profile_is_exclusive(self) -> NewInput:
@@ -985,6 +998,12 @@ class NewLane(LaneRef):
     latest_turn: LatestTurnView = Field(default_factory=LatestTurnView)
     model: ThreadModelView = Field(default_factory=ThreadModelView)
     subscription: SubscriptionView | None = None
+    launch: LaneLaunchView | None = Field(
+        default=None, description="Durable Hermes creation state, when this is a Hermes lane."
+    )
+    delivery: DeliveryView | None = Field(
+        default=None, description="The reserved first-message receipt, when one exists."
+    )
 
 
 LaunchSlot = Literal["goal", "prompt", "output_schema", "base", "developer"]
@@ -1014,7 +1033,27 @@ class LaunchSettingsView(BaseModel):
     summary: str | None = None
     personality: str | None = None
     service_tier: str | None = None
-    ephemeral: bool = False
+    ephemeral: bool | None = None
+
+
+class LaneLaunchView(BaseModel):
+    """Public creation lifecycle without the persisted immutable payloads."""
+
+    lane: str
+    key: str | None = None
+    provider: str
+    binding_id: str
+    generation: str
+    status: Literal["reserved", "creating", "created", "ambiguous", "failed"]
+    runtime_session_id: str | None = None
+    stored_session_id: str | None = None
+    effective_cwd: str | None = None
+    first_delivery_id: str | None = None
+    error: str | None = None
+    creation_durable: bool = True
+    native_persistence: Literal["unknown"] = "unknown"
+    created_at: str
+    updated_at: str
 
 
 class WorkspaceEnvironmentView(BaseModel):
@@ -1083,6 +1122,9 @@ class LaunchPlan(BaseModel):
     )
     provider_readiness: Literal["ready", "unavailable", "unknown"] = "unknown"
     provider_readiness_reason: str | None = None
+    launch: LaneLaunchView | None = Field(
+        default=None, description="Existing immutable keyed creation reservation, if any."
+    )
     workspace: WorkspaceView = Field(description="Workspace preflight plan.")
     packet: str | None = Field(default=None, description="Resolved packet directory, if any.")
     settings: LaunchSettingsView = Field(description="Effective lane settings.")
@@ -1216,6 +1258,8 @@ class WatchOutput(ManagedThreadIdentity):
 
 class TranscriptOutput(ManagedThreadIdentity):
     items: list[TranscriptItem]
+    transcript_source: Literal["provider_read", "live_observed"] = "provider_read"
+    partial: bool = False
 
 
 class Goal(BaseModel):

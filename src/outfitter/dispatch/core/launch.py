@@ -215,27 +215,30 @@ def _packet_layer(
 
 
 def _cli_layer(inp: NewInput, text: str | None, schema: dict[str, object] | None) -> NewSettings:
-    return NewSettings(
-        cwd=inp.cwd,
-        provider=inp.provider,
-        permission_profile=inp.permission_profile,
-        sandbox=inp.sandbox,
-        approval_policy=inp.approval_policy,
-        approvals_reviewer=inp.approvals_reviewer,
-        model=inp.model,
-        model_provider=inp.model_provider,
-        effort=inp.effort,
-        summary=inp.summary,
-        personality=inp.personality,
-        service_tier=inp.service_tier,
-        ephemeral=inp.ephemeral,
-        prefix=inp.prefix,
-        text=text,
-        base_instructions=inp.base_instructions,
-        base_file=inp.base_file,
-        developer_instructions=inp.developer_instructions,
-        developer_file=inp.developer_file,
-        output_schema=schema,
+    values: dict[str, object] = {
+        "cwd": inp.cwd,
+        "provider": inp.provider,
+        "permission_profile": inp.permission_profile,
+        "sandbox": inp.sandbox,
+        "approval_policy": inp.approval_policy,
+        "approvals_reviewer": inp.approvals_reviewer,
+        "model": inp.model,
+        "model_provider": inp.model_provider,
+        "effort": inp.effort,
+        "summary": inp.summary,
+        "personality": inp.personality,
+        "service_tier": inp.service_tier,
+        "ephemeral": inp.ephemeral,
+        "prefix": inp.prefix,
+        "text": text,
+        "base_instructions": inp.base_instructions,
+        "base_file": inp.base_file,
+        "developer_instructions": inp.developer_instructions,
+        "developer_file": inp.developer_file,
+        "output_schema": schema,
+    }
+    return NewSettings.model_validate(
+        {name: value for name, value in values.items() if value is not None}
     )
 
 

@@ -11,7 +11,7 @@ import typer
 from typer.testing import CliRunner
 
 from outfitter.dispatch.contracts.derive_cli import derive_cli
-from outfitter.dispatch.core.models import DeliveryView, SendAck, SendInput, TextContent
+from outfitter.dispatch.core.models import DeliveryView, NewInput, SendAck, SendInput, TextContent
 from outfitter.dispatch.core.ops import REGISTRY
 from tests.fixtures import load_json
 
@@ -32,6 +32,15 @@ def test_send_idempotency_key_shape_is_validated_at_the_handler_boundary() -> No
     ).content
     with pytest.raises(ValueError):
         SendInput(lane="@docs", text="hi", idempotency_key=" ")
+
+
+def test_new_accepts_hermes_creation_idempotency_key() -> None:
+    accepted = NewInput(name="worker", provider="hermes", idempotency_key="launch-1")
+
+    assert accepted.provider == "hermes"
+    assert accepted.idempotency_key == "launch-1"
+    with pytest.raises(ValueError, match="idempotency_key must not be blank"):
+        NewInput(name="worker", provider="hermes", idempotency_key=" ")
 
 
 def test_action_ack_exposes_a_public_delivery_receipt_without_payload() -> None:
@@ -545,7 +554,7 @@ def test_new_command_maps_repeated_presets_and_no_send() -> None:
     assert params["send"] is False
 
 
-@pytest.mark.parametrize("provider", ["codex", "claude"])
+@pytest.mark.parametrize("provider", ["codex", "claude", "hermes"])
 def test_new_provider_shorthand_marshals_identically_to_provider_option(provider: str) -> None:
     calls: list[tuple[str, dict[str, object]]] = []
 
@@ -618,6 +627,7 @@ def test_schema_new_renders_provider_shorthands_beside_canonical_enum() -> None:
         assert "provider" in properties, command
         assert properties["claude"]["type"] == "boolean", command
         assert properties["codex"]["type"] == "boolean", command
+        assert properties["hermes"]["type"] == "boolean", command
 
 
 def test_new_subscribe_flag_accepts_default_and_compact_spec(

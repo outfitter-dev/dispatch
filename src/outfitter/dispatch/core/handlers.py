@@ -10,6 +10,7 @@ attached writes.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time as time_module
 import uuid
@@ -31,6 +32,7 @@ from outfitter.dispatch.client.models import (
     ThreadInfo,
     ThreadResult,
 )
+from outfitter.dispatch.config import DEFAULT_HERMES_BINDING_ID
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.contracts.errors import (
     AppServerError,
@@ -70,6 +72,12 @@ from . import queue
 from .backfill import backfill_codex_history
 from .capacity import refresh_codex_capacity
 from .claude_capacity import refresh_claude_capacity
+from .hermes_launch import (
+    HermesLaunchOutcome,
+    create_hermes_lane,
+    find_launch_replay,
+    validate_hermes_launch,
+)
 from .history import (
     detect_worktree,
     history_items_from_indexed,
@@ -89,6 +97,7 @@ from .models import (
     ActionView,
     AttachInput,
     CompactInput,
+    DeliveryView,
     DiscoveredSession,
     DiscoverInput,
     Discovery,
@@ -113,6 +122,7 @@ from .models import (
     LaneCapabilities,
     LaneDetail,
     LaneInput,
+    LaneLaunchView,
     LaneListItem,
     LaneRef,
     LaneRenameInput,
@@ -183,6 +193,7 @@ from .models import (
     WatchEvent,
     WatchInput,
     WatchOutput,
+    WorkspaceView,
 )
 from .permission_profiles import refresh_permission_profiles, resolve_permission_profile
 from .providers import ProviderAction, ProviderRoute, route_lane, router_for
@@ -683,19 +694,97 @@ def _stage_content(launch: ResolvedLaunch) -> StageContent:
     )
 
 
+def _launch_view(outcome: HermesLaunchOutcome) -> LaneLaunchView:
+    return LaneLaunchView.model_validate(outcome.launch.model_dump(mode="json"))
+
+
+def _delivery_view(outcome: HermesLaunchOutcome) -> DeliveryView | None:
+    if outcome.delivery is None:
+        return None
+    return DeliveryView.model_validate(outcome.delivery.model_dump(mode="json"))
+
+
+def _hermes_workspace(cwd: str, *, existing: bool) -> WorkspaceView:
+    return WorkspaceView(
+        mode="none",
+        resolved_mode="none",
+        state="existing" if existing else "disabled",
+        input_cwd=cwd,
+        effective_cwd=cwd,
+    )
+
+
+def _new_hermes_output(outcome: HermesLaunchOutcome, ctx: Ctx) -> NewLane:
+    lane = outcome.lane
+    delivery = _delivery_view(outcome)
+    return NewLane(
+        **_ref(lane, ctx).model_dump(),
+        message_accepted=(delivery is not None and delivery.status in {"accepted", "completed"}),
+        goal_set=False,
+        staged=StageView(),
+        workspace=_hermes_workspace(lane.cwd or ".", existing=True),
+        latest_turn=_latest_turn_view(lane),
+        model=ThreadModelView(),
+        subscription=None,
+        launch=_launch_view(outcome),
+        delivery=delivery,
+    )
+
+
+def _plan_hermes_replay(outcome: HermesLaunchOutcome, ctx: Ctx) -> LaunchPlan:
+    request = json.loads(outcome.launch.request_payload)
+    facts = router_for(ctx).facts_for_binding("hermes", DEFAULT_HERMES_BINDING_ID)
+    readiness: Literal["ready", "unavailable", "unknown"] = (
+        "unknown" if facts is None else "ready" if facts.availability.ready else "unavailable"
+    )
+    cwd = outcome.launch.effective_cwd or str(request["cwd"])
+    return LaunchPlan(
+        name=str(request["name"]),
+        handle=str(request["handle"]),
+        cwd=cwd,
+        provider="hermes",
+        binding_id=DEFAULT_HERMES_BINDING_ID,
+        provider_launch_supported=(
+            None if facts is None else facts.supports(ProviderAction.LAUNCH)
+        ),
+        provider_readiness=readiness,
+        provider_readiness_reason=facts.availability.reason if facts is not None else None,
+        launch=_launch_view(outcome),
+        workspace=_hermes_workspace(cwd, existing=True),
+        packet=None,
+        settings=LaunchSettingsView(),
+        sources=[],
+        goal_set=False,
+        would_send=bool(request["send"]),
+        image_count=0,
+        images=[],
+        output_schema_present=False,
+        stage=StageView(),
+        unknown_packet_files=[],
+        aux_packet_dirs=[],
+    )
+
+
 async def plan_new_lane(inp: NewInput, ctx: Ctx) -> LaunchPlan:
     """Resolve a launch and report what it would do — no daemon/thread mutation."""
+    replay = await find_launch_replay(inp, ctx)
+    if replay is not None:
+        return _plan_hermes_replay(replay, ctx)
     launch = resolve_launch(inp)
     _require_launchable_provider(launch.resolved.settings.provider)
     _validate_launch(launch)
     provider = launch.resolved.settings.provider or "codex"
-    binding_id = DEFAULT_CODEX_BINDING_ID
+    if inp.idempotency_key is not None and provider != "hermes":
+        raise ValidationError("new idempotency keys are currently supported only for Hermes")
+    if provider == "hermes":
+        validate_hermes_launch(inp, launch)
+    binding_id = DEFAULT_HERMES_BINDING_ID if provider == "hermes" else DEFAULT_CODEX_BINDING_ID
     facts = router_for(ctx).facts_for_binding(provider, binding_id)
     provider_readiness: Literal["ready", "unavailable", "unknown"] = (
         "unknown" if facts is None else "ready" if facts.availability.ready else "unavailable"
     )
     rich = RichInput(text=launch.text or "", input_items=[], stored_content=[])
-    if launch.text is not None or launch.content:
+    if provider != "hermes" and (launch.text is not None or launch.content):
         rich = await normalize_rich_input_async(
             text=launch.text,
             content=launch.content,
@@ -713,23 +802,28 @@ async def plan_new_lane(inp: NewInput, ctx: Ctx) -> LaunchPlan:
                 required_modalities=frozenset({"image"}),
                 persist_catalog=False,
             )
-    workspace = plan_workspace(
-        cwd=launch.resolved.cwd,
-        name=launch.resolved.display_name,
-        requested=inp.workspace,
-        setup=inp.workspace_setup,
-        worktree=inp.worktree,
-        worktree_path=inp.worktree_path,
-        worktree_branch=inp.worktree_branch,
-        worktree_base=inp.worktree_base,
-        config=launch.resolved.workspace,
-        policy=ctx.policy,
+    workspace = (
+        None
+        if provider == "hermes"
+        else plan_workspace(
+            cwd=launch.resolved.cwd,
+            name=launch.resolved.display_name,
+            requested=inp.workspace,
+            setup=inp.workspace_setup,
+            worktree=inp.worktree,
+            worktree_path=inp.worktree_path,
+            worktree_branch=inp.worktree_branch,
+            worktree_base=inp.worktree_base,
+            config=launch.resolved.workspace,
+            policy=ctx.policy,
+        )
     )
     s = launch.resolved.settings
+    effective_cwd = str(launch.resolved.cwd) if workspace is None else str(workspace.effective_cwd)
     return LaunchPlan(
         name=launch.resolved.display_name,
         handle=launch.resolved.handle,
-        cwd=str(workspace.effective_cwd),
+        cwd=effective_cwd,
         provider=provider,
         binding_id=binding_id,
         provider_launch_supported=(
@@ -737,7 +831,11 @@ async def plan_new_lane(inp: NewInput, ctx: Ctx) -> LaunchPlan:
         ),
         provider_readiness=provider_readiness,
         provider_readiness_reason=(facts.availability.reason if facts is not None else None),
-        workspace=workspace.view,
+        workspace=(
+            _hermes_workspace(effective_cwd, existing=False)
+            if workspace is None
+            else workspace.view
+        ),
         packet=_packet_str(launch),
         settings=LaunchSettingsView(
             permission_profile=s.permission_profile,
@@ -750,7 +848,7 @@ async def plan_new_lane(inp: NewInput, ctx: Ctx) -> LaunchPlan:
             summary=s.summary,
             personality=s.personality,
             service_tier=s.service_tier,
-            ephemeral=bool(s.ephemeral),
+            ephemeral=s.ephemeral,
         ),
         sources=[
             LaunchInputSource(
@@ -788,9 +886,25 @@ def _launch_image_views(rich: RichInput) -> list[LaunchImageView]:
 
 
 async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
+    replay = await find_launch_replay(inp, ctx)
+    if replay is not None:
+        return _new_hermes_output(replay, ctx)
     launch = resolve_launch(inp)
     _require_launchable_provider(launch.resolved.settings.provider)
     _validate_launch(launch)
+    provider = launch.resolved.settings.provider or "codex"
+    if inp.idempotency_key is not None and provider != "hermes":
+        raise ValidationError("new idempotency keys are currently supported only for Hermes")
+    if provider == "hermes":
+        validate_hermes_launch(inp, launch)
+        outcome = await create_hermes_lane(inp, launch, ctx)
+        await ctx.registry.log_action(
+            "new",
+            lane=outcome.lane.id,
+            detail=launch.resolved.display_name,
+            outcome=outcome.launch.status,
+        )
+        return _new_hermes_output(outcome, ctx)
     launch_route = router_for(ctx).route_launch(
         launch.resolved.settings.provider, ProviderAction.LAUNCH
     )
@@ -1550,6 +1664,21 @@ async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
     text = await _apply_send_intro(inp, ctx)
     # Initial history sync may resume the thread; native queue must retain its owner.
     lane = await _resolve_message_target(ctx, inp.lane, sync=inp.mode != "queue")
+    if lane.provider == "hermes":
+        if lane.source != "own":
+            raise AuthorityError("Hermes delivery requires a Dispatch-owned thread")
+        if inp.mode != "send" or inp.content:
+            raise ValidationError("Hermes delivery currently supports plain-text send only")
+        from .delivery import send_reserved
+
+        receipt = await send_reserved(inp, lane, text, ctx)
+        lane = await ctx.registry.get_lane(lane.id)
+        return SendAck(
+            **_managed_identity(lane, ctx),
+            op="send",
+            delivery=receipt,
+            detail=f"delivery {receipt.id}: {receipt.status}",
+        )
     action = {
         "send": ProviderAction.SEND,
         "steer": ProviderAction.STEER,
@@ -2106,11 +2235,16 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
             relationship_source="thread/list:ancestor",
         )
     if inp.include_transcript:
-        transcript_route = route_lane(ctx, lane, ProviderAction.TRANSCRIPT)
-        transcript_route.recheck()
-        result = await transcript_route.adapter.read(transcript_route.target, include_turns=True)
-        await index_codex_thread_read(ctx.registry, lane, result, ctx.capture)
-        transcript = _transcript_from_thread(result, limit=inp.max_items)
+        if lane.provider == "hermes":
+            transcript = await _observed_transcript(ctx, lane, limit=inp.max_items)
+        else:
+            transcript_route = route_lane(ctx, lane, ProviderAction.TRANSCRIPT)
+            transcript_route.recheck()
+            result = await transcript_route.adapter.read(
+                transcript_route.target, include_turns=True
+            )
+            await index_codex_thread_read(ctx.registry, lane, result, ctx.capture)
+            transcript = _transcript_from_thread(result, limit=inp.max_items)
     topology = await lane_topology_views(ctx.registry, [lane], max_nodes=inp.topology_limit)
     return LaneDetail(
         **_ref(lane, ctx).model_dump(),
@@ -2268,6 +2402,13 @@ async def transcript(inp: TranscriptInput, ctx: Ctx) -> TranscriptOutput:
     if resolved.lane is None:
         raise NotFoundError(f"no managed thread {inp.lane!r}")
     lane = resolved.lane
+    if lane.provider == "hermes":
+        return TranscriptOutput(
+            **_managed_identity(lane, ctx),
+            items=await _observed_transcript(ctx, lane, limit=inp.limit),
+            transcript_source="live_observed",
+            partial=True,
+        )
     route = route_lane(ctx, lane, ProviderAction.TRANSCRIPT)
     route.recheck()
     result = await route.adapter.read(route.target, include_turns=True)
@@ -2276,6 +2417,19 @@ async def transcript(inp: TranscriptInput, ctx: Ctx) -> TranscriptOutput:
         **_managed_identity(lane, ctx),
         items=_transcript_from_thread(result, limit=inp.limit),
     )
+
+
+async def _observed_transcript(ctx: Ctx, lane: Lane, *, limit: int) -> list[TranscriptItem]:
+    items = await ctx.registry.list_recent_thread_items(lane=lane.id, limit=limit)
+    return [
+        TranscriptItem(
+            turn_id=item.turn_id,
+            item_id=item.item_id,
+            type=item.item_type,
+            text=item.text,
+        )
+        for item in reversed(items)
+    ]
 
 
 async def history(inp: HistoryInput, ctx: Ctx) -> HistoryOutput:

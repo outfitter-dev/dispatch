@@ -14,7 +14,7 @@ import pytest_asyncio
 from outfitter.dispatch.contracts.errors import DeliveryConflictError
 from outfitter.dispatch.registry.delivery import DeliveryExecutionStatus, DeliveryReceipt
 from outfitter.dispatch.registry.observations import ProviderCorrelation, ProviderObservation
-from outfitter.dispatch.registry.store import Registry
+from outfitter.dispatch.registry.store import SCHEMA_VERSION, Registry
 
 
 def _clock() -> datetime:
@@ -125,6 +125,49 @@ async def test_claim_holds_lane_and_claims_queue_atomically(store: Registry) -> 
     assert accepted.turn_id == "turn-1"
     assert (await store.get_queued_message(first.queue_id)).status == "sent"
     assert await store.claim_delivery(second.id) is True
+
+
+async def test_partial_accepted_receipt_remains_held_after_later_terminal_event(
+    store: Registry,
+) -> None:
+    receipt, _ = await store.reserve_delivery(
+        key=None,
+        lane="lane-1",
+        mode="send",
+        payload='{"text":"one"}',
+        text="one",
+    )
+    assert await store.claim_delivery(receipt.id)
+    base = ProviderObservation.model_validate(
+        {
+            "provider": "codex",
+            "binding_id": "codex-default",
+            "native_session_id": "lane-1",
+            "kind": "accepted",
+            "correlation": {
+                "delivery_id": receipt.id,
+                "correlation_id": receipt.id,
+                "native_run_id": "turn-1",
+            },
+            "generation": "generation-1",
+            "source": "submit_result",
+            "received_at": _clock(),
+            "partial": True,
+            "reason": "bounded event buffer overflow",
+        }
+    )
+
+    accepted = await store.apply_receipt_observation(base)
+    terminal = await store.apply_receipt_observation(
+        base.model_copy(update={"kind": "completed", "partial": False, "source": "live"})
+    )
+
+    assert accepted.receipt is not None and accepted.receipt.status == "accepted"
+    assert accepted.receipt.evidence_partial is True
+    assert await store.lane_delivery_held("lane-1") is True
+    assert terminal.matched and terminal.changed is False
+    assert terminal.reason == "partial accepted receipt remains held"
+    assert terminal.receipt == accepted.receipt
 
 
 async def test_native_claim_preserves_fifo_after_ambiguous_predecessor(store: Registry) -> None:
@@ -499,7 +542,7 @@ async def test_v21_migration_adds_delivery_ledger(tmp_path: Path) -> None:
         assert receipt.key == "after:migration"
         async with migrated._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-        assert row is not None and int(row[0]) == 26
+        assert row is not None and int(row[0]) == SCHEMA_VERSION
     finally:
         await migrated.close()
 
@@ -610,7 +653,7 @@ async def test_v24_migration_adds_nullable_submitted_intent(tmp_path: Path) -> N
         assert "submitted_payload" in columns
         async with migrated._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-        assert row is not None and int(row[0]) == 26
+        assert row is not None and int(row[0]) == SCHEMA_VERSION
     finally:
         await migrated.close()
 

@@ -11,8 +11,8 @@ from typing import Literal
 import structlog
 
 from outfitter.dispatch.core.providers import (
-    CodexLaneAdapter,
     ProviderAction,
+    ProviderBindingAdapter,
     ProviderDurability,
     ProviderRouter,
 )
@@ -133,7 +133,7 @@ class ProviderManager:
         assert self._fatal_error is not None
         raise self._fatal_error
 
-    def mark_ready(self, provider: str, binding_id: str, adapter: CodexLaneAdapter) -> None:
+    def mark_ready(self, provider: str, binding_id: str, adapter: ProviderBindingAdapter) -> None:
         worker = self._worker(provider, binding_id)
         if (adapter.facts.provider, adapter.facts.binding_id) != (provider, binding_id):
             raise ValueError("provider adapter identity does not match its configured worker")
