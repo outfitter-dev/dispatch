@@ -44,6 +44,7 @@ class QueuePagesClient(FakeLaneClient):
 async def _find(client: QueuePagesClient) -> QueuedSubmission | None:
     store = await Registry.open()
     try:
+        await store.add_lane(id="thread-1", handle="@thread", source="attached", status="idle")
         return await find_queued_submission(
             make_ctx(store, client), "thread-1", "receipt-1", "hello"
         )
