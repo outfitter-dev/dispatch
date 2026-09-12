@@ -10,7 +10,8 @@ dispatch delivery reconcile <receipt-id> --json
 ```
 
 This contract currently applies to plain-text `send` and `queue` on
-Dispatch-owned Codex threads, and plain-text `queue` on attached threads when
+Dispatch-owned Codex threads, plain-text `send` on Dispatch-owned Hermes
+threads, and plain-text `queue` on attached Codex threads when
 `allow_attached_writes = true`. A key with structured content, steer, context or
 interject is rejected. Attached queue requests always receive a durable receipt;
 omit the caller key only when each invocation should create a separate delivery.
@@ -86,6 +87,43 @@ accepted with `execution_status: failed`; it is not a rejected submission.
 Receipt lookup returns IDs, state, error evidence, timestamps and check count,
 without returning the retained request payload.
 
+## Hermes owned sessions
+
+Hermes creation accepts an idempotency key so the native session reservation,
+stored/runtime identity, generation, effective cwd and optional first delivery
+can be returned after a daemon restart without another native call. A repeated
+key must carry the exact original launch input. Current provider defaults,
+configuration and readiness are deliberately consulted only for a new key.
+
+A Hermes `prompt.submit` acknowledgment with `status: "streaming"` and a
+nonempty native turn ID proves observed admission. It does not prove that native
+history persisted or that execution completed. Only later lifecycle evidence
+from the selected adapter, matching the frozen binding, runtime, stored session,
+generation and turn, can update execution state. Pre-ack events remain buffered
+until that acknowledgment binds them. Buffer overflow after a valid
+acknowledgment produces an accepted but partial receipt; overflow, EOF or a
+terminal-looking frame without a valid acknowledgment remains unknown.
+
+An unknown Hermes creation or delivery is never submitted again automatically.
+Its exact key returns the original local launch or receipt, and the unresolved
+work holds later input on that thread. Hermes history lookup is not used to
+repair a lost acknowledgment. Process exit, stream EOF, missing history,
+`message.complete`, and idle-looking telemetry do not clear the hold.
+
+Each owned gateway process has a distinct generation. Before Dispatch publishes
+a replacement generation, it durably quarantines every Hermes lane frozen to an
+older or unprovable generation. The old native identity and receipts remain
+unchanged and exact replay remains local, while new submissions to that lane
+fail before reservation or provider I/O. The replacement binding may create a
+separate new session. Dispatch does not resume, activate, lazy-watch, replace or
+fall back to HTTP or Desktop for a quarantined session.
+
+Known native approval, input, secret, terminal, preview, window and setup
+requests become lane-scoped attention holds. `dispatch show` exposes a bounded
+attention kind and reason but does not answer or acknowledge those controls.
+Only a matching source-proven expiry for an expirable request clears that member;
+unknown telemetry, missing IDs, EOF and local history cannot clear a hold.
+
 ## Uncertain outcomes and reconciliation
 
 Dispatch commits the reservation before calling Codex. Queue insertion and the
@@ -151,5 +189,4 @@ receipt operations fail closed against pre-handshake daemons that lack them;
 unchanged compatible reads remain available.
 
 This is one-attempt reservation and evidence-based recovery, not an exactly-once
-provider guarantee. Rich-input deduplication and live provider crash behavior
-remain separate validation scopes.
+provider guarantee. Rich-input deduplication remains a separate validation scope.

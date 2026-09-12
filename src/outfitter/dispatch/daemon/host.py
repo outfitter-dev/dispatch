@@ -31,9 +31,15 @@ from outfitter.dispatch.core.hermes import (
     apply_hermes_attention_observation,
     apply_hermes_delivery_observation,
     apply_hermes_transcript_observation,
+    quarantine_stale_hermes_lanes,
 )
 from outfitter.dispatch.core.ops import REGISTRY
-from outfitter.dispatch.core.providers import ALL_CODEX_ACTIONS, ProviderDurability, ProviderRouter
+from outfitter.dispatch.core.providers import (
+    ALL_CODEX_ACTIONS,
+    ProviderBindingAdapter,
+    ProviderDurability,
+    ProviderRouter,
+)
 from outfitter.dispatch.core.reactor import Reactor
 from outfitter.dispatch.core.scheduler import Scheduler
 from outfitter.dispatch.core.triggers import TriggerRunner
@@ -134,6 +140,18 @@ async def run_daemon(socket_path: Path, db_path: Path) -> None:
         )
     else:
         if hermes_binding is not None:
+
+            async def mark_hermes_ready(adapter: ProviderBindingAdapter) -> None:
+                generation = adapter.facts.availability.generation
+                if generation is None:
+                    raise ValueError("ready Hermes adapter omitted its connection generation")
+                await quarantine_stale_hermes_lanes(
+                    store,
+                    binding_id=hermes_binding.binding_id,
+                    current_generation=generation,
+                )
+                provider_manager.mark_ready("hermes", DEFAULT_HERMES_BINDING_ID, adapter)
+
             hermes_supervisor = HermesWorkerSupervisor(
                 hermes_binding,
                 adapter_factory=lambda client, generation, _capabilities: HermesLaneAdapter(
@@ -152,9 +170,7 @@ async def run_daemon(socket_path: Path, db_path: Path) -> None:
                         store, provider_router, observation
                     ),
                 ),
-                mark_ready=lambda adapter: provider_manager.mark_ready(
-                    "hermes", DEFAULT_HERMES_BINDING_ID, adapter
-                ),
+                mark_ready=mark_hermes_ready,
             )
             provider_manager.add(
                 hermes_supervisor.provider_worker(
