@@ -132,6 +132,49 @@ async def test_claim_holds_lane_and_claims_queue_atomically(store: Registry) -> 
     assert await store.claim_delivery(second.id) is True
 
 
+async def test_partial_accepted_receipt_remains_held_after_later_terminal_event(
+    store: Registry,
+) -> None:
+    receipt, _ = await store.reserve_delivery(
+        key=None,
+        lane="lane-1",
+        mode="send",
+        payload='{"text":"one"}',
+        text="one",
+    )
+    assert await store.claim_delivery(receipt.id)
+    base = ProviderObservation.model_validate(
+        {
+            "provider": "codex",
+            "binding_id": "codex-default",
+            "native_session_id": "lane-1",
+            "kind": "accepted",
+            "correlation": {
+                "delivery_id": receipt.id,
+                "correlation_id": receipt.id,
+                "native_run_id": "turn-1",
+            },
+            "generation": "generation-1",
+            "source": "submit_result",
+            "received_at": _clock(),
+            "partial": True,
+            "reason": "bounded event buffer overflow",
+        }
+    )
+
+    accepted = await store.apply_receipt_observation(base)
+    terminal = await store.apply_receipt_observation(
+        base.model_copy(update={"kind": "completed", "partial": False, "source": "live"})
+    )
+
+    assert accepted.receipt is not None and accepted.receipt.status == "accepted"
+    assert accepted.receipt.evidence_partial is True
+    assert await store.lane_delivery_held("lane-1") is True
+    assert terminal.matched and terminal.changed is False
+    assert terminal.reason == "partial accepted receipt remains held"
+    assert terminal.receipt == accepted.receipt
+
+
 async def test_native_claim_preserves_fifo_after_ambiguous_predecessor(store: Registry) -> None:
     async def reserve(text: str) -> DeliveryReceipt:
         receipt, _ = await store.reserve_delivery(

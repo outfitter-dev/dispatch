@@ -200,6 +200,16 @@ def test_resolve_launch_packet_settings_below_cli(tmp_path: Path) -> None:
     assert launch.resolved.settings.model == "cli-model"
 
 
+def test_resolve_launch_distinguishes_omitted_and_explicit_false_hermes_override(
+    tmp_path: Path,
+) -> None:
+    omitted = resolve_launch(NewInput(name="w", cwd=str(tmp_path), provider="hermes"))
+
+    assert omitted.resolved.settings.ephemeral is None
+    with pytest.raises(ValidationError, match=r"operation input.*ephemeral"):
+        resolve_launch(NewInput(name="w", cwd=str(tmp_path), provider="hermes", ephemeral=False))
+
+
 def test_resolve_launch_no_send_when_no_text(tmp_path: Path) -> None:
     launch = resolve_launch(NewInput(name="w", cwd=str(tmp_path), goal="only a goal"))
     assert launch.text is None

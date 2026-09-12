@@ -6,10 +6,14 @@ import pytest
 from pytest import MonkeyPatch
 
 from outfitter.dispatch.config import (
+    DEFAULT_HERMES_BINDING_ID,
+    DEFAULT_HERMES_PROFILE,
+    HERMES_GATEWAY_MODULE,
     CapturePolicy,
     app_server_socket_path,
     capture_policy,
     config_path,
+    hermes_binding_config,
     runtime_policy,
 )
 
@@ -50,6 +54,147 @@ def test_app_server_socket_rejects_relative_path(monkeypatch: MonkeyPatch, tmp_p
 
     with pytest.raises(ValueError, match="absolute path"):
         app_server_socket_path()
+
+
+def test_hermes_binding_reads_fixed_owned_stdio_config(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path / "dispatch"))
+    hermes_home = tmp_path / "hermes-home"
+    source_root = tmp_path / "hermes-source"
+    interpreter = tmp_path / "venv" / "bin" / "python"
+    hermes_home.mkdir()
+    source_root.mkdir()
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text("#!/bin/sh\n")
+    interpreter.chmod(0o755)
+    config_path().parent.mkdir(parents=True)
+    config_path().write_text(
+        "[providers.hermes]\n"
+        f'hermes_home = "{hermes_home}"\n'
+        f'source_root = "{source_root}"\n'
+        f'interpreter = "{interpreter}"\n'
+        'profile = "default"\n'
+    )
+
+    binding = hermes_binding_config()
+
+    assert binding is not None
+    assert binding.binding_id == DEFAULT_HERMES_BINDING_ID == "hermes-default"
+    assert binding.profile == DEFAULT_HERMES_PROFILE == "default"
+    assert binding.gateway_module == HERMES_GATEWAY_MODULE == "tui_gateway.entry"
+    assert binding.hermes_home == hermes_home
+    assert binding.source_root == source_root
+    assert binding.interpreter == interpreter
+
+
+def test_hermes_binding_is_disabled_when_not_configured(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path))
+
+    assert hermes_binding_config() is None
+
+
+def test_hermes_binding_preserves_virtualenv_interpreter_symlink(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path / "dispatch"))
+    hermes_home = tmp_path / "hermes-home"
+    source_root = tmp_path / "hermes-source"
+    real_interpreter = tmp_path / "python-real"
+    interpreter = tmp_path / "venv" / "bin" / "python"
+    hermes_home.mkdir()
+    source_root.mkdir()
+    real_interpreter.write_text("#!/bin/sh\n")
+    real_interpreter.chmod(0o755)
+    interpreter.parent.mkdir(parents=True)
+    interpreter.symlink_to(real_interpreter)
+    config_path().parent.mkdir(parents=True)
+    config_path().write_text(
+        "[providers.hermes]\n"
+        f'hermes_home = "{hermes_home}"\n'
+        f'source_root = "{source_root}"\n'
+        f'interpreter = "{interpreter}"\n'
+    )
+
+    binding = hermes_binding_config()
+
+    assert binding is not None
+    assert binding.interpreter == interpreter
+    assert binding.interpreter != real_interpreter
+
+
+def test_hermes_binding_rejects_configurable_runtime_contract(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path))
+    config_path().write_text(
+        "[providers.hermes]\n"
+        'hermes_home = "/tmp"\n'
+        'source_root = "/tmp"\n'
+        'interpreter = "/bin/sh"\n'
+        'entrypoint = "other.module"\n'
+    )
+
+    with pytest.raises(ValueError, match=r"unknown key.*entrypoint"):
+        hermes_binding_config()
+
+
+def test_hermes_binding_rejects_nondefault_profile(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path))
+    config_path().write_text(
+        "[providers.hermes]\n"
+        'hermes_home = "/tmp"\n'
+        'source_root = "/tmp"\n'
+        'interpreter = "/bin/sh"\n'
+        'profile = "other"\n'
+    )
+
+    with pytest.raises(ValueError, match=r"profile must be 'default'"):
+        hermes_binding_config()
+
+
+@pytest.mark.parametrize("field", ["hermes_home", "source_root", "interpreter"])
+def test_hermes_binding_requires_absolute_paths(
+    monkeypatch: MonkeyPatch, tmp_path: Path, field: str
+) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path))
+    values = {"hermes_home": "/tmp", "source_root": "/tmp", "interpreter": "/bin/sh"}
+    values[field] = "relative"
+    config_path().write_text(
+        "[providers.hermes]\n"
+        f'hermes_home = "{values["hermes_home"]}"\n'
+        f'source_root = "{values["source_root"]}"\n'
+        f'interpreter = "{values["interpreter"]}"\n'
+    )
+
+    with pytest.raises(ValueError, match=rf"{field} must be an absolute path"):
+        hermes_binding_config()
+
+
+def test_hermes_binding_requires_executable_interpreter(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path / "dispatch"))
+    hermes_home = tmp_path / "hermes-home"
+    source_root = tmp_path / "hermes-source"
+    interpreter = tmp_path / "python"
+    hermes_home.mkdir()
+    source_root.mkdir()
+    interpreter.write_text("#!/bin/sh\n")
+    config_path().parent.mkdir(parents=True)
+    config_path().write_text(
+        "[providers.hermes]\n"
+        f'hermes_home = "{hermes_home}"\n'
+        f'source_root = "{source_root}"\n'
+        f'interpreter = "{interpreter}"\n'
+    )
+
+    with pytest.raises(ValueError, match="interpreter must be an executable file"):
+        hermes_binding_config()
 
 
 def test_runtime_policy_reads_local_config(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:

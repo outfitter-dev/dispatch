@@ -31,7 +31,7 @@ def test_routes_cover_every_registry_op_once() -> None:
 
 
 def test_new_execution_provider_stays_canonical_enum_on_mcp() -> None:
-    """The --claude/--codex shorthands are CLI-only; MCP exposes only the enum."""
+    """Provider shorthand flags are CLI-only; MCP exposes only the enum."""
     projection = derive_mcp_projection(REGISTRY)
     tools = {t.name: t for t in projection.tools}
     for tool_name, action in (
@@ -43,12 +43,13 @@ def test_new_execution_provider_stays_canonical_enum_on_mcp() -> None:
         properties = schema["properties"]
         assert "claude" not in properties
         assert "codex" not in properties
+        assert "hermes" not in properties
         enum_values = {
             value
             for variant in properties["provider"].get("anyOf", [properties["provider"]])
             for value in variant.get("enum", [])
         }
-        assert enum_values == {"codex", "claude"}
+        assert enum_values == {"codex", "claude", "hermes"}
 
 
 def test_action_schema_and_annotations_from_op() -> None:

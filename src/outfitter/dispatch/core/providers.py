@@ -12,7 +12,7 @@ import asyncio
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 from outfitter.dispatch.client.errors import AppServerError, ClientError, ProtocolError
 from outfitter.dispatch.client.events import (
@@ -53,6 +53,7 @@ from outfitter.dispatch.client.models import (
     UserInput,
 )
 from outfitter.dispatch.client.native_queue import QueuedSubmission, ThreadQueuePage
+from outfitter.dispatch.config import DEFAULT_HERMES_BINDING_ID
 from outfitter.dispatch.contracts.context import LaneClient
 from outfitter.dispatch.contracts.errors import CapabilityUnavailableError
 from outfitter.dispatch.registry.delivery import DeliveryTransport
@@ -63,6 +64,7 @@ from .turn_settings import TurnStartSettings
 
 if TYPE_CHECKING:
     from outfitter.dispatch.contracts.context import Ctx
+    from outfitter.dispatch.core.hermes import HermesLaneAdapter
 
 
 class ProviderAction(StrEnum):
@@ -106,6 +108,8 @@ class ProviderTarget:
     provider: str
     binding_id: str
     native_session_id: str
+    runtime_session_id: str | None = None
+    generation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -126,6 +130,8 @@ class ProviderSubmissionAccepted:
     status: Literal["accepted"] = "accepted"
     submission_id: str | None = None
     turn_id: str | None = None
+    evidence_partial: bool = False
+    uncertainty_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -143,6 +149,20 @@ class ProviderSubmissionUnknown:
 ProviderSubmissionResult = (
     ProviderSubmissionAccepted | ProviderSubmissionRejected | ProviderSubmissionUnknown
 )
+
+
+class ProviderBindingAdapter(Protocol):
+    """Facts common to every operation-shaped provider adapter."""
+
+    facts: ProviderBindingFacts
+
+
+class ProviderSubmissionAdapter(ProviderBindingAdapter, Protocol):
+    """Narrow adapter contract used by the durable delivery path."""
+
+    async def submit_prepared(
+        self, request: PreparedProviderRequest
+    ) -> ProviderSubmissionResult: ...
 
 
 @dataclass(frozen=True)
@@ -698,8 +718,7 @@ class ProviderRoute:
                     f"{self.target.binding_id} is unavailable"
                 )
             )
-        expected = self.availability.generation
-        if current.generation != expected:
+        if current.generation != self.availability.generation:
             raise CapabilityUnavailableError(
                 f"provider binding {self.target.provider}:{self.target.binding_id} "
                 "connection generation changed"
@@ -747,11 +766,66 @@ class ProviderLaunchRoute:
             )
 
 
+@dataclass(frozen=True)
+class ProviderSubmissionRoute:
+    target: ProviderTarget
+    action: ProviderAction
+    adapter: ProviderSubmissionAdapter
+    availability: ProviderAvailability
+    durability: ProviderDurability
+    _current_availability: Callable[[], ProviderAvailability] = field(repr=False, compare=False)
+
+    def recheck(self) -> None:
+        current = self._current_availability()
+        if not current.ready:
+            raise CapabilityUnavailableError(
+                current.reason
+                or (
+                    f"provider binding {self.target.provider}:"
+                    f"{self.target.binding_id} is unavailable"
+                )
+            )
+        if current.generation != self.availability.generation:
+            raise CapabilityUnavailableError(
+                f"provider binding {self.target.provider}:{self.target.binding_id} "
+                "connection generation changed"
+            )
+
+    def recheck_generation(self, generation: str) -> None:
+        self.recheck()
+        if self.availability.generation != generation:
+            raise CapabilityUnavailableError(
+                f"provider binding {self.target.provider}:{self.target.binding_id} "
+                "connection generation changed"
+            )
+
+
+@dataclass(frozen=True)
+class HermesLaunchRoute:
+    provider: Literal["hermes"]
+    binding_id: str
+    adapter: HermesLaneAdapter
+    availability: ProviderAvailability
+    durability: ProviderDurability
+    _current_availability: Callable[[], ProviderAvailability] = field(repr=False, compare=False)
+
+    def recheck(self) -> None:
+        current = self._current_availability()
+        if not current.ready:
+            raise CapabilityUnavailableError(
+                current.reason or f"provider binding hermes:{self.binding_id} is unavailable"
+            )
+        if current.generation != self.availability.generation:
+            raise CapabilityUnavailableError(
+                f"provider binding hermes:{self.binding_id} connection generation changed"
+            )
+
+
 class ProviderRouter:
     """Resolve exact provider bindings without implicit fallback."""
 
-    def __init__(self, adapters: tuple[CodexLaneAdapter, ...]) -> None:
-        self._adapters: dict[tuple[str, str], CodexLaneAdapter] = {}
+    def __init__(self, adapters: tuple[ProviderBindingAdapter, ...]) -> None:
+        self._adapters: dict[tuple[str, str], ProviderBindingAdapter] = {}
         self._facts: dict[tuple[str, str], ProviderBindingFacts] = {}
         for adapter in adapters:
             self.register_adapter(adapter)
@@ -780,7 +854,7 @@ class ProviderRouter:
         )
         return router
 
-    def register_adapter(self, adapter: CodexLaneAdapter) -> None:
+    def register_adapter(self, adapter: ProviderBindingAdapter) -> None:
         key = (adapter.facts.provider, adapter.facts.binding_id)
         self._adapters[key] = adapter
         self._facts[key] = adapter.facts
@@ -849,6 +923,11 @@ class ProviderRouter:
                 f"provider binding {target.provider}:{target.binding_id} execution is not "
                 "supported because the binding is not registered"
             )
+        if not isinstance(adapter, CodexLaneAdapter):
+            raise CapabilityUnavailableError(
+                f"{action.value} requires a provider-specific route for "
+                f"{target.provider}:{target.binding_id}"
+            )
         if not adapter.facts.supports(action):
             raise CapabilityUnavailableError(
                 f"{action.value} is unsupported by provider binding "
@@ -872,6 +951,41 @@ class ProviderRouter:
             target=target,
             action=action,
             adapter=adapter,
+            availability=availability,
+            durability=adapter.facts.durability,
+            _current_availability=lambda: self._availability(target.provider, target.binding_id),
+        )
+
+    def route_submission_target(
+        self, target: ProviderTarget, action: ProviderAction
+    ) -> ProviderSubmissionRoute:
+        """Route a frozen delivery through a narrow submission-only adapter."""
+
+        if action not in (ProviderAction.SEND, ProviderAction.QUEUE_NATIVE):
+            raise CapabilityUnavailableError(f"{action.value} is not a submission action")
+        adapter = self._adapters.get((target.provider, target.binding_id))
+        if adapter is None:
+            facts = self._facts.get((target.provider, target.binding_id))
+            raise CapabilityUnavailableError(
+                (facts.availability.reason if facts is not None else None)
+                or f"provider binding {target.provider}:{target.binding_id} is unavailable"
+            )
+        if not adapter.facts.supports(action):
+            raise CapabilityUnavailableError(
+                f"{action.value} is unsupported by provider binding "
+                f"{target.provider}:{target.binding_id}"
+            )
+        availability = adapter.facts.availability
+        if not availability.ready:
+            raise CapabilityUnavailableError(
+                availability.reason
+                or f"provider binding {target.provider}:{target.binding_id} is unavailable"
+            )
+        submitter = cast(ProviderSubmissionAdapter, adapter)
+        return ProviderSubmissionRoute(
+            target=target,
+            action=action,
+            adapter=submitter,
             availability=availability,
             durability=adapter.facts.durability,
             _current_availability=lambda: self._availability(target.provider, target.binding_id),
@@ -904,7 +1018,7 @@ class ProviderRouter:
             provider=provider,
             binding_id=binding_id,
             action=action,
-            adapter=adapter,
+            adapter=cast(CodexLaneAdapter, adapter),
             availability=availability,
             durability=adapter.facts.durability,
             _current_availability=lambda: self._availability(provider, binding_id),
@@ -939,6 +1053,31 @@ class ProviderRouter:
                 f"provider {resolved_provider!r} has no registered launch binding"
             )
         return self.route_binding("codex", DEFAULT_CODEX_BINDING_ID, action)
+
+    def route_hermes_launch(self) -> HermesLaunchRoute:
+        adapter = self._adapters.get(("hermes", DEFAULT_HERMES_BINDING_ID))
+        facts = self._facts.get(("hermes", DEFAULT_HERMES_BINDING_ID))
+        if adapter is None or facts is None:
+            raise CapabilityUnavailableError(
+                (facts.availability.reason if facts is not None else None)
+                or "provider binding hermes:hermes-default is unavailable"
+            )
+        if not facts.supports(ProviderAction.LAUNCH):
+            raise CapabilityUnavailableError(
+                "launch is unsupported by provider binding hermes:hermes-default"
+            )
+        if not facts.availability.ready:
+            raise CapabilityUnavailableError(
+                facts.availability.reason or "provider binding hermes:hermes-default is unavailable"
+            )
+        return HermesLaunchRoute(
+            provider="hermes",
+            binding_id=DEFAULT_HERMES_BINDING_ID,
+            adapter=cast("HermesLaneAdapter", adapter),
+            availability=facts.availability,
+            durability=facts.durability,
+            _current_availability=lambda: self._availability("hermes", DEFAULT_HERMES_BINDING_ID),
+        )
 
 
 def router_for(ctx: Ctx) -> ProviderRouter:

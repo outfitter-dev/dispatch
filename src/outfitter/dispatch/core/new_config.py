@@ -30,6 +30,26 @@ from outfitter.dispatch.core.models import ExecutionProvider
 _CONFIG_PATH = Path(".dispatch") / "config.toml"
 _VAR_RE = re.compile(r"\$\{([^}]+)\}")
 _PREFIX_GAP = " "
+_CODEX_ONLY_SETTINGS = frozenset(
+    {
+        "permission_profile",
+        "sandbox",
+        "approval_policy",
+        "approvals_reviewer",
+        "model",
+        "model_provider",
+        "effort",
+        "summary",
+        "personality",
+        "service_tier",
+        "ephemeral",
+        "base_instructions",
+        "base_file",
+        "developer_instructions",
+        "developer_file",
+        "output_schema",
+    }
+)
 
 
 class NewSettings(BaseModel):
@@ -170,16 +190,36 @@ def resolve_new(
         )
     config = _merge_configs(global_config, repo_config)
 
-    settings = NewSettings(
-        cwd=str(start_cwd),
-        ephemeral=False,
-        prefix="[${DISPATCH.CWD.REPO}]",
-    ).merged(config.defaults)
-
+    selected_presets: list[tuple[str, NewSettings]] = []
     for preset in presets:
         preset_settings = config.presets.get(preset)
         if preset_settings is None:
             raise ValidationError(f"unknown preset {preset!r}")
+        selected_presets.append((preset, preset_settings))
+
+    provider = _effective_provider(
+        config.defaults,
+        *(settings for _, settings in selected_presets),
+        packet,
+        cli,
+    )
+    if provider == "hermes":
+        for preset, preset_settings in selected_presets:
+            _reject_hermes_codex_overrides(preset_settings, f"preset {preset!r}")
+        if packet is not None:
+            _reject_hermes_codex_overrides(packet, "launch packet")
+        _reject_hermes_codex_overrides(cli, "operation input")
+        defaults = _without_codex_overrides(config.defaults)
+    else:
+        defaults = config.defaults
+
+    settings = NewSettings(
+        cwd=str(start_cwd),
+        ephemeral=None if provider == "hermes" else False,
+        prefix="[${DISPATCH.CWD.REPO}]",
+    ).merged(defaults)
+
+    for _, preset_settings in selected_presets:
         settings = settings.merged(preset_settings)
 
     if packet is not None:
@@ -211,6 +251,27 @@ def resolve_new(
         developer_instructions=developer_instructions,
         workspace=config.workspace,
     )
+
+
+def _effective_provider(*layers: NewSettings | None) -> ExecutionProvider | None:
+    provider: ExecutionProvider | None = None
+    for layer in layers:
+        if layer is not None and layer.provider is not None:
+            provider = layer.provider
+    return provider
+
+
+def _without_codex_overrides(settings: NewSettings) -> NewSettings:
+    return settings.model_copy(update=dict.fromkeys(_CODEX_ONLY_SETTINGS))
+
+
+def _reject_hermes_codex_overrides(settings: NewSettings, source: str) -> None:
+    unsupported = sorted(
+        name for name in _CODEX_ONLY_SETTINGS if getattr(settings, name) is not None
+    )
+    if unsupported:
+        rendered = ", ".join(unsupported)
+        raise ValidationError(f"Hermes does not support Codex-only {source} setting(s): {rendered}")
 
 
 def _load_config(path: Path, *, known_sections_only: bool = False) -> NewConfigFile:

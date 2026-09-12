@@ -16,6 +16,10 @@ CaptureMode = Literal["minimal", "standard", "debug"]
 RawPayloadRetention = Literal["off", "errors", "debug", "all"]
 InteractiveRequestMode = Literal["deny", "attention", "permissive"]
 
+DEFAULT_HERMES_BINDING_ID = "hermes-default"
+DEFAULT_HERMES_PROFILE = "default"
+HERMES_GATEWAY_MODULE = "tui_gateway.entry"
+
 
 def _base() -> Path:
     return Path(os.environ.get("DISPATCH_HOME", "~/.dispatch")).expanduser()
@@ -82,6 +86,71 @@ def _absolute_socket_path(value: str, name: str) -> Path:
     path = Path(value).expanduser()
     if not value.strip() or not path.is_absolute():
         raise ValueError(f"{name} must be an absolute path")
+    return path
+
+
+@dataclass(frozen=True)
+class HermesBindingConfig:
+    """The single supported local Hermes binding."""
+
+    hermes_home: Path
+    source_root: Path
+    interpreter: Path
+    binding_id: str = DEFAULT_HERMES_BINDING_ID
+    profile: str = DEFAULT_HERMES_PROFILE
+    gateway_module: str = HERMES_GATEWAY_MODULE
+
+
+def hermes_binding_config() -> HermesBindingConfig | None:
+    """Read the fixed owned-stdio Hermes binding from global config."""
+
+    path = config_path()
+    if not path.exists():
+        return None
+    with path.open("rb") as f:
+        raw = tomllib.load(f)
+    providers = raw.get("providers", {})
+    if not isinstance(providers, dict):
+        raise ValueError("providers must be a TOML table")
+    raw_hermes = providers.get("hermes")
+    if raw_hermes is None:
+        return None
+    if not isinstance(raw_hermes, dict):
+        raise ValueError("providers.hermes must be a TOML table")
+    allowed = {"hermes_home", "source_root", "interpreter", "profile"}
+    unknown = sorted(set(raw_hermes) - allowed)
+    if unknown:
+        raise ValueError(f"providers.hermes has unknown key(s): {', '.join(unknown)}")
+    profile = raw_hermes.get("profile", DEFAULT_HERMES_PROFILE)
+    if profile != DEFAULT_HERMES_PROFILE:
+        raise ValueError(f"providers.hermes.profile must be {DEFAULT_HERMES_PROFILE!r}")
+    return HermesBindingConfig(
+        hermes_home=_absolute_existing_dir(raw_hermes.get("hermes_home"), "hermes_home"),
+        source_root=_absolute_existing_dir(raw_hermes.get("source_root"), "source_root"),
+        interpreter=_absolute_executable(raw_hermes.get("interpreter")),
+    )
+
+
+def _absolute_config_path(value: object, name: str) -> Path:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"providers.hermes.{name} must be a non-empty absolute path")
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise ValueError(f"providers.hermes.{name} must be an absolute path")
+    return path
+
+
+def _absolute_existing_dir(value: object, name: str) -> Path:
+    path = _absolute_config_path(value, name)
+    if not path.is_dir():
+        raise ValueError(f"providers.hermes.{name} must be an existing directory")
+    return path
+
+
+def _absolute_executable(value: object) -> Path:
+    path = _absolute_config_path(value, "interpreter")
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise ValueError("providers.hermes.interpreter must be an executable file")
     return path
 
 
