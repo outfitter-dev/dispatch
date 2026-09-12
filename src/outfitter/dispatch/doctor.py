@@ -61,6 +61,7 @@ def run_doctor(options: DoctorOptions | None = None) -> DoctorReport:
         _codex_auth_check(),
         _daemon_state_check(),
         _capture_policy_check(),
+        _hermes_binding_check(),
         _registry_check(),
         _asset_check(),
     ]
@@ -310,6 +311,63 @@ def _capture_policy_check() -> DoctorCheck:
         status="ok",
         summary=f"history capture mode is {policy.mode}",
         data=data,
+    )
+
+
+def _hermes_binding_check() -> DoctorCheck:
+    base_data: dict[str, object] = {
+        "provider": "hermes",
+        "binding_id": config.DEFAULT_HERMES_BINDING_ID,
+        "configured": False,
+        "negotiated": False,
+        "readiness": "unknown",
+        "supported_actions": [],
+        "required_native_capabilities": [
+            "prompt_submit_if_idle_v1",
+            "prompt_turn_correlation_v1",
+        ],
+    }
+    try:
+        binding = config.hermes_binding_config()
+    except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
+        return DoctorCheck(
+            name="hermes_binding",
+            status="fail",
+            summary="Hermes binding configuration is invalid",
+            detail=str(exc),
+            recovery=(
+                "Fix the global [providers.hermes] configuration, then re-run "
+                "`dispatch doctor --no-app-server`."
+            ),
+            data=base_data | {"configured": True},
+        )
+    if binding is None:
+        return DoctorCheck(
+            name="hermes_binding",
+            status="ok",
+            summary="optional Hermes binding is not configured",
+            detail=(
+                "Configure global [providers.hermes] before selecting `--provider hermes`; "
+                "daemon status provides negotiated readiness."
+            ),
+            data=base_data,
+        )
+    return DoctorCheck(
+        name="hermes_binding",
+        status="ok",
+        summary="Hermes binding is statically configured",
+        detail=(
+            "Static validation does not start Hermes or negotiate gateway capabilities; "
+            "use `dispatch daemon status --json` for live readiness."
+        ),
+        data=base_data
+        | {
+            "profile": binding.profile,
+            "transport": "owned_stdio",
+            "gateway_module": binding.gateway_module,
+            "configured": True,
+            "supported_actions": ["launch", "send"],
+        },
     )
 
 

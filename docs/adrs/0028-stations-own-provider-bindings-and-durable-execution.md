@@ -30,7 +30,16 @@ Keep one daemon per station. Provider process ownership, client connection owner
 
 The [native Hermes investigation](../research/hermes-native-provider-contract.md) selects owned stdio because it supports per-session cwd. Plain text and dedicated Dispatch-owned sessions are the initial contract. Native acknowledgments lack durable keyed admission; local reservations prevent automatic duplicate submission and preserve unknown outcomes. Ordinary cold resume can auto-continue a stale crash marker even after prior terminal evidence, so automatic continuation across a gateway generation change requires a supported suppression guarantee. Until then, quarantine old sessions while permitting new independent work after fencing the old child. Desktop attachment and unrestricted autonomous-turn attribution retain separate proof gates. The [HTTP Runs alternative](../research/hermes-http-runs-contract.md) does not provide a fallback.
 
-The source-pinned stdio audit adds a prerequisite to any durable Hermes receipt claim: on stock `939e45c91d751fadd94dcd1b873ac3cb44846213`, idle check and turn claim can race an unsolicited heartbeat or bot turn, while public terminal events carry no request/turn identity. Sequence fencing, a streaming acknowledgment and `running:false` cannot repair that ambiguity. [DIS-94](https://linear.app/outfitter/issue/DIS-94) is actively preparing an additive `prompt_turn_correlation_v1` contract with atomic admission, an owner token, and a native turn id echoed through start, terminal, error and retained evidence. Until its isolated upstream implementation is verified and adopted, Dispatch refuses durable Hermes execution rather than guessing a receipt result; generation quarantine remains an independent boundary.
+The source-pinned stdio audit adds a prerequisite to any durable Hermes receipt claim: on stock `939e45c91d751fadd94dcd1b873ac3cb44846213`, idle check and turn claim can race an unsolicited heartbeat or bot turn, while public terminal events carry no request/turn identity. Sequence fencing, a streaming acknowledgment and `running:false` cannot repair that ambiguity. [DIS-94](https://linear.app/outfitter/issue/DIS-94) produced an additive `prompt_turn_correlation_v1` contract with atomic admission, an owner token, and a native turn id echoed through start, terminal, error and retained evidence. The isolated `00712d1f0fdc8fd3b97dc762dbcc0db7b10d04af` patch exercised that contract in local proof, but remains unpublished and uninstalled; Dispatch refuses durable execution against stock Hermes rather than guessing a receipt result. Generation quarantine remains an independent boundary.
+
+The DIS-85/86 source slice implements the local side of this contract: typed
+capability negotiation, dedicated owned sessions, immutable launch/send
+reservations, bounded correlated observations, attention holds and generation
+quarantine. A local patched Hermes gateway can exercise the correlation shape in
+isolated tests; it is an unpublished dependency and does not make the installed
+stock runtime usable. DIS-88 must prove the refusal and diagnostics, package the
+operator guidance, and keep the installed asset links resolvable before this is
+described as an operator-ready Hermes path.
 
 ### Stable thread identity, scoped native identity
 

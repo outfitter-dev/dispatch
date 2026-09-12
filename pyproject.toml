@@ -14,7 +14,7 @@ dependencies = [
     "aiosqlite>=0.20",
     "structlog>=24",
     "croniter>=3",
-    "mcp>=1.2",
+    "mcp>=1.2,<2",
     "httpx>=0.28,<1",
     "httpcore>=1.0,<2",
     "websockets>=17,<18",
@@ -51,6 +51,10 @@ exclude = ["/src/**/AGENTS.md"]
 [tool.hatch.build.targets.wheel.force-include]
 "plugins/dispatch/skills" = "outfitter/dispatch/assets/skills"
 "plugins/dispatch" = "outfitter/dispatch/assets/plugins/dispatch"
+"docs/usage/README.md" = "outfitter/dispatch/assets/docs/usage/README.md"
+"docs/usage/deliveries.md" = "outfitter/dispatch/assets/docs/usage/deliveries.md"
+"docs/research/hermes-native-provider-contract.md" = "outfitter/dispatch/assets/docs/research/hermes-native-provider-contract.md"
+"docs/research/hermes-http-runs-contract.md" = "outfitter/dispatch/assets/docs/research/hermes-http-runs-contract.md"
 "tests/fixtures/app_server/protocol_manifest/current.json" = "outfitter/dispatch/assets/protocol_manifest.json"
 
 [tool.hatch.build.targets.sdist]
@@ -61,6 +65,10 @@ include = [
     "/scripts",
     "/skills",
     "/plugins/dispatch",
+    "/docs/usage/README.md",
+    "/docs/usage/deliveries.md",
+    "/docs/research/hermes-native-provider-contract.md",
+    "/docs/research/hermes-http-runs-contract.md",
     "/README.md",
     "/AGENTS.md",
     "/pyproject.toml",
