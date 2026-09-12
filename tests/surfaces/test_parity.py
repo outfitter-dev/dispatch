@@ -11,7 +11,10 @@ import inspect
 import json
 from pathlib import Path
 
+import pytest
 import typer
+from jsonschema import ValidationError as JsonSchemaValidationError  # type: ignore[import-untyped]
+from jsonschema import validate
 from typer.testing import CliRunner
 
 from outfitter.dispatch.contracts.derive_cli import (
@@ -32,7 +35,7 @@ from outfitter.dispatch.contracts.errors import (
     ValidationError,
     project_error,
 )
-from outfitter.dispatch.contracts.schema import is_internal_field
+from outfitter.dispatch.contracts.schema import inline_local_refs, is_internal_field
 from outfitter.dispatch.core.ops import REGISTRY
 from outfitter.dispatch.surfaces.cli import CLI_SURFACE_CONTROL_PATHS, build_cli
 
@@ -107,12 +110,31 @@ def test_mcp_model_parity_per_op() -> None:
         # MCP inputSchema ↔ input model
         assert set(schema.get("properties", {})) == fields | {"op"}, f"{op.id} MCP inputSchema"
         assert tool.outputSchema is not None, f"{op.id} missing outputSchema"
-        assert op.output.model_json_schema() in tool.outputSchema["oneOf"], f"{op.id} outputSchema"
+        assert inline_local_refs(op.output.model_json_schema()) in tool.outputSchema["anyOf"], (
+            f"{op.id} outputSchema"
+        )
         # Tool-level safety annotations are exact because groups do not mix intents.
         ann = tool.annotations
         assert ann is not None
         assert ann.readOnlyHint == (op.intent == "read"), op.id
         assert ann.destructiveHint == (op.intent == "destroy"), op.id
+
+
+def test_mcp_output_unions_validate_authored_example_outputs() -> None:
+    projection = derive_mcp_projection(REGISTRY)
+    tools = {tool.name: tool for tool in projection.tools}
+
+    for route in projection.routes.values():
+        schema = tools[route.tool_name].outputSchema
+        assert schema is not None
+        for example in route.op.examples:
+            if example.output is not None:
+                validate(example.output, schema)
+
+    thread_write = tools["dispatch_thread_write"].outputSchema
+    assert thread_write is not None
+    with pytest.raises(JsonSchemaValidationError):
+        validate({"capabilities": {"send": "not-a-boolean"}}, thread_write)
 
 
 def test_cli_schema_routes_cover_public_ops() -> None:

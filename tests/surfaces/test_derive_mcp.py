@@ -102,7 +102,7 @@ def test_action_schema_and_annotations_from_op() -> None:
     }
     assert lane_read.outputSchema is not None
     delivery_schema = next(
-        schema for schema in lane_read.outputSchema["oneOf"] if schema["title"] == "DeliveryView"
+        schema for schema in lane_read.outputSchema["anyOf"] if schema["title"] == "DeliveryView"
     )
     assert "payload" not in delivery_schema["properties"]
     assert set(delivery_schema["properties"]) >= {
