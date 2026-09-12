@@ -62,6 +62,7 @@ from outfitter.dispatch.config import CapturePolicy, RuntimePolicy
 
 if TYPE_CHECKING:
     from outfitter.dispatch.core.providers import ProviderRouter
+    from outfitter.dispatch.daemon.provider_manager import ProviderManager
     from outfitter.dispatch.registry.store import Registry
 
 
@@ -272,11 +273,12 @@ class LaneClient(Protocol):
 class Ctx:
     """Injected into every handler. Small and stable by design."""
 
-    client: LaneClient
+    client: LaneClient | None
     registry: Registry
     log: structlog.stdlib.BoundLogger
     abort: asyncio.Event
     policy: RuntimePolicy = field(default_factory=RuntimePolicy)
     capture: CapturePolicy = field(default_factory=CapturePolicy)
-    provider_session_id: str = ""
+    connection_generation: str = ""
     providers: ProviderRouter | None = None
+    provider_manager: ProviderManager | None = None

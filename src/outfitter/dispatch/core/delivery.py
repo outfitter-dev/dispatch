@@ -155,7 +155,7 @@ async def reconcile_receipt_request(inp: DeliveryLookupInput, ctx: Ctx) -> Deliv
 async def send_reserved(inp: SendInput, lane: Lane, text: str, ctx: Ctx) -> DeliveryView:
     native = lane.source == "attached" and inp.mode == "queue"
     route = route_lane(ctx, lane, ProviderAction.QUEUE_NATIVE if native else ProviderAction.SEND)
-    route.recheck(ctx.provider_session_id or None)
+    route.recheck()
     if lane.source != "own" and not native:
         raise AuthorityError("idempotent delivery currently requires a Dispatch-owned thread")
     if native and inp.content:
@@ -250,10 +250,10 @@ async def submit_reserved(delivery_id: str, ctx: Ctx) -> bool:
             raise AuthorityError("reserved turn submission requires a Dispatch-owned thread")
 
         route = router_for(ctx).route_target(request.target, request.action)
-        route.recheck(ctx.provider_session_id or None)
+        route.recheck()
         if receipt.transport == "turn":
             await ctx.registry.update_lane_status(receipt.lane, "busy")
-        route.recheck(ctx.provider_session_id or None)
+        route.recheck()
         provider_call_entered = True
         result = await route.adapter.submit_prepared(request)
         if isinstance(result, ProviderSubmissionRejected):

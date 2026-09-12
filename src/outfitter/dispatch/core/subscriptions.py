@@ -158,7 +158,7 @@ async def _tail_text(ctx: Ctx, lane: Lane, tail: int) -> str | None:
         return None
     try:
         route = route_lane(ctx, lane, ProviderAction.TRANSCRIPT)
-        route.recheck(ctx.provider_session_id or None)
+        route.recheck()
         result = await route.adapter.read(route.target, include_turns=True)
     except Exception as exc:
         ctx.log.warning("subscription.tail_read_failed", lane=lane.id, error=str(exc))

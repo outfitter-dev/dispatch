@@ -35,7 +35,7 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
         return False
     try:
         route = route_lane(ctx, lane, ProviderAction.SEND)
-        route.recheck(ctx.provider_session_id or None)
+        route.recheck()
     except DispatchError:
         return False
     if await ctx.registry.lane_delivery_held(lane.id):
@@ -69,11 +69,11 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
             await validate_lane_input_modalities(ctx, lane.id, frozenset({"image"}))
         wire = await materialize_remote_images(rich)
         if lane.source == "attached" and ctx.policy.allow_attached_writes:
-            route.recheck(ctx.provider_session_id or None)
+            route.recheck()
             await route.adapter.resume(route.target, exclude_turns=True)
         turn_settings = await load_turn_start_settings(ctx.registry, lane.id)
         await ctx.registry.update_lane_status(lane.id, "busy")
-        route.recheck(ctx.provider_session_id or None)
+        route.recheck()
         await route.adapter.start_turn(
             route.target,
             wire.text,
