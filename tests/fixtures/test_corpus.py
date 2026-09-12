@@ -251,6 +251,7 @@ def test_provider_event_replay_fixture_validates_storage_shape() -> None:
     ]
 
     assert [event.event_type for event in events] == ["turn/started", "turn/completed"]
+    assert {event.binding_id for event in events} == {"codex-default"}
     assert [event.provider_turn_id for event in events] == ["turn-1", "turn-1"]
     assert events[0].payload is not None
     assert events[0].payload["method"] == "turn/started"

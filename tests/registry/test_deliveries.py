@@ -341,7 +341,7 @@ async def test_v21_migration_adds_delivery_ledger(tmp_path: Path) -> None:
         assert receipt.key == "after:migration"
         async with migrated._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-        assert row is not None and int(row[0]) == 23
+        assert row is not None and int(row[0]) == 24
     finally:
         await migrated.close()
 

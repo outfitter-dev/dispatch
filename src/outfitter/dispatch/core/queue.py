@@ -11,6 +11,7 @@ from outfitter.dispatch.client.errors import ClientError
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.contracts.errors import DispatchError, project_error
 from outfitter.dispatch.registry.models import Lane, MessageReceipt, QueuedMessage
+from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
 
 from .capture import bound_text
 from .model_registry import validate_lane_input_modalities
@@ -32,6 +33,13 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
     lane = await ctx.registry.find_lane(lane_id)
     if lane is None or lane.status != "idle":
         return False
+    if (
+        lane.provider != "codex"
+        or lane.binding_id != DEFAULT_CODEX_BINDING_ID
+        or lane.provider_session_id != lane.id
+    ):
+        return False
+    native_id = lane.provider_session_id
     if await ctx.registry.lane_delivery_held(lane.id):
         return False
     message = await ctx.registry.next_pending_message(lane.id)
@@ -63,11 +71,11 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
             await validate_lane_input_modalities(ctx, lane.id, frozenset({"image"}))
         wire = await materialize_remote_images(rich)
         if lane.source == "attached" and ctx.policy.allow_attached_writes:
-            await ctx.client.thread_resume(lane.id, exclude_turns=True)
+            await ctx.client.thread_resume(native_id, exclude_turns=True)
         turn_settings = await load_turn_start_settings(ctx.registry, lane.id)
         await ctx.registry.update_lane_status(lane.id, "busy")
         await ctx.client.turn_start(
-            lane.id,
+            native_id,
             wire.text,
             cwd=lane.cwd or ".",
             input_items=wire.input_items,
@@ -127,8 +135,9 @@ async def _record_queue_receipt(
         MessageReceipt(
             lane=lane.id,
             queued_message_id=message.id,
-            provider="codex",
-            provider_thread_id=lane.id,
+            provider=lane.provider,
+            binding_id=lane.binding_id,
+            provider_thread_id=lane.provider_session_id or lane.id,
             dispatch_message_id=f"queue:{message.id}",
             status=status,  # type: ignore[arg-type]
             error=error,

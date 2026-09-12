@@ -17,11 +17,22 @@ from outfitter.dispatch.contracts.errors import (
     ValidationError,
 )
 from outfitter.dispatch.registry.models import Lane
+from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
 
 from .models import DeliveryLookupInput, DeliveryView, SendInput
 from .turn_settings import TurnStartSettings, load_turn_start_settings
 
 _SETTINGS = TypeAdapter(TurnStartSettings)
+
+
+def _native_id(lane: Lane) -> str | None:
+    if (
+        lane.provider != "codex"
+        or lane.binding_id != DEFAULT_CODEX_BINDING_ID
+        or lane.provider_session_id != lane.id
+    ):
+        return None
+    return lane.provider_session_id
 
 
 async def get_receipt(inp: DeliveryLookupInput, ctx: Ctx) -> DeliveryView:
@@ -37,6 +48,10 @@ async def reconcile_receipt_request(inp: DeliveryLookupInput, ctx: Ctx) -> Deliv
 
 
 async def send_reserved(inp: SendInput, lane: Lane, text: str, ctx: Ctx) -> DeliveryView:
+    if _native_id(lane) is None:
+        raise CapabilityUnavailableError(
+            f"provider binding {lane.provider}:{lane.binding_id} execution is not supported"
+        )
     native = lane.source == "attached" and inp.mode == "queue"
     if lane.source != "own" and not native:
         raise AuthorityError("idempotent delivery currently requires a Dispatch-owned thread")
@@ -85,6 +100,12 @@ async def send_reserved(inp: SendInput, lane: Lane, text: str, ctx: Ctx) -> Deli
 
 async def submit_reserved(delivery_id: str, ctx: Ctx) -> bool:
     receipt = await ctx.registry.get_delivery(delivery_id)
+    lane = await ctx.registry.find_lane(receipt.lane)
+    if lane is None:
+        raise NotFoundError(f"no managed thread {receipt.lane!r}")
+    native_id = _native_id(lane)
+    if native_id is None:
+        return False
     payload = json.loads(receipt.payload)
     if not await ctx.registry.claim_delivery(delivery_id):
         return False
@@ -99,7 +120,7 @@ async def submit_reserved(delivery_id: str, ctx: Ctx) -> bool:
             async with asyncio.timeout(15):
                 provider_call_entered = True
                 submission = await ctx.client.thread_queue_add(
-                    receipt.lane, payload["text"], client_user_message_id=receipt.id
+                    native_id, payload["text"], client_user_message_id=receipt.id
                 )
             if (
                 submission.client_user_message_id != receipt.id
@@ -117,7 +138,7 @@ async def submit_reserved(delivery_id: str, ctx: Ctx) -> bool:
         async with asyncio.timeout(15):
             provider_call_entered = True
             result = await ctx.client.turn_start(
-                receipt.lane,
+                native_id,
                 payload["text"],
                 cwd=payload["cwd"],
                 client_user_message_id=receipt.id,

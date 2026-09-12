@@ -71,11 +71,14 @@ def exercise_registry_sql(conn: Any) -> None:
         conn,
         """
         INSERT INTO lanes (
-            id, ref, ref_source, ref_payload, ref_mixer, handle, source, status,
-            pinned, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            id, provider, binding_id, provider_session_id, ref, ref_source, ref_payload,
+            ref_mixer, handle, source, status, pinned, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
+            "L1",
+            "codex",
+            "codex-default",
             "L1",
             "0abc1234",
             "0",
@@ -93,13 +96,14 @@ def exercise_registry_sql(conn: Any) -> None:
         conn,
         """
         INSERT INTO provider_events (
-            provider, provider_thread_id, lane, event_type, provider_event_id,
+            provider, binding_id, provider_thread_id, lane, event_type, provider_event_id,
             provider_turn_id, received_at, summary, payload, raw_retained
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT DO NOTHING
         """,
         (
             "codex",
+            "codex-default",
             "thread-1",
             "L1",
             "turn/started",
@@ -115,15 +119,16 @@ def exercise_registry_sql(conn: Any) -> None:
         conn,
         """
         INSERT INTO thread_turns (
-            provider, provider_thread_id, turn_id, lane, status, started_at,
+            provider, binding_id, provider_thread_id, turn_id, lane, status, started_at,
             completion_source, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(provider, provider_thread_id, turn_id) DO UPDATE SET
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(provider, binding_id, provider_thread_id, turn_id) DO UPDATE SET
             status = excluded.status,
             updated_at = excluded.updated_at
         """,
         (
             "codex",
+            "codex-default",
             "thread-1",
             "turn-1",
             "L1",
@@ -137,16 +142,17 @@ def exercise_registry_sql(conn: Any) -> None:
         conn,
         """
         INSERT INTO thread_items (
-            provider, provider_thread_id, item_id, lane, turn_id, item_type,
+            provider, binding_id, provider_thread_id, item_id, lane, turn_id, item_type,
             role, text, tool, created_at, position, inserted_at, payload, raw_retained
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(provider, provider_thread_id, item_id) DO UPDATE SET
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(provider, binding_id, provider_thread_id, item_id) DO UPDATE SET
             text = excluded.text,
             position = excluded.position,
             payload = excluded.payload
         """,
         (
             "codex",
+            "codex-default",
             "thread-1",
             "item-1",
             "L1",
@@ -166,10 +172,10 @@ def exercise_registry_sql(conn: Any) -> None:
         conn,
         """
         INSERT OR IGNORE INTO thread_item_refs (
-            provider, provider_thread_id, item_id, ref_type, ref_value
-        ) VALUES (?, ?, ?, ?, ?)
+            provider, binding_id, provider_thread_id, item_id, ref_type, ref_value
+        ) VALUES (?, ?, ?, ?, ?, ?)
         """,
-        ("codex", "thread-1", "item-1", "tool", "bash"),
+        ("codex", "codex-default", "thread-1", "item-1", "tool", "bash"),
     )
     commit(conn)
 
@@ -203,17 +209,22 @@ def partial_conflict_target_supported(connect: Connect) -> bool:
     try:
         conn = connect(":memory:")
         try:
-            execute(conn, "CREATE TABLE events(provider TEXT NOT NULL, event_id TEXT)")
             execute(
                 conn,
-                "CREATE UNIQUE INDEX idx_events ON events(provider, event_id) "
+                "CREATE TABLE events(provider TEXT NOT NULL, binding_id TEXT NOT NULL, "
+                "event_id TEXT)",
+            )
+            execute(
+                conn,
+                "CREATE UNIQUE INDEX idx_events ON events(provider, binding_id, event_id) "
                 "WHERE event_id IS NOT NULL",
             )
             execute(
                 conn,
-                "INSERT INTO events(provider, event_id) VALUES (?, ?) "
-                "ON CONFLICT(provider, event_id) WHERE event_id IS NOT NULL DO NOTHING",
-                ("codex", "event-1"),
+                "INSERT INTO events(provider, binding_id, event_id) VALUES (?, ?, ?) "
+                "ON CONFLICT(provider, binding_id, event_id) "
+                "WHERE event_id IS NOT NULL DO NOTHING",
+                ("codex", "codex-default", "event-1"),
             )
             commit(conn)
             return True

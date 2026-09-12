@@ -100,6 +100,9 @@ OPEN = define_op(
             output={
                 "ref": "0BGeK1",
                 "id": "lane-1",
+                "provider": "codex",
+                "binding_id": "codex-default",
+                "provider_session_id": "lane-1",
                 "handle": "@alpha",
                 "source": "own",
                 "status": "idle",
@@ -148,6 +151,9 @@ NEW = define_op(
             output={
                 "ref": "0BGeK1",
                 "id": "lane-1",
+                "provider": "codex",
+                "binding_id": "codex-default",
+                "provider_session_id": "lane-1",
                 "handle": "@[dispatch] alpha",
                 "source": "own",
                 "status": "idle",
@@ -325,6 +331,9 @@ ATTACH = define_op(
             output={
                 "ref": "0ABFs1",
                 "id": "T1",
+                "provider": "codex",
+                "binding_id": "codex-default",
+                "provider_session_id": "T1",
                 "handle": "@T1",
                 "source": "attached",
                 "status": "idle",

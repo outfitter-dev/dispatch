@@ -19,6 +19,7 @@ from outfitter.dispatch.contracts.context import Ctx, LaneClient
 from outfitter.dispatch.contracts.errors import DispatchError
 from outfitter.dispatch.core.permission_profiles import resolve_permission_profile
 from outfitter.dispatch.core.queue import drain_idle_queues
+from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
 
 
 class SupervisedClient(LaneClient, Protocol):
@@ -92,6 +93,19 @@ class Supervisor:
         """
         validated_profiles: dict[tuple[str, str], str] = {}
         for lane in await self._ctx.registry.list_lanes():
+            if (
+                lane.provider != "codex"
+                or lane.binding_id != DEFAULT_CODEX_BINDING_ID
+                or lane.provider_session_id != lane.id
+            ):
+                self._ctx.log.info(
+                    "lane.restore_unsupported_binding",
+                    lane=lane.id,
+                    provider=lane.provider,
+                    binding_id=lane.binding_id,
+                )
+                continue
+            native_id = lane.provider_session_id
             try:
                 sync = await self._ctx.registry.get_lane_sync(lane.id)
                 observed = sync is not None and sync.observation_enabled
@@ -110,17 +124,17 @@ class Supervisor:
                         permission_profile = validated_profiles[key]
                     try:
                         await client.thread_resume(
-                            lane.id,
+                            native_id,
                             permission_profile=permission_profile,
                             exclude_turns=True,
                         )
                     except AppServerError as exc:
                         if exc.code != -32602:
                             raise
-                        await client.thread_resume(lane.id, permission_profile=permission_profile)
+                        await client.thread_resume(native_id, permission_profile=permission_profile)
                     self._ctx.log.info("lane.resumed", lane=lane.id, source=lane.source)
                 else:
-                    await client.thread_read(lane.id, include_turns=False)
+                    await client.thread_read(native_id, include_turns=False)
                     self._ctx.log.info("lane.metadata_read", lane=lane.id, source=lane.source)
             except (ClientError, DispatchError) as exc:
                 await self._ctx.registry.update_lane_status(lane.id, "error")

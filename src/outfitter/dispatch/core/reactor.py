@@ -25,6 +25,7 @@ from outfitter.dispatch.client.events import (
 )
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.registry.models import EventWhen
+from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
 
 from .capacity import observe_codex_rate_limits
 from .capture import bound_text
@@ -94,7 +95,9 @@ class Reactor:
             await registry.mark_provider_thread_state("codex", event.lane_id, "active")
         elif isinstance(event, ThreadDeleted):
             await registry.mark_provider_thread_state("codex", event.lane_id, "deleted")
-        lane = await registry.find_lane(event.lane_id)
+        lane = await registry.find_lane_by_provider_session(
+            "codex", DEFAULT_CODEX_BINDING_ID, event.lane_id
+        )
         if lane is None:
             return  # an event for a thread dispatch does not track
         await index_codex_lane_event(registry, lane, event, self._ctx.capture)

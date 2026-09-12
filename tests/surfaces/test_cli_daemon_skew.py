@@ -269,8 +269,8 @@ def test_invoke_daemon_allows_baseline_ops_on_parent_version_prehandshake_daemon
     monkeypatch.setattr(cli, "_control_request", request)
 
     assert _invoke(tmp_path / "dispatchd.sock", "models", {}) == {"ok": True}
-    assert _invoke(tmp_path / "dispatchd.sock", "stop", {"lane": "@a"}) == {"ok": True}
-    assert calls == [CONTROL_META_METHOD, "models", CONTROL_META_METHOD, "stop"]
+    assert _invoke(tmp_path / "dispatchd.sock", "archive", {"target": "T1"}) == {"ok": True}
+    assert calls == [CONTROL_META_METHOD, "models", "archive"]
 
 
 def test_invoke_daemon_blocks_baseline_ops_on_older_prehandshake_daemon(

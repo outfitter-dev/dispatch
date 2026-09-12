@@ -12,12 +12,9 @@ pre-handshake daemon only when that daemon self-reports exactly
 and ``prehandshake_op_allowed``); older releases' schemas may differ from the
 baseline (e.g. v0.8.2's ``send`` had no ``content`` field).
 
-Baseline for parent v0.11.0 (main): computed from the current tree rather than
-a parent checkout. That is sound because this branch's only schema change
-relative to main is the ``provider`` field added to ``NewInput`` (DIS-49),
-which is shared by exactly ``new`` and ``new-plan`` — both excluded via
-CHANGED_SINCE_PARENT. No other input/output model changed, so every remaining
-op's current hash equals the parent's.
+Baseline for parent v0.11.0 (main): computed before the current schema changes.
+Every op whose current input or output differs is excluded via
+``CHANGED_SINCE_PARENT``; retained hashes remain the genuine parent hashes.
 """
 
 PARENT_VERSION = "0.11.0"
@@ -52,7 +49,28 @@ changes; the release-cut baseline test only proves parity with
 ``PARENT_VERSION``, so a read-op schema change must also bump this floor to
 the first release carrying the new schema."""
 
-CHANGED_SINCE_PARENT: frozenset[str] = frozenset({"new", "new-plan", "send", "roster", "show"})
+CHANGED_SINCE_PARENT: frozenset[str] = frozenset(
+    {
+        "attach",
+        "compact",
+        "discover",
+        "fork",
+        "goal-clear",
+        "goal-get",
+        "goal-set",
+        "new",
+        "new-plan",
+        "open",
+        "rollback",
+        "roster",
+        "send",
+        "show",
+        "stop",
+        "sync",
+        "transcript",
+        "watch",
+    }
+)
 """Ops whose input/output schema drifted since ``PARENT_VERSION``.
 
 Never forwarded to a pre-handshake daemon: its Pydantic models (default
@@ -63,15 +81,8 @@ ADDED_SINCE_PARENT: frozenset[str] = frozenset({"delivery-get", "delivery-reconc
 """Ops absent from ``PARENT_VERSION`` and unsafe for pre-handshake forwarding."""
 
 PARENT_OP_SCHEMA_HASHES: dict[str, str] = {
-    "open": "2e663feeb4533c6838b00a4ff352597abaa3b728b166b3aa2a6ee4f69bcc41d8",
-    "attach": "b6897800a0405339e910cf98de8277bac6ad6f1b6b90bd58345182d5c9d21bc9",
-    "stop": "16ccc26967a0c253f1cff65f4b8a455f7db38226773d0b0c1cb5f6e2b86e392c",
     "lane-rename": "c90f27886bd7bb6a8468f7bc7336716d60525b2361b4e9507d6e9d8b9273cf46",
-    "transcript": "d1d2acca3ed46ce7451801aff4c588038e8cd13eea83b5b8e6c8e2a87671b86a",
     "history": "43f8d8689b4171d655a8b14895cbb1af6ffe007aaa93ec14d6be76c19d2e1243",
-    "watch": "9febdc5f24bac264900435da630a5c4adb3b63e8da934d58cef5b3750f498fa5",
-    "sync": "306c6ddcf8abf3fca5f0509ca85499064b67e8b98eb1db68f9942a1e9b768845",
-    "discover": "96a284f08bdb3b9c4f15c6a70f5abb0ecf3b5022d7b05ac443a2c8d5377adeb1",
     "search": "6383eb95772eae4ad689ad90c123244f36434f5b884cbe43cfab15075a891c0e",
     "query": "37544d538a1ee55818edcda6b9615db719d35fd8dd4274fc4075fccf5e6b79ba",
     "models": "246d581df042fe34b36c404ab9d75bdce1e678aee1c01662a16b93bb6f997035",
@@ -87,12 +98,6 @@ PARENT_OP_SCHEMA_HASHES: dict[str, str] = {
     "unsubscribe": "0d2203429b98ed3614707287c4f424f58813c02664aad35743cbb7bbe82eb6da",
     "archive": "164ef5d176c8c1c90a95627bc6695d6f7632b0adf68919d8cccf63599b03a475",
     "restore": "164ef5d176c8c1c90a95627bc6695d6f7632b0adf68919d8cccf63599b03a475",
-    "goal-get": "0ff6b7f7467ce48c6afbf39fa7900be67776664783c0c5a9a0bd90e8df06c699",
-    "goal-set": "2fcb09ccd7fb2825ad2794d036efe7958f869812df66cc3631613b8bf6a3100f",
-    "goal-clear": "2dfb19dbfdc2ad9e10583a7df2cbb01f7988922748caa1d921b6306930afffc5",
-    "fork": "3db182e6fed46adc4c4a6c246ba69b39aa86378276c58f1b2cb2f671a7686db6",
-    "rollback": "02199e08bfd8f932addf73cf3a328f2d72e40c05fbdcd6f8de95da8ce5af0426",
-    "compact": "5aec00f1dd3427fb7368223277dd7310d254b3a7a4252cde4ab5451bf759dca9",
     "status": "4c9f6d7a774c4b4d06d0da9743eb55113c13cc323e6a47f6bbeb3fa94145bc48",
     "log": "fa720f3eb8c816d2045d996ac49b1a51217872215d660566b40e19a6ed1a8d66",
     "trigger-add": "ceef3ef04f635e1bc3af4b9b019e6c7a253d26ef5221fcbacbaa60f1a5950d0f",

@@ -97,6 +97,46 @@ async def test_owned_user_input_becomes_durable_attention(store: Registry) -> No
     await manager.close()
 
 
+async def test_codex_request_does_not_capture_colliding_non_codex_lane_key(
+    store: Registry,
+) -> None:
+    lane = await store.add_lane(
+        id="dsp_collision",
+        handle="@other",
+        source="own",
+        status="idle",
+        provider="claude",
+        binding_id="profile-a",
+        provider_session_id="native-other",
+    )
+    ctx = make_ctx(store, FakeLaneClient())
+    ctx.provider_session_id = "session-1"
+    manager = ServerRequestManager(ctx)
+
+    request = await manager.handle(
+        ServerRequestReceived(
+            method="item/tool/requestUserInput",
+            request_id="question-collision",
+            category="user_input",
+            thread_id=lane.id,
+            turn_id="T1",
+            item_id="I1",
+            raw_params={"questions": []},
+        )
+    )
+
+    assert request.lane is None
+    assert (await store.get_lane(lane.id)).status == "idle"
+    assert await store.get_lane_runtime_state(lane.id) is None
+    events = await store.list_provider_events(
+        provider="codex",
+        binding_id="codex-default",
+        provider_thread_id=lane.id,
+    )
+    assert events and all(event.lane is None for event in events)
+    await manager.close()
+
+
 async def test_attached_request_is_denied_by_default(store: Registry) -> None:
     await store.add_lane(id="L1", handle="@desktop", source="attached", status="busy")
     client = FakeLaneClient()

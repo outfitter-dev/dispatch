@@ -142,6 +142,7 @@ class ProviderEvent(BaseModel):
 
     id: int | None = None
     provider: str
+    binding_id: str = "codex-default"
     provider_thread_id: str
     lane: str | None = None
     event_type: str
@@ -164,6 +165,7 @@ class ProviderThreadObservation(BaseModel):
     """
 
     provider: str = "codex"
+    binding_id: str = "codex-default"
     provider_thread_id: str
     session_id: str | None = None
     parent_thread_id: str | None = None
@@ -183,6 +185,7 @@ class ProviderThread(BaseModel):
     """A provider-owned thread identity retained independently of lanes."""
 
     provider: str
+    binding_id: str = "codex-default"
     provider_thread_id: str
     session_id: str | None = None
     parent_thread_id: str | None = None
@@ -327,6 +330,7 @@ class ServerRequest(BaseModel):
 
     id: int | None = None  # local operator selector, assigned by the registry
     provider: Literal["codex"] = "codex"
+    binding_id: str = "codex-default"
     provider_session_id: str  # unique for one App Server connection lifetime
     provider_thread_id: str | None = None
     lane: str | None = None
@@ -345,6 +349,7 @@ class ThreadTurn(BaseModel):
     """Normalized turn lifecycle facts derived from provider events/history."""
 
     provider: str
+    binding_id: str = "codex-default"
     provider_thread_id: str
     turn_id: str
     lane: str | None = None
@@ -361,6 +366,7 @@ class ThreadItem(BaseModel):
     """Normalized history item indexed from provider transcript/history data."""
 
     provider: str
+    binding_id: str = "codex-default"
     provider_thread_id: str
     item_id: str
     lane: str | None = None
@@ -391,6 +397,7 @@ class ThreadItemRef(BaseModel):
     """Queryable reference extracted from a normalized history item."""
 
     provider: str
+    binding_id: str = "codex-default"
     provider_thread_id: str
     item_id: str
     ref_type: str
@@ -404,6 +411,7 @@ class MessageReceipt(BaseModel):
     lane: str | None = None
     queued_message_id: int | None = None
     provider: str
+    binding_id: str = "codex-default"
     provider_thread_id: str
     dispatch_message_id: str | None = None
     status: MessageReceiptStatus = "created"
@@ -422,6 +430,7 @@ class LaneRuntimeState(BaseModel):
 
     lane: str
     provider: str
+    binding_id: str = "codex-default"
     provider_thread_id: str
     status: LaneStatus = "unknown"
     active_turn_id: str | None = None
@@ -435,9 +444,12 @@ class LaneRuntimeState(BaseModel):
 
 
 class Lane(BaseModel):
-    """A managed Codex thread — one row of the ``lanes`` table."""
+    """A managed provider thread — one row of the ``lanes`` table."""
 
-    id: str  # the App Server threadId
+    id: str  # stable Dispatch key (native Codex id for the default binding)
+    provider: str = "codex"
+    binding_id: str = "codex-default"
+    provider_session_id: str | None = None
     ref: str  # dispatch-local stable short ref
     ref_source: str
     ref_payload: str
