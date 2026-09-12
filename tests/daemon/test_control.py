@@ -22,6 +22,7 @@ from outfitter.dispatch.contracts.registry import (
 from outfitter.dispatch.core.ops import REGISTRY
 from outfitter.dispatch.daemon.control import ControlServer
 from outfitter.dispatch.registry.store import Registry
+from tests.core.delivery_fakes import AcceptedClient
 from tests.fakes import make_ctx
 
 
@@ -39,7 +40,7 @@ async def _call(path: Path, method: str, params: dict[str, object]) -> dict[str,
 @pytest_asyncio.fixture
 async def socket_path(socket_dir: Path) -> AsyncIterator[Path]:
     store = await Registry.open()
-    server = ControlServer(REGISTRY, make_ctx(store))
+    server = ControlServer(REGISTRY, make_ctx(store, AcceptedClient()))
     path = socket_dir / "dispatchd.sock"
     await server.serve(path)
     try:

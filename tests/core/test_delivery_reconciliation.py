@@ -31,6 +31,9 @@ async def test_exact_provider_history_resolves_lost_ack() -> None:
         receipt = await store.get_delivery(ack.delivery.id)
         assert receipt.status == "completed"
         assert receipt.turn_id == "turn-1"
+        assert receipt.evidence_source == "history"
+        assert receipt.evidence_received_at is not None
+        assert receipt.evidence_partial is False
         assert not await store.lane_delivery_held("target")
         assert len([call for call in client.calls if call[0] == "turn_start"]) == 1
     finally:
@@ -60,6 +63,8 @@ async def test_inconclusive_history_stops_checks_without_resend(variant: str) ->
             await reconcile_receipt(ack.delivery.id, ctx)
         receipt = await store.get_delivery(ack.delivery.id)
         assert receipt.status == "ambiguous"
+        assert receipt.evidence_source == "history"
+        assert receipt.evidence_partial is True
         assert receipt.reconciliation_attempts == MAX_CHECKS
         assert "held" in (receipt.error or "")
         assert await store.lane_delivery_held("target")
@@ -115,7 +120,7 @@ async def test_queue_acceptance_crash_restart_never_resends(
             raise SimulatedCrash("synthetic process crash before receipt bookkeeping")
 
         with monkeypatch.context() as patch:
-            patch.setattr(store, "update_delivery", crash_after_acceptance)
+            patch.setattr(store, "apply_receipt_observation", crash_after_acceptance)
             with pytest.raises(SimulatedCrash, match="synthetic process crash"):
                 await handlers.send_message(
                     SendInput(lane="target", text="hello", mode="queue", idempotency_key="one"), ctx
@@ -179,13 +184,13 @@ async def test_transient_bookkeeping_error_reconciles_without_daemon_restart(
         client = HistoryClient()
         client.lose_ack = False
         ctx = make_ctx(store, client)
-        original = store.update_delivery
+        original = store.apply_receipt_observation
 
         async def fail_once(*args: object, **kwargs: object) -> None:
-            monkeypatch.setattr(store, "update_delivery", original)
+            monkeypatch.setattr(store, "apply_receipt_observation", original)
             raise RuntimeError("synthetic one-shot local bookkeeping failure")
 
-        monkeypatch.setattr(store, "update_delivery", fail_once)
+        monkeypatch.setattr(store, "apply_receipt_observation", fail_once)
         with pytest.raises(RuntimeError, match="bookkeeping failure"):
             await handlers.send_message(
                 SendInput(lane="target", text="hello", idempotency_key="one"), ctx

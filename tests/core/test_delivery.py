@@ -39,6 +39,13 @@ async def test_identical_key_replay_submits_once() -> None:
         assert first.delivery.id == replay.delivery.id
         assert first.delivery.status == "accepted"
         assert first.delivery.turn_id == "turn-1"
+        assert first.delivery.provider == "codex"
+        assert first.delivery.binding_id == "codex-default"
+        assert first.delivery.native_session_id == "target"
+        assert first.delivery.correlation_id == first.delivery.id
+        assert first.delivery.evidence_source == "submit_result"
+        assert first.delivery.evidence_received_at is not None
+        assert first.delivery.evidence_partial is False
     finally:
         await store.close()
 
@@ -57,7 +64,39 @@ async def test_lost_ack_retains_ambiguous_receipt_and_replay_never_resubmits() -
         assert replay.delivery is not None
         assert first.delivery.id == replay.delivery.id
         assert replay.delivery.status == "ambiguous"
+        assert replay.delivery.evidence_source == "submit_result"
+        assert replay.delivery.evidence_partial is True
         assert "lost acknowledgment" in (replay.delivery.error or "")
+        assert len([call for call in client.calls if call[0] == "turn_start"]) == 1
+        assert await store.lane_delivery_held("target")
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_idless_success_remains_ambiguous_and_replay_never_resubmits() -> None:
+    class IdlessSuccessClient(AcceptedClient):
+        async def turn_start(self, *args: object, **kwargs: object) -> dict[str, object]:
+            self._record("turn_start", args=args, **kwargs)
+            return {}
+
+    store = await Registry.open()
+    try:
+        await store.add_lane(id="target", handle="@target", source="own", status="idle")
+        client = IdlessSuccessClient()
+        ctx = make_ctx(store, client)
+        inp = SendInput(lane="target", text="hello", idempotency_key="event-1")
+
+        first = await handlers.send_message(inp, ctx)
+        replay = await handlers.send_message(inp, ctx)
+
+        assert first.delivery is not None
+        assert replay.delivery is not None
+        assert first.delivery.id == replay.delivery.id
+        assert replay.delivery.status == "ambiguous"
+        assert replay.delivery.evidence_source == "submit_result"
+        assert replay.delivery.evidence_partial is True
+        assert "omitted native submission and run correlation" in (replay.delivery.error or "")
         assert len([call for call in client.calls if call[0] == "turn_start"]) == 1
         assert await store.lane_delivery_held("target")
     finally:

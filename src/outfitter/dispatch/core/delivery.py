@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime
 from uuid import uuid4
 
 from pydantic import TypeAdapter
@@ -19,6 +20,7 @@ from outfitter.dispatch.contracts.errors import (
 )
 from outfitter.dispatch.registry.delivery import DeliveryReceipt
 from outfitter.dispatch.registry.models import Lane
+from outfitter.dispatch.registry.observations import ProviderCorrelation, ProviderObservation
 from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
 
 from .models import DeliveryLookupInput, DeliveryView, SendInput
@@ -181,6 +183,10 @@ async def send_reserved(inp: SendInput, lane: Lane, text: str, ctx: Ctx) -> Deli
         text=text,
         delivery_id=delivery_id,
         transport="native_queue" if native else "turn",
+        provider=request.target.provider,
+        binding_id=request.target.binding_id,
+        native_session_id=request.target.native_session_id,
+        correlation_id=request.correlation_id,
     )
     if created:
         await ctx.registry.log_action(
@@ -265,25 +271,40 @@ async def submit_reserved(delivery_id: str, ctx: Ctx) -> bool:
             await ctx.registry.record_turn_request_failed(receipt.lane, result.error[:2000])
             return True
         if not isinstance(result, ProviderSubmissionAccepted):
-            await ctx.registry.update_delivery(
-                delivery_id,
-                status="ambiguous",
-                error=result.error[:2000],
+            await ctx.registry.apply_receipt_observation(
+                ProviderObservation(
+                    provider=request.target.provider,
+                    binding_id=request.target.binding_id,
+                    native_session_id=request.target.native_session_id,
+                    kind="uncertain",
+                    correlation=ProviderCorrelation(
+                        delivery_id=receipt.id, correlation_id=request.correlation_id
+                    ),
+                    generation=route.availability.generation,
+                    source="submit_result",
+                    received_at=datetime.fromisoformat(ctx.registry.now_iso()),
+                    partial=True,
+                    reason=result.error[:2000],
+                )
             )
             return True
-        if result.submission_id is None:
-            await ctx.registry.update_delivery(
-                delivery_id,
-                status="accepted",
-                turn_id=result.turn_id,
+        await ctx.registry.apply_receipt_observation(
+            ProviderObservation(
+                provider=request.target.provider,
+                binding_id=request.target.binding_id,
+                native_session_id=request.target.native_session_id,
+                kind="accepted",
+                correlation=ProviderCorrelation(
+                    delivery_id=receipt.id,
+                    correlation_id=request.correlation_id,
+                    native_submission_id=result.submission_id,
+                    native_run_id=result.turn_id,
+                ),
+                generation=route.availability.generation,
+                source="submit_result",
+                received_at=datetime.fromisoformat(ctx.registry.now_iso()),
             )
-        else:
-            await ctx.registry.update_delivery(
-                delivery_id,
-                status="accepted",
-                submission_id=result.submission_id,
-                turn_id=result.turn_id,
-            )
+        )
         if result.turn_id is not None:
             await observe_delivery_execution(receipt.lane, result.turn_id, ctx)
     except asyncio.CancelledError:
@@ -315,20 +336,44 @@ async def submit_reserved(delivery_id: str, ctx: Ctx) -> bool:
     return True
 
 
-async def observe_delivery_execution(lane: str, turn_id: str | None, ctx: Ctx) -> None:
+async def observe_delivery_execution(
+    lane: str, turn_id: str | None, ctx: Ctx, *, generation: str | None = None
+) -> None:
     """Join durable lifecycle facts after either side of the ACK/event race."""
     if turn_id is None:
         return
+    managed = await ctx.registry.find_lane(lane)
+    if managed is None or managed.provider_session_id is None:
+        return
     try:
-        turn = await ctx.registry.get_thread_turn("codex", lane, turn_id)
+        turn = await ctx.registry.get_thread_turn(
+            managed.provider,
+            managed.provider_session_id,
+            turn_id,
+            binding_id=managed.binding_id,
+        )
     except NotFoundError:
         return
     if turn.status not in ("completed", "failed", "interrupted"):
         return
-    for receipt in await ctx.registry.delivery_for_turn(lane, turn_id):
-        await ctx.registry.update_delivery(
-            receipt.id,
-            status="completed" if turn.status == "completed" else "accepted",
-            execution_status=turn.status,
-            error=turn.error,
+    for receipt in await ctx.registry.delivery_for_provider_run(
+        managed.provider, managed.binding_id, managed.provider_session_id, turn_id
+    ):
+        await ctx.registry.apply_receipt_observation(
+            ProviderObservation(
+                provider=managed.provider,
+                binding_id=managed.binding_id,
+                native_session_id=managed.provider_session_id,
+                kind=turn.status,
+                correlation=ProviderCorrelation(
+                    delivery_id=receipt.id,
+                    correlation_id=receipt.correlation_id,
+                    native_submission_id=receipt.submission_id,
+                    native_run_id=turn_id,
+                ),
+                generation=generation,
+                source="live",
+                received_at=datetime.fromisoformat(ctx.registry.now_iso()),
+                reason=turn.error,
+            )
         )

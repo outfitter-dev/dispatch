@@ -13,6 +13,7 @@ import pytest_asyncio
 
 from outfitter.dispatch.contracts.errors import DeliveryConflictError
 from outfitter.dispatch.registry.delivery import DeliveryExecutionStatus, DeliveryReceipt
+from outfitter.dispatch.registry.observations import ProviderCorrelation, ProviderObservation
 from outfitter.dispatch.registry.store import Registry
 
 
@@ -198,6 +199,163 @@ async def test_terminal_updates_preserve_turn_and_drive_queue_status(store: Regi
     assert queued.error == "rejected"
 
 
+async def test_receipt_observation_requires_exact_frozen_correlation(store: Registry) -> None:
+    receipt, _ = await store.reserve_delivery(
+        delivery_id="receipt-1",
+        key=None,
+        lane="lane-1",
+        mode="send",
+        payload='{"text":"one"}',
+        text="one",
+        provider="codex",
+        binding_id="codex-default",
+        native_session_id="lane-1",
+        correlation_id="receipt-1",
+    )
+    base = ProviderObservation(
+        provider="codex",
+        binding_id="codex-default",
+        native_session_id="lane-1",
+        kind="accepted",
+        correlation=ProviderCorrelation(
+            delivery_id=receipt.id,
+            correlation_id=receipt.id,
+            native_run_id="turn-1",
+        ),
+        generation="generation-1",
+        source="submit_result",
+        received_at=_clock(),
+    )
+
+    missing = await store.apply_receipt_observation(
+        base.model_copy(update={"correlation": ProviderCorrelation(delivery_id=receipt.id)})
+    )
+    mismatched = await store.apply_receipt_observation(
+        base.model_copy(update={"binding_id": "other"})
+    )
+    missing_terminal = await store.apply_receipt_observation(
+        base.model_copy(
+            update={
+                "kind": "completed",
+                "correlation": base.correlation.model_copy(update={"native_run_id": None}),
+            }
+        )
+    )
+    missing_acceptance = await store.apply_receipt_observation(
+        base.model_copy(
+            update={
+                "correlation": base.correlation.model_copy(update={"native_run_id": None}),
+            }
+        )
+    )
+    accepted = await store.apply_receipt_observation(base)
+    conflicting_run = await store.apply_receipt_observation(
+        base.model_copy(
+            update={
+                "kind": "completed",
+                "correlation": base.correlation.model_copy(update={"native_run_id": "turn-2"}),
+                "source": "history",
+            }
+        )
+    )
+
+    assert not missing.matched and missing.reason == "missing receipt correlation"
+    assert not mismatched.matched and mismatched.reason == "provider binding mismatch"
+    assert not missing_terminal.matched and missing_terminal.reason == "missing native run evidence"
+    assert not missing_acceptance.matched
+    assert missing_acceptance.reason == "missing positive provider evidence"
+    assert accepted.matched and accepted.changed
+    assert accepted.receipt is not None
+    assert accepted.receipt.status == "accepted"
+    assert accepted.receipt.turn_id == "turn-1"
+    assert accepted.receipt.evidence_source == "submit_result"
+    assert not conflicting_run.matched and conflicting_run.reason == "native run mismatch"
+    assert (await store.get_delivery(receipt.id)).status == "accepted"
+
+
+async def test_terminal_receipt_state_and_provenance_are_absorbing(store: Registry) -> None:
+    receipt, _ = await store.reserve_delivery(
+        delivery_id="receipt-terminal",
+        key=None,
+        lane="lane-1",
+        mode="send",
+        payload='{"text":"one"}',
+        text="one",
+    )
+
+    def observation(kind: str, source: str, *, partial: bool) -> ProviderObservation:
+        return ProviderObservation.model_validate(
+            {
+                "provider": "codex",
+                "binding_id": "codex-default",
+                "native_session_id": "lane-1",
+                "kind": kind,
+                "correlation": {
+                    "delivery_id": receipt.id,
+                    "correlation_id": receipt.id,
+                    "native_run_id": "turn-1",
+                },
+                "source": source,
+                "received_at": _clock(),
+                "partial": partial,
+                "reason": "late failure" if kind == "failed" else None,
+            }
+        )
+
+    completed = await store.apply_receipt_observation(
+        observation("completed", "live", partial=False)
+    )
+    late_failed = await store.apply_receipt_observation(
+        observation("failed", "history", partial=True)
+    )
+    stale_started = await store.apply_receipt_observation(
+        observation("started", "history", partial=True)
+    )
+
+    assert completed.receipt is not None
+    assert completed.receipt.status == "completed"
+    assert completed.receipt.execution_status == "completed"
+    assert completed.receipt.evidence_source == "live"
+    assert completed.receipt.evidence_partial is False
+    assert late_failed.matched and not late_failed.changed
+    assert stale_started.matched and not stale_started.changed
+    assert late_failed.receipt == completed.receipt
+    assert stale_started.receipt == completed.receipt
+
+    legacy, _ = await store.reserve_delivery(
+        delivery_id="receipt-legacy-completed",
+        key=None,
+        lane="lane-1",
+        mode="send",
+        payload='{"text":"legacy"}',
+        text="legacy",
+    )
+    legacy_completed = await store.update_delivery(legacy.id, status="completed")
+    legacy_failed = await store.apply_receipt_observation(
+        ProviderObservation.model_validate(
+            {
+                "provider": "codex",
+                "binding_id": "codex-default",
+                "native_session_id": "lane-1",
+                "kind": "failed",
+                "correlation": {
+                    "delivery_id": legacy.id,
+                    "correlation_id": legacy.id,
+                    "native_run_id": "turn-legacy",
+                },
+                "source": "history",
+                "received_at": _clock(),
+                "partial": True,
+                "reason": "late failure",
+            }
+        )
+    )
+
+    assert legacy_completed.execution_status is None
+    assert legacy_failed.matched and not legacy_failed.changed
+    assert legacy_failed.receipt == legacy_completed
+
+
 @pytest.mark.parametrize("terminal", ["failed", "interrupted"])
 async def test_execution_failure_remains_provider_accepted(
     store: Registry,
@@ -341,7 +499,7 @@ async def test_v21_migration_adds_delivery_ledger(tmp_path: Path) -> None:
         assert receipt.key == "after:migration"
         async with migrated._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-        assert row is not None and int(row[0]) == 25
+        assert row is not None and int(row[0]) == 26
     finally:
         await migrated.close()
 
@@ -452,7 +610,56 @@ async def test_v24_migration_adds_nullable_submitted_intent(tmp_path: Path) -> N
         assert "submitted_payload" in columns
         async with migrated._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-        assert row is not None and int(row[0]) == 25
+        assert row is not None and int(row[0]) == 26
+    finally:
+        await migrated.close()
+
+
+async def test_v25_migration_adds_receipt_observation_identity_and_evidence(tmp_path: Path) -> None:
+    db = tmp_path / "registry-v25.db"
+    seeded = await Registry.open(db, now=_clock)
+    await seeded.add_lane(id="lane-1", handle="@one", source="own")
+    receipt, _ = await seeded.reserve_delivery(
+        delivery_id="legacy-receipt",
+        key=None,
+        lane="lane-1",
+        mode="send",
+        payload=(
+            '{"request":{"correlation_id":"legacy-receipt","target":'
+            '{"binding_id":"local","native_session_id":"conversation-1",'
+            '"provider":"hermes"}},"text":"legacy","version":1}'
+        ),
+        text="legacy",
+    )
+    await seeded.close()
+
+    conn = await aiosqlite.connect(db)
+    await conn.execute("DROP INDEX idx_deliveries_provider_run")
+    for column in (
+        "provider",
+        "binding_id",
+        "native_session_id",
+        "correlation_id",
+        "evidence_source",
+        "evidence_provider_time",
+        "evidence_received_at",
+        "evidence_partial",
+        "evidence_generation",
+    ):
+        await conn.execute(f"ALTER TABLE deliveries DROP COLUMN {column}")
+    await conn.execute("PRAGMA user_version = 25")
+    await conn.commit()
+    await conn.close()
+
+    migrated = await Registry.open(db, now=_clock)
+    try:
+        restored = await migrated.get_delivery(receipt.id)
+        assert restored.provider == "hermes"
+        assert restored.binding_id == "local"
+        assert restored.native_session_id == "conversation-1"
+        assert restored.correlation_id == receipt.id
+        assert restored.evidence_source is None
+        assert restored.evidence_partial is False
     finally:
         await migrated.close()
 

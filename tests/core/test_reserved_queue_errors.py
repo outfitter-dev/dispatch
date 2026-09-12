@@ -8,11 +8,7 @@ import json
 import pytest
 
 from outfitter.dispatch.core.queue import drain_idle_queues, drain_next_queued_message
-from outfitter.dispatch.registry.delivery import (
-    DeliveryExecutionStatus,
-    DeliveryReceipt,
-    DeliveryStatus,
-)
+from outfitter.dispatch.registry.observations import ProviderObservation, ReceiptTransition
 from outfitter.dispatch.registry.store import Registry
 from tests.core.delivery_fakes import AcceptedClient
 from tests.fakes import make_ctx
@@ -38,28 +34,15 @@ async def test_reserved_failure_does_not_stop_other_idle_queue(
             ),
         )
         good = await store.enqueue_message(lane="good", text="good")
-        update = store.update_delivery
+        apply_observation = store.apply_receipt_observation
 
-        async def fail_ack_once(
-            delivery_id: str,
-            *,
-            status: DeliveryStatus,
-            turn_id: str | None = None,
-            error: str | None = None,
-            execution_status: DeliveryExecutionStatus | None = None,
-        ) -> DeliveryReceipt:
-            if delivery_id == failed.id and status == "accepted":
+        async def fail_ack_once(observation: ProviderObservation) -> ReceiptTransition:
+            if observation.correlation.delivery_id == failed.id and observation.kind == "accepted":
                 raise RuntimeError("synthetic ACK bookkeeping failure")
-            return await update(
-                delivery_id,
-                status=status,
-                turn_id=turn_id,
-                error=error,
-                execution_status=execution_status,
-            )
+            return await apply_observation(observation)
 
         if fault == "bookkeeping":
-            monkeypatch.setattr(store, "update_delivery", fail_ack_once)
+            monkeypatch.setattr(store, "apply_receipt_observation", fail_ack_once)
         client = AcceptedClient()
         ctx = make_ctx(store, client)
 

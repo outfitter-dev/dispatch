@@ -93,7 +93,13 @@ async def index_codex_lane_event(
 
     state = _runtime_state(lane, event, received_at, policy)
     if state is not None:
-        await registry.upsert_lane_runtime_state(state)
+        stale_terminal = (
+            isinstance(event, TurnCompleted | TurnFailed)
+            and lane.active_turn_id is not None
+            and lane.active_turn_id != event.turn_id
+        )
+        if not stale_terminal:
+            await registry.upsert_lane_runtime_state(state)
 
 
 def _event_type(event: LaneEvent) -> str:

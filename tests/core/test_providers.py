@@ -79,6 +79,7 @@ def test_default_codex_route_fixes_exact_native_identity_and_separate_facts() ->
     ("outcome", "expected_type"),
     [
         ("accepted", ProviderSubmissionAccepted),
+        ("missing_correlation", ProviderSubmissionUnknown),
         ("rejected", ProviderSubmissionRejected),
         ("unknown", ProviderSubmissionUnknown),
     ],
@@ -96,6 +97,8 @@ async def test_codex_adapter_classifies_prepared_submission_outcome(
                 raise AppServerError(-32602, "invalid request")
             if outcome == "unknown":
                 raise TransportError("lost acknowledgment")
+            if outcome == "missing_correlation":
+                return {}
             return {"submissionId": "submission-1", "turn": {"id": "turn-1"}}
 
     client = OutcomeClient()
@@ -120,6 +123,9 @@ async def test_codex_adapter_classifies_prepared_submission_outcome(
     if isinstance(result, ProviderSubmissionAccepted):
         assert result.submission_id == "submission-1"
         assert result.turn_id == "turn-1"
+    if outcome == "missing_correlation":
+        assert isinstance(result, ProviderSubmissionUnknown)
+        assert result.error == "provider response omitted native submission and run correlation"
 
 
 def test_route_never_falls_back_for_missing_binding_or_native_identity() -> None:
