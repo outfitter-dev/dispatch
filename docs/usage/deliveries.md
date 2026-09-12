@@ -17,13 +17,21 @@ omit the caller key only when each invocation should create a separate delivery.
 Other unkeyed delivery retains its existing behavior and does not promise deduplication.
 
 Keys are exact, nonblank strings of at most 200 characters, unique within one
-Dispatch Registry. Dispatch resolves the thread selector before binding the key
-to the destination, mode, text (including any intro), cwd and saved turn settings.
-The same key and request return the same receipt, including after restart.
-Different bound input raises `delivery_conflict`; changing a title or using a
-different selector for the same thread does not change its identity. A changed
-saved turn setting is a different request. Omitted settings still delegate their
-values to Codex defaults.
+Dispatch Registry. Dispatch first captures the submitted selector, mode, plain
+input and options. It checks that intent before resolving a mutable selector,
+rendering an intro, reading current settings or contacting the provider. The same
+key and submitted request return the same receipt, including after restart.
+Changing the selector spelling, mode, text, intro option or intro caller raises
+`delivery_conflict`, even if two selectors currently resolve to the same thread.
+
+Only a new key is resolved and prepared. Its private prepared request freezes the
+stable Dispatch thread, provider, binding, native session, delivery transport,
+receipt correlation ID, effective text, cwd and saved turn settings. Concurrent
+copies of the same submitted request keep whichever complete prepared request was
+inserted first. Later handle rebindings and default or saved-setting changes do
+not redirect or redefine an admitted request. Current writer authority, binding
+mapping and provider readiness are still checked immediately before submission.
+Failure there happens before provider I/O and does not fall back to another route.
 
 Attached queue delivery binds the destination, mode, transport and exact text.
 It uses the existing owner's execution settings; Dispatch's saved cwd/model/turn
@@ -131,9 +139,14 @@ authoritative idle event confirms readiness. There is no unlimited background po
 Reconnect also checks acknowledged work whose completion notification may have
 been missed; acceptance survives even when completion history is unavailable.
 
-The Registry retains the normalized request needed for binding and exact input
-comparison. This adds schema version 23; an older executable cannot open that
-upgraded Registry. The private lab package is tested with isolated homes. New
+The Registry retains submitted intent separately from the immutable prepared
+provider request. This adds schema version 25; an older executable cannot open
+that upgraded Registry. Rows created before version 25 have no submitted-intent
+record. They are explicitly interpreted as default-Codex requests and replay only
+when the caller uses the stable Dispatch thread ID with the original mode, text,
+and no structured content or intro. Other legacy key reuse returns
+`delivery_conflict` because the original submitted selector or options cannot be
+proved. The private lab package is tested with isolated homes. New
 receipt operations fail closed against pre-handshake daemons that lack them;
 unchanged compatible reads remain available.
 

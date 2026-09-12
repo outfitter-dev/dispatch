@@ -8,21 +8,134 @@ from uuid import uuid4
 
 from pydantic import TypeAdapter
 
-from outfitter.dispatch.client.errors import AppServerError, ClientError, ProtocolError
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.contracts.errors import (
     AuthorityError,
     CapabilityUnavailableError,
+    DeliveryConflictError,
+    DispatchError,
     NotFoundError,
     ValidationError,
 )
+from outfitter.dispatch.registry.delivery import DeliveryReceipt
 from outfitter.dispatch.registry.models import Lane
+from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
 
 from .models import DeliveryLookupInput, DeliveryView, SendInput
-from .providers import ProviderAction, route_lane
+from .providers import (
+    PreparedProviderRequest,
+    ProviderAction,
+    ProviderSubmissionAccepted,
+    ProviderSubmissionRejected,
+    ProviderTarget,
+    route_lane,
+    router_for,
+)
 from .turn_settings import TurnStartSettings, load_turn_start_settings
 
 _SETTINGS = TypeAdapter(TurnStartSettings)
+_PREPARED = TypeAdapter(PreparedProviderRequest)
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def submitted_payload(inp: SendInput) -> str:
+    """Canonical caller intent, captured before mutable resolution."""
+
+    return _canonical_json(
+        {
+            "version": 1,
+            "lane": inp.lane,
+            "text": inp.text,
+            "content": [item.model_dump(mode="json") for item in inp.content],
+            "mode": inp.mode,
+            "intro": inp.intro,
+            "caller_thread_id": inp.caller_thread_id if inp.intro else None,
+        }
+    )
+
+
+def _encode_prepared(request: PreparedProviderRequest) -> str:
+    return _canonical_json(
+        {
+            "version": 1,
+            # Retained at top level for the bounded v23 reconciliation reader.
+            "text": request.text,
+            "request": _PREPARED.dump_python(request, mode="json"),
+        }
+    )
+
+
+def _decode_prepared(receipt: DeliveryReceipt) -> PreparedProviderRequest:
+    payload = json.loads(receipt.payload)
+    if payload.get("version") == 1 and isinstance(payload.get("request"), dict):
+        return _PREPARED.validate_python(payload["request"])
+
+    # Pre-v25 receipts were created only for the default Codex binding. Their
+    # stable lane id was also the native Codex session id.
+    settings = None
+    cwd = None
+    if receipt.transport == "turn":
+        settings = _SETTINGS.validate_python(payload["settings"])
+        cwd = str(payload["cwd"])
+    return PreparedProviderRequest(
+        target=ProviderTarget(
+            lane_id=receipt.lane,
+            provider="codex",
+            binding_id=DEFAULT_CODEX_BINDING_ID,
+            native_session_id=receipt.lane,
+        ),
+        action=(
+            ProviderAction.QUEUE_NATIVE
+            if receipt.transport == "native_queue"
+            else ProviderAction.SEND
+        ),
+        transport=receipt.transport,
+        correlation_id=receipt.id,
+        text=str(payload["text"]),
+        cwd=cwd,
+        settings=settings,
+    )
+
+
+def _legacy_replay_matches(inp: SendInput, receipt: DeliveryReceipt) -> bool:
+    """Recognize only legacy retries whose original intent is still provable."""
+
+    if inp.lane != receipt.lane or inp.mode != receipt.mode or inp.intro or inp.content:
+        return False
+    try:
+        return _decode_prepared(receipt).text == (inp.text or "")
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+async def find_replay(inp: SendInput, ctx: Ctx) -> tuple[DeliveryView, Lane] | None:
+    """Return an exact prior reservation before resolving any mutable input."""
+
+    if inp.idempotency_key is None:
+        return None
+    receipt = await ctx.registry.get_delivery_by_key(inp.idempotency_key)
+    if receipt is None:
+        return None
+    matches = (
+        receipt.submitted_payload == submitted_payload(inp)
+        if receipt.submitted_payload is not None
+        else _legacy_replay_matches(inp, receipt)
+    )
+    if not matches:
+        detail = (
+            "legacy delivery keys can replay only with the stable thread id and original "
+            "plain-text options"
+            if receipt.submitted_payload is None
+            else "delivery key is already bound to different submitted input"
+        )
+        raise DeliveryConflictError(f"delivery key {inp.idempotency_key!r}: {detail}")
+    lane = await ctx.registry.find_lane(receipt.lane)
+    if lane is None:
+        raise NotFoundError(f"no managed thread {receipt.lane!r}")
+    return DeliveryView.model_validate(receipt.model_dump(mode="json")), lane
 
 
 async def get_receipt(inp: DeliveryLookupInput, ctx: Ctx) -> DeliveryView:
@@ -48,24 +161,23 @@ async def send_reserved(inp: SendInput, lane: Lane, text: str, ctx: Ctx) -> Deli
     mode = inp.mode
     if mode != "send" and mode != "queue":
         raise ValidationError("idempotent delivery supports send or queue")
-    settings = await load_turn_start_settings(ctx.registry, lane.id)
-    payload = json.dumps(
-        {"text": text}
-        if native
-        else {
-            "text": text,
-            "cwd": lane.cwd or ".",
-            "settings": _SETTINGS.dump_python(settings, mode="json"),
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    settings = None if native else await load_turn_start_settings(ctx.registry, lane.id)
     delivery_id = str(uuid4())
+    request = PreparedProviderRequest(
+        target=route.target,
+        action=ProviderAction.QUEUE_NATIVE if native else ProviderAction.SEND,
+        transport="native_queue" if native else "turn",
+        correlation_id=delivery_id,
+        text=text,
+        cwd=None if native else lane.cwd or ".",
+        settings=settings,
+    )
     receipt, created = await ctx.registry.reserve_delivery(
         key=inp.idempotency_key,
         lane=lane.id,
         mode=mode,
-        payload=payload,
+        submitted_payload=submitted_payload(inp),
+        payload=_encode_prepared(request),
         text=text,
         delivery_id=delivery_id,
         transport="native_queue" if native else "turn",
@@ -91,92 +203,101 @@ async def submit_reserved(delivery_id: str, ctx: Ctx) -> bool:
     lane = await ctx.registry.find_lane(receipt.lane)
     if lane is None:
         raise NotFoundError(f"no managed thread {receipt.lane!r}")
-    action = (
-        ProviderAction.QUEUE_NATIVE if receipt.transport == "native_queue" else ProviderAction.SEND
-    )
-    route = route_lane(ctx, lane, action)
-    route.recheck(ctx.provider_session_id or None)
-    payload = json.loads(receipt.payload)
+    request = _decode_prepared(receipt)
     if not await ctx.registry.claim_delivery(delivery_id):
         return False
-    if receipt.transport == "native_queue" and not ctx.policy.allow_attached_writes:
-        await ctx.registry.update_delivery(
-            delivery_id, status="failed", error="attached-write policy revoked before submission"
-        )
-        return True
     provider_call_entered = False
     try:
+        expected_action = (
+            ProviderAction.QUEUE_NATIVE
+            if receipt.transport == "native_queue"
+            else ProviderAction.SEND
+        )
+        if (
+            request.target.lane_id != receipt.lane
+            or request.action != expected_action
+            or request.transport != receipt.transport
+            or request.correlation_id != receipt.id
+        ):
+            raise ValidationError("reserved provider request does not match its delivery receipt")
+        if (
+            lane.provider,
+            lane.binding_id,
+            lane.provider_session_id,
+        ) != (
+            request.target.provider,
+            request.target.binding_id,
+            request.target.native_session_id,
+        ):
+            raise CapabilityUnavailableError(
+                "reserved provider target no longer matches the current thread binding"
+            )
         if receipt.transport == "native_queue":
-            async with asyncio.timeout(15):
-                route.recheck(ctx.provider_session_id or None)
-                provider_call_entered = True
-                submission = await route.adapter.queue_add(
-                    route.target, payload["text"], client_user_message_id=receipt.id
+            if lane.source != "attached" or not ctx.policy.allow_attached_writes:
+                await ctx.registry.update_delivery(
+                    delivery_id,
+                    status="failed",
+                    error="attached-write policy revoked before submission",
                 )
-            if (
-                submission.client_user_message_id != receipt.id
-                or len(submission.input) != 1
-                or submission.input[0].type != "text"
-                or submission.input[0].text != payload["text"]
-            ):
-                raise ProtocolError("native queue acknowledgment does not match the reserved input")
+                return True
+        elif lane.source != "own":
+            raise AuthorityError("reserved turn submission requires a Dispatch-owned thread")
+
+        route = router_for(ctx).route_target(request.target, request.action)
+        route.recheck(ctx.provider_session_id or None)
+        if receipt.transport == "turn":
+            await ctx.registry.update_lane_status(receipt.lane, "busy")
+        route.recheck(ctx.provider_session_id or None)
+        provider_call_entered = True
+        result = await route.adapter.submit_prepared(request)
+        if isinstance(result, ProviderSubmissionRejected):
             await ctx.registry.update_delivery(
-                delivery_id, status="accepted", submission_id=submission.id
+                delivery_id,
+                status="failed",
+                error=result.error[:2000],
+            )
+            if receipt.transport == "native_queue":
+                provider_call_entered = False
+                raise CapabilityUnavailableError(
+                    f"native queue rejected by the connected Codex provider: {result.error}; "
+                    f"receipt {receipt.id} is failed; no resume, start or steer fallback"
+                )
+            await ctx.registry.record_turn_request_failed(receipt.lane, result.error[:2000])
+            return True
+        if not isinstance(result, ProviderSubmissionAccepted):
+            await ctx.registry.update_delivery(
+                delivery_id,
+                status="ambiguous",
+                error=result.error[:2000],
             )
             return True
-        settings = _SETTINGS.validate_python(payload["settings"])
-        await ctx.registry.update_lane_status(receipt.lane, "busy")
-        async with asyncio.timeout(15):
-            route.recheck(ctx.provider_session_id or None)
-            provider_call_entered = True
-            result = await route.adapter.start_turn(
-                route.target,
-                payload["text"],
-                cwd=payload["cwd"],
-                client_user_message_id=receipt.id,
-                permission_profile=settings.permission_profile,
-                approval_policy=settings.approval_policy,
-                approvals_reviewer=settings.approvals_reviewer,
-                sandbox_policy=settings.sandbox_policy,
-                effort=settings.effort,
-                summary=settings.summary,
-                model=settings.model,
-                service_tier=settings.service_tier,
-                output_schema=settings.output_schema,
-                personality=settings.personality,
+        if result.submission_id is None:
+            await ctx.registry.update_delivery(
+                delivery_id,
+                status="accepted",
+                turn_id=result.turn_id,
             )
-        turn = result.get("turn")
-        turn_id = turn.get("id") if isinstance(turn, dict) else None
-        if not isinstance(turn_id, str):
-            turn_id = result.get("turnId")
-        await ctx.registry.update_delivery(
-            delivery_id,
-            status="accepted",
-            turn_id=turn_id if isinstance(turn_id, str) else None,
-        )
-        if isinstance(turn_id, str):
-            await observe_delivery_execution(receipt.lane, turn_id, ctx)
-    except (ClientError, TimeoutError) as exc:
-        # Only protocol-level request rejection proves this attempt never ran.
-        definite = isinstance(exc, AppServerError) and exc.code in {-32600, -32601, -32602}
-        await ctx.registry.update_delivery(
-            delivery_id,
-            status="failed" if definite else "ambiguous",
-            error=str(exc)[:2000],
-        )
-        if definite and receipt.transport == "native_queue":
-            raise CapabilityUnavailableError(
-                f"native queue rejected by the connected Codex provider: {exc}; "
-                f"receipt {receipt.id} is failed; no resume, start or steer fallback"
-            ) from exc
-        if definite:
-            await ctx.registry.record_turn_request_failed(receipt.lane, str(exc)[:2000])
-        return True
+        else:
+            await ctx.registry.update_delivery(
+                delivery_id,
+                status="accepted",
+                submission_id=result.submission_id,
+                turn_id=result.turn_id,
+            )
+        if result.turn_id is not None:
+            await observe_delivery_execution(receipt.lane, result.turn_id, ctx)
     except asyncio.CancelledError:
         await ctx.registry.update_delivery(
             delivery_id,
             status="ambiguous",
             error="submission cancelled; provider outcome unknown",
+        )
+        raise
+    except DispatchError as exc:
+        await ctx.registry.update_delivery(
+            delivery_id,
+            status="ambiguous" if provider_call_entered else "failed",
+            error=str(exc)[:2000],
         )
         raise
     except Exception as exc:

@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 
 import pytest
 
+from outfitter.dispatch.contracts.errors import (
+    CapabilityUnavailableError,
+    DeliveryConflictError,
+    ValidationError,
+)
 from outfitter.dispatch.core import handlers
-from outfitter.dispatch.core.models import SendInput
+from outfitter.dispatch.core.delivery import submit_reserved
+from outfitter.dispatch.core.models import SendInput, TextContent
+from outfitter.dispatch.core.providers import CodexLaneAdapter, ProviderAvailability, ProviderRouter
+from outfitter.dispatch.core.turn_settings import runtime_settings_for_lane
 from outfitter.dispatch.registry.store import Registry
 from tests.core.delivery_fakes import AcceptedClient, LostAckClient
 from tests.fakes import make_ctx
@@ -100,8 +109,6 @@ async def test_execution_state_correlates_even_when_event_precedes_ack(
 
 @pytest.mark.asyncio
 async def test_concurrent_key_replays_share_receipt_and_conflicting_reuse_fails() -> None:
-    from outfitter.dispatch.contracts.errors import DeliveryConflictError
-
     store = await Registry.open()
     try:
         await store.add_lane(id="target", handle="@target", source="own", status="idle")
@@ -116,17 +123,180 @@ async def test_concurrent_key_replays_share_receipt_and_conflicting_reuse_fails(
             )
         )
         assert len({ack.delivery.id for ack in acks if ack.delivery is not None}) == 1
-        same = await handlers.send_message(
-            SendInput(lane="target", text="hello", idempotency_key="one"),
-            ctx,
-        )
-        assert same.delivery is not None and same.delivery.status == "accepted"
         with pytest.raises(DeliveryConflictError):
             await handlers.send_message(
-                SendInput(lane="target", text="different", idempotency_key="one"),
+                SendInput(lane="@target", text="different", idempotency_key="one"),
                 ctx,
             )
         assert len([call for call in client.calls if call[0] == "turn_start"]) == 1
+    finally:
+        await store.close()
+
+
+async def test_exact_replay_precedes_selector_and_default_resolution() -> None:
+    store = await Registry.open()
+    try:
+        lane = await store.add_lane(
+            id="target", handle="@target", source="own", status="idle", cwd="/original"
+        )
+        await store.upsert_lane_runtime_settings(
+            runtime_settings_for_lane(
+                lane=lane.id,
+                updated_at=store.now_iso(),
+                model="original-model",
+            )
+        )
+        client = AcceptedClient()
+        ctx = make_ctx(store, client)
+        request = SendInput(lane="@target", text="hello", idempotency_key="stable-key")
+
+        first = await handlers.send_message(request, ctx)
+        await store.update_lane_handle(lane.id, "@moved")
+        await store.add_lane(id="other", handle="@target", source="own", status="idle")
+        await store.upsert_lane_runtime_settings(
+            runtime_settings_for_lane(
+                lane=lane.id,
+                updated_at=store.now_iso(),
+                model="changed-model",
+            )
+        )
+
+        replay = await handlers.send_message(request, ctx)
+
+        assert first.delivery is not None and replay.delivery is not None
+        assert replay.delivery.id == first.delivery.id
+        assert replay.lane == lane.id
+        starts = [params for name, params in client.calls if name == "turn_start"]
+        assert len(starts) == 1
+        assert starts[0]["args"] == (lane.id, "hello")
+        assert starts[0]["cwd"] == "/original"
+        assert starts[0]["model"] == "original-model"
+        stored = await store.get_delivery(first.delivery.id)
+        prepared = json.loads(stored.payload)["request"]
+        assert prepared["target"] == {
+            "lane_id": lane.id,
+            "provider": "codex",
+            "binding_id": "codex-default",
+            "native_session_id": lane.id,
+        }
+        assert prepared["correlation_id"] == stored.id
+        assert prepared["settings"]["model"] == "original-model"
+        with pytest.raises(DeliveryConflictError):
+            await handlers.send_message(
+                SendInput(lane="target", text="hello", idempotency_key="stable-key"), ctx
+            )
+    finally:
+        await store.close()
+
+
+async def test_new_keyed_structured_content_rejects_before_target_or_provider_io() -> None:
+    store = await Registry.open()
+    try:
+        client = AcceptedClient()
+        ctx = make_ctx(store, client)
+
+        with pytest.raises(ValidationError, match=r"structured content.*idempotent delivery"):
+            await handlers.send_message(
+                SendInput(
+                    lane="missing-target",
+                    content=[TextContent(text="hello")],
+                    idempotency_key="rich-key",
+                ),
+                ctx,
+            )
+
+        assert client.calls == []
+        assert await store.get_delivery_by_key("rich-key") is None
+    finally:
+        await store.close()
+
+
+async def test_legacy_key_replay_is_limited_to_provable_stable_input() -> None:
+    store = await Registry.open()
+    try:
+        await store.add_lane(id="target", handle="@target", source="own", status="idle")
+        original, _ = await store.reserve_delivery(
+            key="legacy-key",
+            lane="target",
+            mode="send",
+            payload='{"cwd":"/tmp","settings":{},"text":"hello"}',
+            text="hello",
+        )
+        client = AcceptedClient()
+        ctx = make_ctx(store, client)
+
+        replay = await handlers.send_message(
+            SendInput(lane="target", text="hello", idempotency_key="legacy-key"), ctx
+        )
+
+        assert replay.delivery is not None and replay.delivery.id == original.id
+        assert client.calls == []
+        with pytest.raises(DeliveryConflictError, match="legacy delivery keys"):
+            await handlers.send_message(
+                SendInput(lane="@target", text="hello", idempotency_key="legacy-key"), ctx
+            )
+        with pytest.raises(DeliveryConflictError, match="legacy delivery keys"):
+            await handlers.send_message(
+                SendInput(lane="target", text="hello", intro=True, idempotency_key="legacy-key"),
+                ctx,
+            )
+    finally:
+        await store.close()
+
+
+async def test_frozen_binding_and_current_availability_are_checked_before_submission() -> None:
+    store = await Registry.open()
+    try:
+        await store.add_lane(id="target", handle="@target", source="own", status="busy")
+        client = AcceptedClient()
+        ctx = make_ctx(store, client)
+        reserved = await handlers.send_message(
+            SendInput(lane="target", text="later", mode="queue", idempotency_key="held"), ctx
+        )
+        assert reserved.delivery is not None and reserved.delivery.status == "queued"
+        assert client.calls == []
+
+        ctx.providers = ProviderRouter(
+            (
+                CodexLaneAdapter(
+                    client,
+                    availability=ProviderAvailability(ready=False, reason="binding stopped"),
+                ),
+            )
+        )
+        with pytest.raises(CapabilityUnavailableError, match="binding stopped"):
+            await submit_reserved(reserved.delivery.id, ctx)
+
+        receipt = await store.get_delivery(reserved.delivery.id)
+        assert receipt.status == "failed"
+        assert client.calls == []
+    finally:
+        await store.close()
+
+
+async def test_legacy_prepared_request_never_adopts_a_changed_lane_binding() -> None:
+    store = await Registry.open()
+    try:
+        await store.add_lane(id="target", handle="@target", source="own", status="busy")
+        receipt, _ = await store.reserve_delivery(
+            key="legacy",
+            lane="target",
+            mode="queue",
+            payload='{"cwd":"/tmp","settings":{},"text":"later"}',
+            text="later",
+        )
+        await store._conn.execute(
+            "UPDATE lanes SET provider = 'synthetic', binding_id = 'new', "
+            "provider_session_id = 'native-new' WHERE id = 'target'"
+        )
+        await store._conn.commit()
+        client = AcceptedClient()
+
+        with pytest.raises(CapabilityUnavailableError, match="no longer matches"):
+            await submit_reserved(receipt.id, make_ctx(store, client))
+
+        assert (await store.get_delivery(receipt.id)).status == "failed"
+        assert client.calls == []
     finally:
         await store.close()
 

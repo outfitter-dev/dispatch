@@ -29,6 +29,7 @@ class DeliveryReceipt(BaseModel):
     mode: DeliveryMode
     transport: DeliveryTransport = "turn"
     submission_id: str | None = None
+    submitted_payload: str | None = None
     payload: str
     status: DeliveryStatus = "queued"
     execution_status: DeliveryExecutionStatus | None = None

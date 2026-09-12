@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from outfitter.dispatch.client.errors import AppServerError, TransportError
 from outfitter.dispatch.client.models import ThreadInfo
 from outfitter.dispatch.contracts.errors import CapabilityUnavailableError
 from outfitter.dispatch.core import handlers
@@ -19,12 +20,18 @@ from outfitter.dispatch.core.models import (
 )
 from outfitter.dispatch.core.providers import (
     CodexLaneAdapter,
+    PreparedProviderRequest,
     ProviderAction,
     ProviderAvailability,
     ProviderBindingFacts,
     ProviderDurability,
     ProviderRouter,
+    ProviderSubmissionAccepted,
+    ProviderSubmissionRejected,
+    ProviderSubmissionUnknown,
+    ProviderTarget,
 )
+from outfitter.dispatch.core.turn_settings import TurnStartSettings
 from outfitter.dispatch.registry.models import Lane
 from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID, Registry
 from tests.fakes import FakeLaneClient, make_ctx
@@ -66,6 +73,53 @@ def test_default_codex_route_fixes_exact_native_identity_and_separate_facts() ->
     route.recheck("generation-1")
     with pytest.raises(CapabilityUnavailableError, match="generation changed"):
         route.recheck("generation-2")
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected_type"),
+    [
+        ("accepted", ProviderSubmissionAccepted),
+        ("rejected", ProviderSubmissionRejected),
+        ("unknown", ProviderSubmissionUnknown),
+    ],
+)
+async def test_codex_adapter_classifies_prepared_submission_outcome(
+    outcome: str,
+    expected_type: type[
+        ProviderSubmissionAccepted | ProviderSubmissionRejected | ProviderSubmissionUnknown
+    ],
+) -> None:
+    class OutcomeClient(FakeLaneClient):
+        async def turn_start(self, *args: object, **kwargs: object) -> dict[str, object]:
+            self._record("turn_start", args=args, **kwargs)
+            if outcome == "rejected":
+                raise AppServerError(-32602, "invalid request")
+            if outcome == "unknown":
+                raise TransportError("lost acknowledgment")
+            return {"submissionId": "submission-1", "turn": {"id": "turn-1"}}
+
+    client = OutcomeClient()
+    result = await CodexLaneAdapter(client).submit_prepared(
+        PreparedProviderRequest(
+            target=ProviderTarget(
+                lane_id="native-codex",
+                provider="codex",
+                binding_id=DEFAULT_CODEX_BINDING_ID,
+                native_session_id="native-codex",
+            ),
+            action=ProviderAction.SEND,
+            transport="turn",
+            correlation_id="receipt-1",
+            text="hello",
+            cwd="/tmp",
+            settings=TurnStartSettings(),
+        )
+    )
+
+    assert isinstance(result, expected_type)
+    if isinstance(result, ProviderSubmissionAccepted):
+        assert result.submission_id == "submission-1"
+        assert result.turn_id == "turn-1"
 
 
 def test_route_never_falls_back_for_missing_binding_or_native_identity() -> None:

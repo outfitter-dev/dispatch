@@ -341,7 +341,7 @@ async def test_v21_migration_adds_delivery_ledger(tmp_path: Path) -> None:
         assert receipt.key == "after:migration"
         async with migrated._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-        assert row is not None and int(row[0]) == 24
+        assert row is not None and int(row[0]) == 25
     finally:
         await migrated.close()
 
@@ -382,6 +382,79 @@ async def test_two_connections_reserve_key_and_claim_lane_once(tmp_path: Path) -
     finally:
         await first.close()
         await second.close()
+
+
+async def test_concurrent_duplicate_uses_submitted_intent_and_keeps_first_prepared_request(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "submitted-intent.db"
+    first = await Registry.open(db, now=_clock)
+    await first.add_lane(id="lane-1", handle="@one", source="own")
+    await first.add_lane(id="lane-2", handle="@two", source="own")
+    second = await Registry.open(db, now=_clock)
+    submitted = '{"lane":"@moving","mode":"send","text":"same","version":1}'
+    try:
+        reservations = await asyncio.gather(
+            first.reserve_delivery(
+                key="shared",
+                lane="lane-1",
+                mode="send",
+                submitted_payload=submitted,
+                payload='{"prepared":"first"}',
+                text="first",
+            ),
+            second.reserve_delivery(
+                key="shared",
+                lane="lane-2",
+                mode="send",
+                submitted_payload=submitted,
+                payload='{"prepared":"second"}',
+                text="second",
+            ),
+        )
+
+        assert sorted(created for _, created in reservations) == [False, True]
+        receipts = [receipt for receipt, _ in reservations]
+        assert receipts[0] == receipts[1]
+        assert (receipts[0].lane, receipts[0].payload) in {
+            ("lane-1", '{"prepared":"first"}'),
+            ("lane-2", '{"prepared":"second"}'),
+        }
+        with pytest.raises(DeliveryConflictError, match="already bound"):
+            await first.reserve_delivery(
+                key="shared",
+                lane=receipts[0].lane,
+                mode="send",
+                submitted_payload='{"lane":"@moving","text":"changed","version":1}',
+                payload=receipts[0].payload,
+                text="changed",
+            )
+    finally:
+        await first.close()
+        await second.close()
+
+
+async def test_v24_migration_adds_nullable_submitted_intent(tmp_path: Path) -> None:
+    db = tmp_path / "registry-v24.db"
+    seeded = await Registry.open(db, now=_clock)
+    await seeded.close()
+
+    conn = await aiosqlite.connect(db)
+    await conn.execute("ALTER TABLE deliveries DROP COLUMN submitted_payload")
+    await conn.execute("PRAGMA user_version = 24")
+    await conn.commit()
+    await conn.close()
+
+    migrated = await Registry.open(db, now=_clock)
+    try:
+        async with migrated._conn.execute("PRAGMA table_info(deliveries)") as cur:
+            columns = {str(row["name"]) for row in await cur.fetchall()}
+        assert "submitted_payload" in columns
+        async with migrated._conn.execute("PRAGMA user_version") as cur:
+            row = await cur.fetchone()
+        assert row is not None and int(row[0]) == 25
+    finally:
+        await migrated.close()
 
 
 async def test_reconcile_idle_uses_lane_update_compare_and_swap() -> None:
