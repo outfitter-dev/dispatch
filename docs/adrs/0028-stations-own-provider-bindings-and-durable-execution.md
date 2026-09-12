@@ -4,7 +4,7 @@ slug: stations-own-provider-bindings-and-durable-execution
 title: Stations Own Provider Bindings and Durable Execution
 status: proposed
 created: 2026-09-11
-updated: 2026-09-11
+updated: 2026-09-12
 owners: ['[galligan](https://github.com/galligan)']
 ---
 
@@ -26,7 +26,9 @@ A **station** is one Dispatch runtime boundary owning a local registry, policy a
 
 Dispatch owns canonical ops, target resolution, local authorization, reservations, ordering, recovery policy and state projections. Codex, Hermes and Claude own native inference, tools, memory and canonical conversation history. Fixed typed adapters translate prepared requests and native evidence beneath the existing authored ops. They do not receive the entire registry, scheduler or surface context.
 
-Keep one daemon per station. Provider process ownership, client connection ownership and human UI attachment are separate. Closing an external Hermes API client must not stop its runtime. The Hermes API service and the proposed Dispatch Network gateway are different services with different authority and receipts.
+Keep one daemon per station. Provider process ownership, client connection ownership and human UI attachment are separate. Closing a client attached to an external Hermes service must not stop that service. The initial coding adapter instead owns a long-lived native stdio gateway child; a transient CLI/MCP client does not own that child, and loss of the daemon/pipe does not provide runtime survival. The Hermes runtime and the proposed Dispatch Network gateway are different services with different authority and receipts.
+
+The [native Hermes investigation](../research/hermes-native-provider-contract.md) selects owned stdio because it supports per-session cwd. Plain text and dedicated Dispatch-owned sessions are the initial contract. Native acknowledgments lack durable keyed admission; local reservations prevent automatic duplicate submission and preserve unknown outcomes. Ordinary cold resume can auto-continue a stale crash marker even after prior terminal evidence, so automatic continuation across a gateway generation change requires a supported suppression guarantee. Until then, quarantine old sessions while permitting new independent work after fencing the old child. Desktop attachment and unrestricted autonomous-turn attribution retain separate proof gates. The [HTTP Runs alternative](../research/hermes-http-runs-contract.md) does not provide a fallback.
 
 ### Stable thread identity, scoped native identity
 
