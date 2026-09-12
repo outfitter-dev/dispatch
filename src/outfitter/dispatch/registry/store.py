@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -20,7 +21,11 @@ from uuid import uuid4
 
 import aiosqlite
 
-from outfitter.dispatch.contracts.errors import DeliveryConflictError, NotFoundError
+from outfitter.dispatch.contracts.errors import (
+    DeliveryConflictError,
+    NotFoundError,
+    ValidationError,
+)
 
 from .delivery import (
     DeliveryExecutionStatus,
@@ -63,10 +68,18 @@ from .models import (
     Trigger,
     WhenAdapter,
 )
-from .refs import BASE58BTC_ALPHABET, CODEX_REF_SOURCE, codex_ref_payload, make_ref
+from .refs import (
+    BASE58BTC_ALPHABET,
+    CODEX_REF_SOURCE,
+    GENERIC_REF_SOURCE,
+    codex_ref_payload,
+    generic_ref_payload,
+    make_ref,
+)
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
+DEFAULT_CODEX_BINDING_ID = "codex-default"
 
 
 class _ReentrantAsyncLock:
@@ -164,6 +177,7 @@ class ProviderThreadTopology:
     """Bounded parent/fork topology around one or more provider threads."""
 
     provider: str
+    binding_id: str
     requested_thread_ids: list[str]
     nodes: list[ProviderThreadNode]
     roots: dict[str, ProviderThreadNode | None]
@@ -178,11 +192,11 @@ class ProviderThreadTopology:
     truncated: bool
 
 
-ThreadItemIdentity = tuple[str, str, str]
+ThreadItemIdentity = tuple[str, str, str, str]
 
 
 def _thread_item_identity(item: ThreadItem | ThreadItemRef) -> ThreadItemIdentity:
-    return (item.provider, item.provider_thread_id, item.item_id)
+    return (item.provider, item.binding_id, item.provider_thread_id, item.item_id)
 
 
 def _ref_exists_sql(ref_type: str, *, operator: str = "instr", exact: bool = False) -> str:
@@ -198,6 +212,7 @@ def _ref_exists_sql(ref_type: str, *, operator: str = "instr", exact: bool = Fal
     return (
         "EXISTS (SELECT 1 FROM thread_item_refs refs "
         "WHERE refs.provider = items.provider "
+        "AND refs.binding_id = items.binding_id "
         "AND refs.provider_thread_id = items.provider_thread_id "
         "AND refs.item_id = items.item_id "
         "AND refs.ref_type = "
@@ -215,6 +230,7 @@ def _ref_path_under_sql() -> str:
     return (
         "EXISTS (SELECT 1 FROM thread_item_refs refs "
         "WHERE refs.provider = items.provider "
+        "AND refs.binding_id = items.binding_id "
         "AND refs.provider_thread_id = items.provider_thread_id "
         "AND refs.item_id = items.item_id "
         "AND refs.ref_type = 'file' "
@@ -224,6 +240,18 @@ def _ref_path_under_sql() -> str:
 
 def _extension_suffix(ext: str) -> str:
     return ext if ext.startswith(".") else f".{ext}"
+
+
+def _initial_provider_session_id(
+    lane_id: str, provider: str, binding_id: str, provider_session_id: str | None
+) -> str | None:
+    if provider == "codex" and binding_id == DEFAULT_CODEX_BINDING_ID:
+        if provider_session_id not in (None, lane_id):
+            raise ValueError("a new default-Codex lane must retain its native id as the lane id")
+        return lane_id
+    if not lane_id.startswith("dsp_"):
+        raise ValueError("non-default provider lanes require an opaque dsp_ Dispatch id")
+    return provider_session_id
 
 
 _QUEUED_MESSAGES_SCHEMA = """
@@ -273,6 +301,7 @@ ON deliveries(lane, turn_id);
 _PROVIDER_THREADS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS provider_threads (
     provider TEXT NOT NULL,
+    binding_id TEXT NOT NULL,
     provider_thread_id TEXT NOT NULL,
     session_id TEXT,
     parent_thread_id TEXT,
@@ -290,12 +319,8 @@ CREATE TABLE IF NOT EXISTS provider_threads (
     last_seen_at TEXT NOT NULL,
     archived_at TEXT,
     deleted_at TEXT,
-    PRIMARY KEY(provider, provider_thread_id)
+    PRIMARY KEY(provider, binding_id, provider_thread_id)
 );
-CREATE INDEX IF NOT EXISTS idx_provider_threads_parent
-ON provider_threads(provider, parent_thread_id);
-CREATE INDEX IF NOT EXISTS idx_provider_threads_fork
-ON provider_threads(provider, forked_from_id);
 """
 
 _PROVIDER_CAPACITY_SCHEMA = """
@@ -325,6 +350,7 @@ _PROVIDER_HISTORY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS provider_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     provider TEXT NOT NULL,
+    binding_id TEXT NOT NULL,
     provider_thread_id TEXT NOT NULL,
     lane TEXT,
     event_type TEXT NOT NULL,
@@ -339,16 +365,12 @@ CREATE TABLE IF NOT EXISTS provider_events (
     raw_retained INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE SET NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_events_provider_event_id
-ON provider_events(provider, provider_event_id)
-WHERE provider_event_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_provider_events_thread_received
-ON provider_events(provider, provider_thread_id, received_at);
 CREATE INDEX IF NOT EXISTS idx_provider_events_lane_received
 ON provider_events(lane, received_at);
 
 CREATE TABLE IF NOT EXISTS thread_turns (
     provider TEXT NOT NULL,
+    binding_id TEXT NOT NULL,
     provider_thread_id TEXT NOT NULL,
     turn_id TEXT NOT NULL,
     lane TEXT,
@@ -359,7 +381,7 @@ CREATE TABLE IF NOT EXISTS thread_turns (
     error TEXT,
     completion_source TEXT,
     updated_at TEXT NOT NULL,
-    PRIMARY KEY(provider, provider_thread_id, turn_id),
+    PRIMARY KEY(provider, binding_id, provider_thread_id, turn_id),
     FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_thread_turns_lane_updated
@@ -367,6 +389,7 @@ ON thread_turns(lane, updated_at);
 
 CREATE TABLE IF NOT EXISTS thread_items (
     provider TEXT NOT NULL,
+    binding_id TEXT NOT NULL,
     provider_thread_id TEXT NOT NULL,
     item_id TEXT NOT NULL,
     lane TEXT,
@@ -391,23 +414,22 @@ CREATE TABLE IF NOT EXISTS thread_items (
     inserted_at TEXT NOT NULL,
     payload TEXT,
     raw_retained INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY(provider, provider_thread_id, item_id),
+    PRIMARY KEY(provider, binding_id, provider_thread_id, item_id),
     FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_thread_items_lane_inserted
 ON thread_items(lane, position, inserted_at);
-CREATE INDEX IF NOT EXISTS idx_thread_items_turn
-ON thread_items(provider, provider_thread_id, turn_id);
 
 CREATE TABLE IF NOT EXISTS thread_item_refs (
     provider TEXT NOT NULL,
+    binding_id TEXT NOT NULL,
     provider_thread_id TEXT NOT NULL,
     item_id TEXT NOT NULL,
     ref_type TEXT NOT NULL,
     ref_value TEXT NOT NULL,
-    PRIMARY KEY(provider, provider_thread_id, item_id, ref_type, ref_value),
-    FOREIGN KEY(provider, provider_thread_id, item_id)
-        REFERENCES thread_items(provider, provider_thread_id, item_id)
+    PRIMARY KEY(provider, binding_id, provider_thread_id, item_id, ref_type, ref_value),
+    FOREIGN KEY(provider, binding_id, provider_thread_id, item_id)
+        REFERENCES thread_items(provider, binding_id, provider_thread_id, item_id)
         ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_thread_item_refs_lookup
@@ -418,6 +440,7 @@ CREATE TABLE IF NOT EXISTS message_receipts (
     lane TEXT,
     queued_message_id INTEGER,
     provider TEXT NOT NULL,
+    binding_id TEXT NOT NULL,
     provider_thread_id TEXT NOT NULL,
     dispatch_message_id TEXT,
     status TEXT NOT NULL,
@@ -441,6 +464,7 @@ ON message_receipts(lane, updated_at);
 CREATE TABLE IF NOT EXISTS lane_runtime_state (
     lane TEXT PRIMARY KEY,
     provider TEXT NOT NULL,
+    binding_id TEXT NOT NULL,
     provider_thread_id TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'unknown',
     active_turn_id TEXT,
@@ -459,6 +483,7 @@ _SERVER_REQUESTS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS server_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     provider TEXT NOT NULL CHECK (provider = 'codex'),
+    binding_id TEXT NOT NULL,
     provider_session_id TEXT NOT NULL,
     provider_thread_id TEXT,
     provider_thread_key TEXT NOT NULL,
@@ -473,13 +498,9 @@ CREATE TABLE IF NOT EXISTS server_requests (
     resolved_at TEXT,
     response_summary TEXT,
     error TEXT,
-    UNIQUE(provider, provider_session_id, provider_thread_key, request_id_json),
+    UNIQUE(provider, binding_id, provider_session_id, provider_thread_key, request_id_json),
     FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE SET NULL
 );
-CREATE INDEX IF NOT EXISTS idx_server_requests_pending
-ON server_requests(provider, provider_session_id, state, deadline_at, received_at);
-CREATE INDEX IF NOT EXISTS idx_server_requests_lane_pending
-ON server_requests(lane, provider_session_id, state, received_at);
 """
 
 
@@ -490,6 +511,9 @@ def _utcnow() -> datetime:
 _SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS lanes (
     id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    binding_id TEXT NOT NULL,
+    provider_session_id TEXT,
     ref TEXT NOT NULL UNIQUE,
     ref_source TEXT NOT NULL,
     ref_payload TEXT NOT NULL,
@@ -685,7 +709,41 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 {_DELIVERIES_SCHEMA}
 """
 
-REGISTRY_SCHEMA_SQL = _SCHEMA
+_BINDING_SCOPE_INDEX_STATEMENTS = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_lanes_provider_session "
+    "ON lanes(provider, binding_id, provider_session_id) "
+    "WHERE provider_session_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_provider_threads_parent "
+    "ON provider_threads(provider, binding_id, parent_thread_id)",
+    "CREATE INDEX IF NOT EXISTS idx_provider_threads_fork "
+    "ON provider_threads(provider, binding_id, forked_from_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_events_provider_event_id "
+    "ON provider_events(provider, binding_id, provider_event_id) "
+    "WHERE provider_event_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_provider_events_thread_received "
+    "ON provider_events(provider, binding_id, provider_thread_id, received_at)",
+    "CREATE INDEX IF NOT EXISTS idx_provider_events_lane_received "
+    "ON provider_events(lane, received_at)",
+    "CREATE INDEX IF NOT EXISTS idx_thread_turns_lane_updated ON thread_turns(lane, updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_thread_items_lane_inserted "
+    "ON thread_items(lane, position, inserted_at)",
+    "CREATE INDEX IF NOT EXISTS idx_thread_items_turn "
+    "ON thread_items(provider, binding_id, provider_thread_id, turn_id)",
+    "CREATE INDEX IF NOT EXISTS idx_thread_item_refs_lookup "
+    "ON thread_item_refs(ref_type, ref_value)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_message_receipts_dispatch_message_id "
+    "ON message_receipts(dispatch_message_id) "
+    "WHERE dispatch_message_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_message_receipts_lane_updated "
+    "ON message_receipts(lane, updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_server_requests_pending "
+    "ON server_requests(provider, binding_id, provider_session_id, state, "
+    "deadline_at, received_at)",
+    "CREATE INDEX IF NOT EXISTS idx_server_requests_lane_pending "
+    "ON server_requests(lane, binding_id, provider_session_id, state, received_at)",
+)
+
+REGISTRY_SCHEMA_SQL = _SCHEMA + ";\n".join(_BINDING_SCOPE_INDEX_STATEMENTS) + ";\n"
 
 
 class Registry:
@@ -715,11 +773,15 @@ class Registry:
                 f"registry schema version {user_version} is newer than supported "
                 f"version {SCHEMA_VERSION}"
             )
-        await store._conn.executescript(_SCHEMA)
-        if user_version < SCHEMA_VERSION:
-            await store._migrate(user_version)
-            await store._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-        await store._conn.commit()
+        try:
+            await store._conn.executescript(_SCHEMA)
+            if user_version < SCHEMA_VERSION:
+                await store._migrate(user_version)
+                await store._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await store._conn.commit()
+        except BaseException:
+            await store._conn.close()
+            raise
         return store
 
     @_serialized_access
@@ -806,6 +868,127 @@ class Registry:
             await self._ensure_queued_message_content_column()
         if user_version < 22:
             await self._ensure_deliveries_table()
+        if user_version < 24:
+            await self._ensure_binding_scope_v24()
+
+    async def _ensure_binding_scope_v24(self) -> None:
+        """Add binding identity without changing stable lane keys or local row ids."""
+
+        await self._conn.commit()
+        await self._conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            await self._conn.execute("BEGIN IMMEDIATE")
+            sequence_high_water: dict[str, int] = {}
+            async with self._conn.execute(
+                "SELECT name, seq FROM sqlite_sequence "
+                "WHERE name IN ('provider_events', 'message_receipts', 'server_requests')"
+            ) as cur:
+                sequence_high_water = {
+                    str(row["name"]): int(row["seq"]) for row in await cur.fetchall()
+                }
+            async with self._conn.execute("PRAGMA table_info(lanes)") as cur:
+                lane_columns = {str(row["name"]) for row in await cur.fetchall()}
+            if "provider" not in lane_columns:
+                await self._conn.execute(
+                    "ALTER TABLE lanes ADD COLUMN provider TEXT NOT NULL DEFAULT 'codex'"
+                )
+            if "binding_id" not in lane_columns:
+                await self._conn.execute(
+                    "ALTER TABLE lanes ADD COLUMN binding_id TEXT NOT NULL "
+                    f"DEFAULT '{DEFAULT_CODEX_BINDING_ID}'"
+                )
+            added_provider_session_id = "provider_session_id" not in lane_columns
+            if added_provider_session_id:
+                await self._conn.execute("ALTER TABLE lanes ADD COLUMN provider_session_id TEXT")
+                await self._conn.execute(
+                    "UPDATE lanes SET provider = 'codex', binding_id = ?, provider_session_id = id",
+                    (DEFAULT_CODEX_BINDING_ID,),
+                )
+
+            schemas = {
+                "provider_threads": _PROVIDER_THREADS_SCHEMA,
+                "provider_events": _PROVIDER_HISTORY_SCHEMA,
+                "thread_turns": _PROVIDER_HISTORY_SCHEMA,
+                "thread_items": _PROVIDER_HISTORY_SCHEMA,
+                "thread_item_refs": _PROVIDER_HISTORY_SCHEMA,
+                "message_receipts": _PROVIDER_HISTORY_SCHEMA,
+                "lane_runtime_state": _PROVIDER_HISTORY_SCHEMA,
+                "server_requests": _SERVER_REQUESTS_SCHEMA,
+            }
+            rebuilt: list[str] = []
+            for table, schema in schemas.items():
+                async with self._conn.execute(f"PRAGMA table_info({table})") as cur:
+                    old_columns = [str(row["name"]) for row in await cur.fetchall()]
+                if not old_columns or "binding_id" in old_columns:
+                    continue
+                match = re.search(
+                    rf"CREATE TABLE IF NOT EXISTS {table} \((.*?)\n\);",
+                    schema,
+                    re.DOTALL,
+                )
+                if match is None:
+                    raise RuntimeError(f"missing v24 schema for {table}")
+                create_sql = f"CREATE TABLE {table}_v24 ({match.group(1)}\n)"
+                if table == "thread_item_refs":
+                    create_sql = create_sql.replace(
+                        "REFERENCES thread_items(", "REFERENCES thread_items_v24("
+                    )
+                await self._conn.execute(create_sql)
+                new_columns = [
+                    str(row["name"])
+                    for row in await (
+                        await self._conn.execute(f"PRAGMA table_info({table}_v24)")
+                    ).fetchall()
+                ]
+                select_parts = ["?" if column == "binding_id" else column for column in new_columns]
+                await self._conn.execute(
+                    f"INSERT INTO {table}_v24 ({', '.join(new_columns)}) "
+                    f"SELECT {', '.join(select_parts)} FROM {table}",
+                    (DEFAULT_CODEX_BINDING_ID,),
+                )
+                rebuilt.append(table)
+
+            if "thread_item_refs" in rebuilt:
+                await self._conn.execute("DROP TABLE thread_item_refs")
+            for table in rebuilt:
+                if table != "thread_item_refs":
+                    await self._conn.execute(f"DROP TABLE {table}")
+            for table in rebuilt:
+                if table != "thread_item_refs":
+                    await self._conn.execute(f"ALTER TABLE {table}_v24 RENAME TO {table}")
+            if "thread_item_refs" in rebuilt:
+                await self._conn.execute(
+                    "ALTER TABLE thread_item_refs_v24 RENAME TO thread_item_refs"
+                )
+
+            for table, sequence in sequence_high_water.items():
+                cur = await self._conn.execute(
+                    "UPDATE sqlite_sequence SET seq = CASE WHEN seq < ? THEN ? ELSE seq END "
+                    "WHERE name = ?",
+                    (sequence, sequence, table),
+                )
+                if cur.rowcount == 0:
+                    await self._conn.execute(
+                        "INSERT INTO sqlite_sequence(name, seq) VALUES (?, ?)",
+                        (table, sequence),
+                    )
+
+            await self._create_binding_scope_indexes()
+            async with self._conn.execute("PRAGMA foreign_key_check") as cur:
+                violations = await cur.fetchall()
+            if violations:
+                raise RuntimeError(f"v24 foreign key check failed: {violations!r}")
+            await self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self._conn.commit()
+        except BaseException:
+            await self._conn.rollback()
+            raise
+        finally:
+            await self._conn.execute("PRAGMA foreign_keys = ON")
+
+    async def _create_binding_scope_indexes(self) -> None:
+        for statement in _BINDING_SCOPE_INDEX_STATEMENTS:
+            await self._conn.execute(statement)
 
     async def _ensure_deliveries_table(self) -> None:
         await self._conn.executescript(_DELIVERIES_SCHEMA)
@@ -1183,11 +1366,20 @@ class Registry:
         cwd: str | None = None,
         status: LaneStatus = "unknown",
         pinned: bool = False,
+        provider: str = "codex",
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
+        provider_session_id: str | None = None,
     ) -> Lane:
         now = self._now()
-        ref, ref_source, ref_payload, ref_mixer = await self._allocate_ref_parts(id)
+        native_id = _initial_provider_session_id(id, provider, binding_id, provider_session_id)
+        ref, ref_source, ref_payload, ref_mixer = await self._allocate_ref_parts(
+            id, provider=provider, binding_id=binding_id, provider_session_id=native_id
+        )
         lane = Lane(
             id=id,
+            provider=provider,
+            binding_id=binding_id,
+            provider_session_id=native_id,
             ref=ref,
             ref_source=ref_source,
             ref_payload=ref_payload,
@@ -1220,13 +1412,22 @@ class Registry:
         pinned: bool = False,
         audit_op: str | None = None,
         audit_detail: str | None = None,
+        provider: str = "codex",
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
+        provider_session_id: str | None = None,
     ) -> tuple[Lane, LaneSync]:
         if sync.lane != id:
             raise ValueError(f"sync lane {sync.lane!r} does not match lane id {id!r}")
         now = self._now()
-        ref, ref_source, ref_payload, ref_mixer = await self._allocate_ref_parts(id)
+        native_id = _initial_provider_session_id(id, provider, binding_id, provider_session_id)
+        ref, ref_source, ref_payload, ref_mixer = await self._allocate_ref_parts(
+            id, provider=provider, binding_id=binding_id, provider_session_id=native_id
+        )
         lane = Lane(
             id=id,
+            provider=provider,
+            binding_id=binding_id,
+            provider_session_id=native_id,
             ref=ref,
             ref_source=ref_source,
             ref_payload=ref_payload,
@@ -1254,12 +1455,16 @@ class Registry:
 
     async def _insert_lane(self, lane: Lane) -> None:
         await self._conn.execute(
-            "INSERT INTO lanes (id, ref, ref_source, ref_payload, ref_mixer, handle, role, cwd, "
+            "INSERT INTO lanes (id, provider, binding_id, provider_session_id, ref, ref_source, "
+            "ref_payload, ref_mixer, handle, role, cwd, "
             "source, status, pinned, active_turn_id, latest_turn_id, latest_turn_status, "
             "latest_error, latest_error_at, created_at, updated_at, last_event_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 lane.id,
+                lane.provider,
+                lane.binding_id,
+                lane.provider_session_id,
                 lane.ref,
                 lane.ref_source,
                 lane.ref_payload,
@@ -1281,18 +1486,76 @@ class Registry:
             ),
         )
 
-    async def _allocate_ref_parts(self, thread_id: str) -> tuple[str, str, str, str]:
-        source = CODEX_REF_SOURCE
-        payload = codex_ref_payload(thread_id)
+    async def _allocate_ref_parts(
+        self,
+        lane_id: str,
+        *,
+        provider: str = "codex",
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
+        provider_session_id: str | None = None,
+    ) -> tuple[str, str, str, str]:
+        native_id = (
+            lane_id
+            if provider == "codex"
+            and binding_id == DEFAULT_CODEX_BINDING_ID
+            and provider_session_id is None
+            else provider_session_id
+        )
+        is_default_codex = (
+            provider == "codex" and binding_id == DEFAULT_CODEX_BINDING_ID and native_id == lane_id
+        )
+        source = CODEX_REF_SOURCE if is_default_codex else GENERIC_REF_SOURCE
+        payload = codex_ref_payload(lane_id) if is_default_codex else generic_ref_payload(lane_id)
         for mixer in BASE58BTC_ALPHABET:
             candidate = make_ref(source=source, payload=payload, mixer=mixer)
             existing = await self.find_lane_by_ref(candidate)
-            if existing is None or existing.id == thread_id:
+            if existing is None or existing.id == lane_id:
                 return candidate, source, payload, mixer
         raise RuntimeError(
-            f"ref mixer alphabet exhausted for Codex thread hash payload {payload!r}; "
-            "use the full Codex thread id"
+            f"ref mixer alphabet exhausted for lane payload {payload!r}; use the lane id"
         )
+
+    @_serialized_access
+    async def find_lane_by_provider_session(
+        self, provider: str, binding_id: str, provider_session_id: str
+    ) -> Lane | None:
+        async with self._conn.execute(
+            "SELECT * FROM lanes WHERE provider = ? AND binding_id = ? AND provider_session_id = ?",
+            (provider, binding_id, provider_session_id),
+        ) as cur:
+            row = await cur.fetchone()
+        return _row_to_lane(row) if row is not None else None
+
+    @_serialized_access
+    async def update_lane_provider_session(
+        self,
+        lane_id: str,
+        *,
+        provider: str,
+        binding_id: str,
+        provider_session_id: str,
+    ) -> Lane:
+        """Record native continuation evidence without permitting a binding retarget."""
+
+        if (
+            provider == "codex"
+            and binding_id == DEFAULT_CODEX_BINDING_ID
+            and provider_session_id != lane_id
+        ):
+            raise ValidationError(
+                "default-Codex provider session identity must equal the stable lane id"
+            )
+        async with self._transaction():
+            cur = await self._conn.execute(
+                "UPDATE lanes SET provider_session_id = ?, updated_at = ? "
+                "WHERE id = ? AND provider = ? AND binding_id = ?",
+                (provider_session_id, self.now_iso(), lane_id, provider, binding_id),
+            )
+            if cur.rowcount != 1:
+                raise NotFoundError(
+                    f"no lane {lane_id!r} for provider binding {provider}:{binding_id}"
+                )
+        return await self.get_lane(lane_id)
 
     @_serialized_access
     async def find_lane(self, lane_id: str) -> Lane | None:
@@ -2458,7 +2721,9 @@ class Registry:
         saved: list[ProviderThread] = []
         for observation in observations:
             thread = await self.get_provider_thread(
-                observation.provider, observation.provider_thread_id
+                observation.provider,
+                observation.provider_thread_id,
+                binding_id=observation.binding_id,
             )
             if thread is None:
                 raise RuntimeError("provider thread upsert did not return a row")
@@ -2473,12 +2738,12 @@ class Registry:
         archived_at = observed_at if lifecycle_state == "archived" else None
         deleted_at = observed_at if lifecycle_state == "deleted" else None
         await self._conn.execute(
-            "INSERT INTO provider_threads (provider, provider_thread_id, session_id, "
+            "INSERT INTO provider_threads (provider, binding_id, provider_thread_id, session_id, "
             "parent_thread_id, forked_from_id, source_kind, thread_source, agent_nickname, "
             "agent_role, agent_depth, lifecycle_state, relationship_source, confidence, "
             "first_seen_at, last_seen_at, archived_at, deleted_at) VALUES ("
-            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(provider, provider_thread_id) DO UPDATE SET "
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(provider, binding_id, provider_thread_id) DO UPDATE SET "
             "session_id = COALESCE(excluded.session_id, provider_threads.session_id), "
             "parent_thread_id = COALESCE(excluded.parent_thread_id, "
             "provider_threads.parent_thread_id), "
@@ -2503,6 +2768,7 @@ class Registry:
             "ELSE provider_threads.deleted_at END",
             (
                 observation.provider,
+                observation.binding_id,
                 observation.provider_thread_id,
                 observation.session_id,
                 observation.parent_thread_id,
@@ -2527,11 +2793,16 @@ class Registry:
 
     @_serialized_access
     async def get_provider_thread(
-        self, provider: str, provider_thread_id: str
+        self,
+        provider: str,
+        provider_thread_id: str,
+        *,
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
     ) -> ProviderThread | None:
         async with self._conn.execute(
-            "SELECT * FROM provider_threads WHERE provider = ? AND provider_thread_id = ?",
-            (provider, provider_thread_id),
+            "SELECT * FROM provider_threads WHERE provider = ? AND binding_id = ? "
+            "AND provider_thread_id = ?",
+            (provider, binding_id, provider_thread_id),
         ) as cur:
             row = await cur.fetchone()
         return _row_to_provider_thread(row) if row is not None else None
@@ -2541,6 +2812,7 @@ class Registry:
         self,
         *,
         provider: str | None = None,
+        binding_id: str | None = None,
         lifecycle_state: ProviderThreadLifecycleState | None = None,
     ) -> list[ProviderThread]:
         clauses: list[str] = []
@@ -2548,13 +2820,16 @@ class Registry:
         if provider is not None:
             clauses.append("provider = ?")
             params.append(provider)
+        if binding_id is not None:
+            clauses.append("binding_id = ?")
+            params.append(binding_id)
         if lifecycle_state is not None:
             clauses.append("lifecycle_state = ?")
             params.append(lifecycle_state)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         async with self._conn.execute(
             "SELECT * FROM provider_threads"
-            f"{where} ORDER BY provider, first_seen_at, provider_thread_id",
+            f"{where} ORDER BY provider, binding_id, first_seen_at, provider_thread_id",
             tuple(params),
         ) as cur:
             rows = await cur.fetchall()
@@ -2567,11 +2842,13 @@ class Registry:
         provider_thread_id: str,
         lifecycle_state: ProviderThreadLifecycleState,
         *,
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
         observed_at: str | None = None,
     ) -> ProviderThread:
         return await self.upsert_provider_thread(
             ProviderThreadObservation(
                 provider=provider,
+                binding_id=binding_id,
                 provider_thread_id=provider_thread_id,
                 lifecycle_state=lifecycle_state,
                 observed_at=observed_at,
@@ -2584,6 +2861,7 @@ class Registry:
         provider: str,
         provider_thread_ids: str | list[str],
         *,
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
         max_nodes: int = 200,
         max_depth: int = 16,
     ) -> ProviderThreadTopology:
@@ -2615,7 +2893,7 @@ class Registry:
                 truncated = True
             if not candidates:
                 return
-            fetched = await self._get_provider_thread_nodes(provider, candidates)
+            fetched = await self._get_provider_thread_nodes(provider, binding_id, candidates)
             nodes.update(fetched)
             missing.update(set(candidates) - set(fetched))
 
@@ -2624,8 +2902,9 @@ class Registry:
                 raise ValueError(f"unsupported provider thread relation {column!r}")
             async with self._conn.execute(
                 "SELECT provider_thread_id FROM provider_threads "
-                f"WHERE provider = ? AND {column} = ? ORDER BY provider_thread_id",
-                (provider, thread_id),
+                f"WHERE provider = ? AND binding_id = ? AND {column} = ? "
+                "ORDER BY provider_thread_id",
+                (provider, binding_id, thread_id),
             ) as cur:
                 rows = await cur.fetchall()
             return [str(row["provider_thread_id"]) for row in rows]
@@ -2741,6 +3020,7 @@ class Registry:
         complete = not (missing or cycle_detected or truncated)
         return ProviderThreadTopology(
             provider=provider,
+            binding_id=binding_id,
             requested_thread_ids=requested,
             nodes=sorted(nodes.values(), key=lambda node: node.thread.provider_thread_id),
             roots=roots,
@@ -2756,7 +3036,7 @@ class Registry:
         )
 
     async def _get_provider_thread_nodes(
-        self, provider: str, provider_thread_ids: list[str]
+        self, provider: str, binding_id: str, provider_thread_ids: list[str]
     ) -> dict[str, ProviderThreadNode]:
         if not provider_thread_ids:
             return {}
@@ -2764,11 +3044,13 @@ class Registry:
         async with self._conn.execute(
             "SELECT provider_threads.*, lanes.id AS lane_id, lanes.ref, lanes.handle, "
             "lanes.status AS lane_status FROM provider_threads "
-            "LEFT JOIN lanes ON lanes.id = provider_threads.provider_thread_id "
-            "WHERE provider_threads.provider = ? "
+            "LEFT JOIN lanes ON lanes.provider = provider_threads.provider "
+            "AND lanes.binding_id = provider_threads.binding_id "
+            "AND lanes.provider_session_id = provider_threads.provider_thread_id "
+            "WHERE provider_threads.provider = ? AND provider_threads.binding_id = ? "
             f"AND provider_threads.provider_thread_id IN ({placeholders}) "
             "ORDER BY provider_threads.provider_thread_id",
-            (provider, *provider_thread_ids),
+            (provider, binding_id, *provider_thread_ids),
         ) as cur:
             rows = await cur.fetchall()
         result: dict[str, ProviderThreadNode] = {}
@@ -2872,13 +3154,15 @@ class Registry:
         payload = _json_dump_compact(event.payload) if event.payload is not None else None
         async with self._write_lock:
             await self._conn.execute(
-                "INSERT INTO provider_events (provider, provider_thread_id, lane, event_type, "
+                "INSERT INTO provider_events (provider, binding_id, provider_thread_id, lane, "
+                "event_type, "
                 "provider_event_id, provider_turn_id, provider_item_id, correlation_id, "
                 "provider_ts, received_at, summary, payload, raw_retained) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT DO NOTHING",
                 (
                     event.provider,
+                    event.binding_id,
                     event.provider_thread_id,
                     event.lane,
                     event.event_type,
@@ -2904,7 +3188,9 @@ class Registry:
                 return _row_to_provider_event(row)
         if event.provider_event_id is not None:
             existing = await self.find_provider_event(
-                event.provider, provider_event_id=event.provider_event_id
+                event.provider,
+                binding_id=event.binding_id,
+                provider_event_id=event.provider_event_id,
             )
             if existing is None:
                 raise RuntimeError("provider event insert did not return a row")
@@ -2913,11 +3199,16 @@ class Registry:
 
     @_serialized_access
     async def find_provider_event(
-        self, provider: str, *, provider_event_id: str
+        self,
+        provider: str,
+        *,
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
+        provider_event_id: str,
     ) -> ProviderEvent | None:
         async with self._conn.execute(
-            "SELECT * FROM provider_events WHERE provider = ? AND provider_event_id = ?",
-            (provider, provider_event_id),
+            "SELECT * FROM provider_events WHERE provider = ? AND binding_id = ? "
+            "AND provider_event_id = ?",
+            (provider, binding_id, provider_event_id),
         ) as cur:
             row = await cur.fetchone()
         return _row_to_provider_event(row) if row is not None else None
@@ -2927,6 +3218,8 @@ class Registry:
         self,
         *,
         lane: str | None = None,
+        provider: str | None = None,
+        binding_id: str | None = None,
         provider_thread_id: str | None = None,
         limit: int = 50,
     ) -> list[ProviderEvent]:
@@ -2935,7 +3228,17 @@ class Registry:
         if lane is not None:
             clauses.append("lane = ?")
             params.append(lane)
+        if provider is not None:
+            clauses.append("provider = ?")
+            params.append(provider)
+        if binding_id is not None:
+            clauses.append("binding_id = ?")
+            params.append(binding_id)
         if provider_thread_id is not None:
+            if lane is None and (provider is None or binding_id is None):
+                raise ValueError(
+                    "provider_thread_id requires provider and binding_id when lane is omitted"
+                )
             clauses.append("provider_thread_id = ?")
             params.append(provider_thread_id)
         sql = "SELECT * FROM provider_events"
@@ -2965,14 +3268,17 @@ class Registry:
         request_id_json = _json_dump_compact(request.request_id)
         async with self._write_lock:
             cur = await self._conn.execute(
-                "INSERT INTO server_requests (provider, provider_session_id, provider_thread_id, "
+                "INSERT INTO server_requests (provider, binding_id, provider_session_id, "
+                "provider_thread_id, "
                 "provider_thread_key, request_id_json, lane, method, category, state, "
                 "received_at, deadline_at, resolved_at, response_summary, error) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(provider, provider_session_id, provider_thread_key, request_id_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(provider, binding_id, provider_session_id, provider_thread_key, "
+                "request_id_json) "
                 "DO NOTHING",
                 (
                     request.provider,
+                    request.binding_id,
                     request.provider_session_id,
                     request.provider_thread_id,
                     thread_key,
@@ -2991,6 +3297,7 @@ class Registry:
             await self._conn.commit()
         saved = await self.get_server_request(
             provider=request.provider,
+            binding_id=request.binding_id,
             provider_session_id=request.provider_session_id,
             provider_thread_id=request.provider_thread_id,
             request_id=request.request_id,
@@ -3004,15 +3311,18 @@ class Registry:
         self,
         *,
         provider: str,
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
         provider_session_id: str,
         provider_thread_id: str | None,
         request_id: int | str,
     ) -> ServerRequest | None:
         async with self._conn.execute(
-            "SELECT * FROM server_requests WHERE provider = ? AND provider_session_id = ? "
+            "SELECT * FROM server_requests WHERE provider = ? AND binding_id = ? "
+            "AND provider_session_id = ? "
             "AND provider_thread_key = ? AND request_id_json = ?",
             (
                 provider,
+                binding_id,
                 provider_session_id,
                 _server_request_thread_key(provider_thread_id),
                 _json_dump_compact(request_id),
@@ -3062,6 +3372,7 @@ class Registry:
         *,
         lane: str | None = None,
         provider_session_id: str | None = None,
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
         limit: int = 50,
     ) -> list[ServerRequest]:
         if provider_session_id is None:
@@ -3073,8 +3384,8 @@ class Registry:
             sql += " AND lane = ?"
             params.append(lane)
         if provider_session_id is not None:
-            sql += " AND provider_session_id = ?"
-            params.append(provider_session_id)
+            sql += " AND binding_id = ? AND provider_session_id = ?"
+            params.extend((binding_id, provider_session_id))
         sql += " ORDER BY deadline_at, received_at, request_id_json LIMIT ?"
         params.append(limit)
         async with self._conn.execute(sql, tuple(params)) as cur:
@@ -3086,6 +3397,7 @@ class Registry:
         self,
         *,
         provider: str,
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
         provider_session_id: str,
         provider_thread_id: str | None,
         request_id: int | str,
@@ -3097,15 +3409,17 @@ class Registry:
         async with self._write_lock:
             cur = await self._conn.execute(
                 "UPDATE server_requests SET state = 'responding' WHERE provider = ? "
+                "AND binding_id = ? "
                 "AND provider_session_id = ? AND provider_thread_key = ? "
                 "AND request_id_json = ? AND state = 'pending'",
-                (provider, provider_session_id, thread_key, request_id_json),
+                (provider, binding_id, provider_session_id, thread_key, request_id_json),
             )
             await self._conn.commit()
         if cur.rowcount != 1:
             return None
         return await self.get_server_request(
             provider=provider,
+            binding_id=binding_id,
             provider_session_id=provider_session_id,
             provider_thread_id=provider_thread_id,
             request_id=request_id,
@@ -3131,6 +3445,7 @@ class Registry:
         self,
         *,
         provider: str,
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
         provider_session_id: str,
         provider_thread_id: str | None,
         request_id: int | str,
@@ -3146,7 +3461,7 @@ class Registry:
         async with self._write_lock:
             cur = await self._conn.execute(
                 "UPDATE server_requests SET state = ?, resolved_at = ?, response_summary = ?, "
-                "error = ? WHERE provider = ? AND provider_session_id = ? "
+                "error = ? WHERE provider = ? AND binding_id = ? AND provider_session_id = ? "
                 "AND provider_thread_key = ? AND request_id_json = ? AND state = 'responding'",
                 (
                     state,
@@ -3154,6 +3469,7 @@ class Registry:
                     _bound_server_request_text(response_summary),
                     _bound_server_request_text(error),
                     provider,
+                    binding_id,
                     provider_session_id,
                     thread_key,
                     request_id_json,
@@ -3164,6 +3480,7 @@ class Registry:
             return None
         return await self.get_server_request(
             provider=provider,
+            binding_id=binding_id,
             provider_session_id=provider_session_id,
             provider_thread_id=provider_thread_id,
             request_id=request_id,
@@ -3203,6 +3520,7 @@ class Registry:
         self,
         current_session_id: str,
         *,
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
         error: str = "app-server connection replaced before a response was sent",
     ) -> int:
         """Terminalize rows that cannot be answered after an App Server reconnect."""
@@ -3210,23 +3528,32 @@ class Registry:
         async with self._write_lock:
             cur = await self._conn.execute(
                 "UPDATE server_requests SET state = 'failed', resolved_at = ?, "
-                "response_summary = NULL, error = ? WHERE provider_session_id != ? "
+                "response_summary = NULL, error = ? WHERE binding_id = ? "
+                "AND provider_session_id != ? "
                 "AND state IN ('pending', 'responding')",
-                (self.now_iso(), _bound_server_request_text(error), current_session_id),
+                (
+                    self.now_iso(),
+                    _bound_server_request_text(error),
+                    binding_id,
+                    current_session_id,
+                ),
             )
             await self._conn.commit()
         return cur.rowcount
 
     @_serialized_access
     async def list_open_server_requests_except_session(
-        self, current_session_id: str
+        self,
+        current_session_id: str,
+        *,
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
     ) -> list[ServerRequest]:
         """Return pending/responding rows that a replacement connection cannot answer."""
 
         async with self._conn.execute(
-            "SELECT * FROM server_requests WHERE provider_session_id != ? "
+            "SELECT * FROM server_requests WHERE binding_id = ? AND provider_session_id != ? "
             "AND state IN ('pending', 'responding') ORDER BY id",
-            (current_session_id,),
+            (binding_id, current_session_id),
         ) as cur:
             rows = await cur.fetchall()
         return [_row_to_server_request(row) for row in rows]
@@ -3235,14 +3562,20 @@ class Registry:
     async def upsert_thread_turn(self, turn: ThreadTurn) -> ThreadTurn:
         async with self._transaction():
             await self._upsert_thread_turn_row(turn)
-        return await self.get_thread_turn(turn.provider, turn.provider_thread_id, turn.turn_id)
+        return await self.get_thread_turn(
+            turn.provider,
+            turn.provider_thread_id,
+            turn.turn_id,
+            binding_id=turn.binding_id,
+        )
 
     async def _upsert_thread_turn_row(self, turn: ThreadTurn) -> None:
         await self._conn.execute(
-            "INSERT INTO thread_turns (provider, provider_thread_id, turn_id, lane, status, "
+            "INSERT INTO thread_turns (provider, binding_id, provider_thread_id, turn_id, lane, "
+            "status, "
             "started_at, completed_at, failed_at, error, completion_source, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(provider, provider_thread_id, turn_id) DO UPDATE SET "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(provider, binding_id, provider_thread_id, turn_id) DO UPDATE SET "
             "lane = COALESCE(excluded.lane, thread_turns.lane), "
             "status = CASE WHEN excluded.status = 'unknown' "
             "THEN thread_turns.status ELSE excluded.status END, "
@@ -3255,6 +3588,7 @@ class Registry:
             "updated_at = excluded.updated_at",
             (
                 turn.provider,
+                turn.binding_id,
                 turn.provider_thread_id,
                 turn.turn_id,
                 turn.lane,
@@ -3270,12 +3604,18 @@ class Registry:
 
     @_serialized_access
     async def get_thread_turn(
-        self, provider: str, provider_thread_id: str, turn_id: str
+        self,
+        provider: str,
+        provider_thread_id: str,
+        turn_id: str,
+        *,
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
     ) -> ThreadTurn:
         async with self._conn.execute(
-            "SELECT * FROM thread_turns WHERE provider = ? AND provider_thread_id = ? "
+            "SELECT * FROM thread_turns WHERE provider = ? AND binding_id = ? "
+            "AND provider_thread_id = ? "
             "AND turn_id = ?",
-            (provider, provider_thread_id, turn_id),
+            (provider, binding_id, provider_thread_id, turn_id),
         ) as cur:
             row = await cur.fetchone()
         if row is None:
@@ -3299,7 +3639,12 @@ class Registry:
             await self._upsert_thread_item_row(item)
             if refs is not None:
                 await self._replace_thread_item_refs(item, refs)
-        return await self.get_thread_item(item.provider, item.provider_thread_id, item.item_id)
+        return await self.get_thread_item(
+            item.provider,
+            item.provider_thread_id,
+            item.item_id,
+            binding_id=item.binding_id,
+        )
 
     @_serialized_access
     async def upsert_thread_history_snapshot(
@@ -3308,6 +3653,7 @@ class Registry:
         turns: list[ThreadTurn],
         items: list[tuple[ThreadItem, list[ThreadItemRef]]],
         provider: str,
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
         provider_thread_id: str,
         turn_ids: set[str],
         item_ids: set[str],
@@ -3322,6 +3668,7 @@ class Registry:
             if prune_missing:
                 await self._prune_thread_history_snapshot_rows(
                     provider=provider,
+                    binding_id=binding_id,
                     provider_thread_id=provider_thread_id,
                     turn_ids=turn_ids,
                     item_ids=item_ids,
@@ -3329,12 +3676,12 @@ class Registry:
 
     async def _upsert_thread_item_row(self, item: ThreadItem) -> None:
         await self._conn.execute(
-            "INSERT INTO thread_items (provider, provider_thread_id, item_id, lane, "
+            "INSERT INTO thread_items (provider, binding_id, provider_thread_id, item_id, lane, "
             "turn_id, item_type, role, phase, status, text, tool, server, command, cwd, "
             "error, duration_ms, arguments, success, agent_nickname, agent_role, created_at, "
             "position, inserted_at, payload, raw_retained) VALUES ("
-            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(provider, provider_thread_id, item_id) DO UPDATE SET "
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(provider, binding_id, provider_thread_id, item_id) DO UPDATE SET "
             "lane = COALESCE(excluded.lane, thread_items.lane), "
             "turn_id = COALESCE(excluded.turn_id, thread_items.turn_id), "
             "item_type = excluded.item_type, "
@@ -3362,6 +3709,7 @@ class Registry:
             "raw_retained = MAX(excluded.raw_retained, thread_items.raw_retained)",
             (
                 item.provider,
+                item.binding_id,
                 item.provider_thread_id,
                 item.item_id,
                 item.lane,
@@ -3391,16 +3739,18 @@ class Registry:
 
     async def _replace_thread_item_refs(self, item: ThreadItem, refs: list[ThreadItemRef]) -> None:
         await self._conn.execute(
-            "DELETE FROM thread_item_refs WHERE provider = ? AND provider_thread_id = ? "
+            "DELETE FROM thread_item_refs WHERE provider = ? AND binding_id = ? "
+            "AND provider_thread_id = ? "
             "AND item_id = ?",
-            (item.provider, item.provider_thread_id, item.item_id),
+            (item.provider, item.binding_id, item.provider_thread_id, item.item_id),
         )
         for ref in refs:
             await self._conn.execute(
-                "INSERT OR IGNORE INTO thread_item_refs (provider, provider_thread_id, "
-                "item_id, ref_type, ref_value) VALUES (?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO thread_item_refs (provider, binding_id, provider_thread_id, "
+                "item_id, ref_type, ref_value) VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     ref.provider,
+                    ref.binding_id,
                     ref.provider_thread_id,
                     ref.item_id,
                     ref.ref_type,
@@ -3410,21 +3760,34 @@ class Registry:
 
     @_serialized_access
     async def find_thread_item(
-        self, provider: str, provider_thread_id: str, item_id: str
+        self,
+        provider: str,
+        provider_thread_id: str,
+        item_id: str,
+        *,
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
     ) -> ThreadItem | None:
         async with self._conn.execute(
-            "SELECT * FROM thread_items WHERE provider = ? AND provider_thread_id = ? "
+            "SELECT * FROM thread_items WHERE provider = ? AND binding_id = ? "
+            "AND provider_thread_id = ? "
             "AND item_id = ?",
-            (provider, provider_thread_id, item_id),
+            (provider, binding_id, provider_thread_id, item_id),
         ) as cur:
             row = await cur.fetchone()
         return _row_to_thread_item(row) if row is not None else None
 
     @_serialized_access
     async def get_thread_item(
-        self, provider: str, provider_thread_id: str, item_id: str
+        self,
+        provider: str,
+        provider_thread_id: str,
+        item_id: str,
+        *,
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
     ) -> ThreadItem:
-        item = await self.find_thread_item(provider, provider_thread_id, item_id)
+        item = await self.find_thread_item(
+            provider, provider_thread_id, item_id, binding_id=binding_id
+        )
         if item is None:
             raise NotFoundError(f"no thread item {provider}:{provider_thread_id}:{item_id}")
         return item
@@ -3633,6 +3996,7 @@ class Registry:
             FROM thread_item_refs refs
             INNER JOIN thread_items items
                 ON items.provider = refs.provider
+                AND items.binding_id = refs.binding_id
                 AND items.provider_thread_id = refs.provider_thread_id
                 AND items.item_id = refs.item_id
             WHERE items.lane = ? AND refs.ref_type = 'file'
@@ -3649,6 +4013,7 @@ class Registry:
             FROM thread_item_refs refs
             INNER JOIN thread_items items
                 ON items.provider = refs.provider
+                AND items.binding_id = refs.binding_id
                 AND items.provider_thread_id = refs.provider_thread_id
                 AND items.item_id = refs.item_id
             WHERE items.lane = ? AND refs.ref_type = 'file'
@@ -3662,6 +4027,7 @@ class Registry:
             FROM thread_item_refs refs
             INNER JOIN thread_items items
                 ON items.provider = refs.provider
+                AND items.binding_id = refs.binding_id
                 AND items.provider_thread_id = refs.provider_thread_id
                 AND items.item_id = refs.item_id
             WHERE items.lane = ? AND refs.ref_type = 'child_thread'
@@ -3711,9 +4077,10 @@ class Registry:
     @_serialized_access
     async def list_thread_item_refs(self, item: ThreadItem) -> list[ThreadItemRef]:
         async with self._conn.execute(
-            "SELECT * FROM thread_item_refs WHERE provider = ? AND provider_thread_id = ? "
+            "SELECT * FROM thread_item_refs WHERE provider = ? AND binding_id = ? "
+            "AND provider_thread_id = ? "
             "AND item_id = ? ORDER BY ref_type, ref_value",
-            (item.provider, item.provider_thread_id, item.item_id),
+            (item.provider, item.binding_id, item.provider_thread_id, item.item_id),
         ) as cur:
             rows = await cur.fetchall()
         return [ThreadItemRef.model_validate(_row_dict(row)) for row in rows]
@@ -3729,8 +4096,12 @@ class Registry:
             clauses = []
             params: list[object] = []
             for item in items[chunk_start : chunk_start + 500]:
-                clauses.append("(provider = ? AND provider_thread_id = ? AND item_id = ?)")
-                params.extend((item.provider, item.provider_thread_id, item.item_id))
+                clauses.append(
+                    "(provider = ? AND binding_id = ? AND provider_thread_id = ? AND item_id = ?)"
+                )
+                params.extend(
+                    (item.provider, item.binding_id, item.provider_thread_id, item.item_id)
+                )
             if not clauses:
                 continue
             sql = (
@@ -3750,6 +4121,7 @@ class Registry:
         self,
         *,
         provider: str,
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
         provider_thread_id: str,
         turn_ids: set[str],
         item_ids: set[str],
@@ -3757,6 +4129,7 @@ class Registry:
         async with self._transaction():
             await self._prune_thread_history_snapshot_rows(
                 provider=provider,
+                binding_id=binding_id,
                 provider_thread_id=provider_thread_id,
                 turn_ids=turn_ids,
                 item_ids=item_ids,
@@ -3766,6 +4139,7 @@ class Registry:
         self,
         *,
         provider: str,
+        binding_id: str,
         provider_thread_id: str,
         turn_ids: set[str],
         item_ids: set[str],
@@ -3773,6 +4147,7 @@ class Registry:
         await self._delete_missing_values(
             "thread_items",
             provider=provider,
+            binding_id=binding_id,
             provider_thread_id=provider_thread_id,
             id_column="item_id",
             keep_ids=item_ids,
@@ -3780,6 +4155,7 @@ class Registry:
         await self._delete_missing_values(
             "thread_turns",
             provider=provider,
+            binding_id=binding_id,
             provider_thread_id=provider_thread_id,
             id_column="turn_id",
             keep_ids=turn_ids,
@@ -3790,12 +4166,15 @@ class Registry:
         table: str,
         *,
         provider: str,
+        binding_id: str,
         provider_thread_id: str,
         id_column: str,
         keep_ids: set[str],
     ) -> None:
-        params: list[object] = [provider, provider_thread_id]
-        sql = f"DELETE FROM {table} WHERE provider = ? AND provider_thread_id = ?"
+        params: list[object] = [provider, binding_id, provider_thread_id]
+        sql = (
+            f"DELETE FROM {table} WHERE provider = ? AND binding_id = ? AND provider_thread_id = ?"
+        )
         if keep_ids:
             placeholders = ", ".join("?" for _ in keep_ids)
             sql += f" AND {id_column} NOT IN ({placeholders})"
@@ -3806,10 +4185,10 @@ class Registry:
     async def upsert_message_receipt(self, receipt: MessageReceipt) -> MessageReceipt:
         async with self._write_lock:
             await self._conn.execute(
-                "INSERT INTO message_receipts (id, lane, queued_message_id, provider, "
+                "INSERT INTO message_receipts (id, lane, queued_message_id, provider, binding_id, "
                 "provider_thread_id, dispatch_message_id, status, turn_id, error, created_at, "
                 "sent_at, accepted_at, completed_at, failed_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(dispatch_message_id) WHERE dispatch_message_id IS NOT NULL "
                 "DO UPDATE SET lane = excluded.lane, "
                 "queued_message_id = excluded.queued_message_id, "
@@ -3817,12 +4196,16 @@ class Registry:
                 "status = excluded.status, turn_id = excluded.turn_id, error = excluded.error, "
                 "sent_at = excluded.sent_at, accepted_at = excluded.accepted_at, "
                 "completed_at = excluded.completed_at, failed_at = excluded.failed_at, "
-                "updated_at = excluded.updated_at",
+                "updated_at = excluded.updated_at "
+                "WHERE message_receipts.provider = excluded.provider "
+                "AND message_receipts.binding_id = excluded.binding_id "
+                "AND message_receipts.provider_thread_id = excluded.provider_thread_id",
                 (
                     receipt.id,
                     receipt.lane,
                     receipt.queued_message_id,
                     receipt.provider,
+                    receipt.binding_id,
                     receipt.provider_thread_id,
                     receipt.dispatch_message_id,
                     receipt.status,
@@ -3847,7 +4230,9 @@ class Registry:
                 return MessageReceipt.model_validate(_row_dict(row))
         if receipt.dispatch_message_id is not None:
             got = await self.find_message_receipt(
-                provider=receipt.provider, dispatch_message_id=receipt.dispatch_message_id
+                provider=receipt.provider,
+                dispatch_message_id=receipt.dispatch_message_id,
+                binding_id=receipt.binding_id,
             )
             if got is None:
                 raise RuntimeError("message receipt upsert did not return a row")
@@ -3856,11 +4241,16 @@ class Registry:
 
     @_serialized_access
     async def find_message_receipt(
-        self, *, provider: str, dispatch_message_id: str
+        self,
+        *,
+        provider: str,
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
+        dispatch_message_id: str,
     ) -> MessageReceipt | None:
         async with self._conn.execute(
-            "SELECT * FROM message_receipts WHERE provider = ? AND dispatch_message_id = ?",
-            (provider, dispatch_message_id),
+            "SELECT * FROM message_receipts WHERE provider = ? AND binding_id = ? "
+            "AND dispatch_message_id = ?",
+            (provider, binding_id, dispatch_message_id),
         ) as cur:
             row = await cur.fetchone()
         return MessageReceipt.model_validate(_row_dict(row)) if row is not None else None
@@ -3878,11 +4268,13 @@ class Registry:
     async def upsert_lane_runtime_state(self, state: LaneRuntimeState) -> LaneRuntimeState:
         async with self._write_lock:
             await self._conn.execute(
-                "INSERT INTO lane_runtime_state (lane, provider, provider_thread_id, status, "
+                "INSERT INTO lane_runtime_state (lane, provider, binding_id, provider_thread_id, "
+                "status, "
                 "active_turn_id, latest_turn_id, latest_turn_status, needs_attention, "
                 "attention_kind, attention_detail, updated_at, last_event_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(lane) DO UPDATE SET provider = excluded.provider, "
+                "binding_id = excluded.binding_id, "
                 "provider_thread_id = excluded.provider_thread_id, status = excluded.status, "
                 "active_turn_id = excluded.active_turn_id, "
                 "latest_turn_id = excluded.latest_turn_id, "
@@ -3894,6 +4286,7 @@ class Registry:
                 (
                     state.lane,
                     state.provider,
+                    state.binding_id,
                     state.provider_thread_id,
                     state.status,
                     state.active_turn_id,

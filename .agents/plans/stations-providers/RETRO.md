@@ -32,3 +32,18 @@ DIS-70 adds protocol version 2's reserved checked-execution envelope and receivi
 - Fresh targeted implementation review passed at 5/5 with no findings. The reviewer independently reran the 158-test daemon/surface/contract suite, a 49-test focused suite, scoped Ruff, strict mypy on changed source files and diff checks. No provider model call, registry migration, installed-runtime replacement, merge or release was performed.
 
 DIS-79–82 remain unimplemented. DIS-84's isolated native Hermes API investigation may start; DIS-85 adapter integration remains blocked on real foundation and API proof. The Linear handoff must retain that distinction when PR evidence is added.
+
+## September 12, 2026 — provider and binding identity
+
+Matt expanded the assignment through the shared foundation and native Hermes implementation, including direct default-profile research. DIS-79 extends the reviewed `904386c` stack with schema v24. It scopes native sessions, history, topology, events, normalized receipts, runtime state and server requests by provider and binding, while preserving Dispatch lane keys and refs. Default Codex keeps `provider_session_id == id`; other bindings remain non-executable in this migration slice.
+
+### Verification and review
+
+- Added collision and no-fallback regressions, an exact populated v23 schema fixture, deterministic failed-migration rollback, and transaction recovery tests.
+- Migration preserves child foreign keys, durable local row IDs and SQLite sequence high-water marks, including previously deleted rows. An independent probe with the prior sequence at 42 confirmed the next ID is 43 and `PRAGMA foreign_key_check` is clean.
+- Review found and resolved provider leaks in read/recovery paths, native server-request lookup collisions, transaction cleanup on identity conflict, default-Codex identity reassignment, sequence reuse, and stale public identity documentation. The full client routing extraction remains DIS-80.
+- Final implementer and independent reviewer `just check` runs passed Ruff lint/format, strict mypy, 1,115 tests / 17 live tests deselected, wheel/sdist build and package-content validation. `git diff --check` passed.
+- Fresh targeted review passed at 5/5 with zero open P0/P1/P2. The reviewed source/doc diff fingerprint was `2dea8b8df01191053a93212f6c512f1faaba3ee0b2aa4293c68aecef56ca8861`; this ledger entry adds the resulting evidence.
+- The migration was tested only on isolated state. It was not run on the installed Dispatch registry. No installed runtime replacement, merge, release or deployment was performed.
+
+DIS-80 may begin from this reviewed slice. The separately researched Hermes transport remains subject to DIS-81/82 reservation/observation and adapter integration gates; its successful native probes do not bypass them.

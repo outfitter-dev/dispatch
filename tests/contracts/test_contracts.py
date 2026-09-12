@@ -128,7 +128,8 @@ def test_registry_legacy_safe_ops_real_registry_gates_new_plan() -> None:
     assert "roster" not in safe
     assert "show" not in safe
     assert "status" in safe
-    assert "stop" in safe  # write-intent, but schema unchanged since the parent release
+    assert "archive" in safe  # write-intent, with schema unchanged since the parent release
+    assert "stop" not in safe
     assert "new" not in safe
     assert "new-plan" not in safe
 

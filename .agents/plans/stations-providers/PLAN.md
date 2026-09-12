@@ -4,7 +4,7 @@ The [Linear project](https://linear.app/outfitter/project/dispatch-stations-and-
 
 ## Current assignment
 
-#Dispatch coordinates the shared foundation ahead of the Hermes agent. The current bounded wave completes the project/issue/document setup, repository architecture reconciliation in DIS-78, and the operation-bound compatibility fix in DIS-70. It does not claim to finish every prerequisite for Hermes integration. The portable handoff must continue to show the remaining blockers until their implementation evidence exists.
+#Dispatch coordinates implementation through the shared foundation and the Hermes integration. On September 12, Matt expanded the assignment beyond DIS-78/DIS-70 to proceed as far as the evidence supports, including direct Hermes interaction on the local `default` profile. Use dedicated synthetic conversations for live proof; automated tests and destructive fault simulations remain isolated. The portable handoff must show remaining blockers until their implementation evidence exists.
 
 Use the dedicated foundation worktree and preserve other worktree owners. One branch owns each shared registry/admission change. Existing Claude and provider-history projects keep their provider-specific scope. DIS-50 consumes the shared foundation rather than implementing another migration. DIS-24 retains its existing parent and anchors network design.
 
@@ -19,7 +19,7 @@ Use the dedicated foundation worktree and preserve other worktree owners. One br
 | [DIS-81](https://linear.app/outfitter/issue/DIS-81) | Minimum immutable prepared-request/reservation seam on Codex | DIS-80 |
 | [DIS-82](https://linear.app/outfitter/issue/DIS-82) | Minimum shared observation/receipt seam on Codex | DIS-80 |
 | [DIS-83](https://linear.app/outfitter/issue/DIS-83) | Independent provider startup/recovery | DIS-80, DIS-82 |
-| [DIS-84](https://linear.app/outfitter/issue/DIS-84) | Isolated native Hermes API contract proof | Can start independently; findings inform the shared design |
+| [DIS-84](https://linear.app/outfitter/issue/DIS-84) | Native Hermes API proof on the authorized default profile | Can start independently; findings inform the shared design |
 | [DIS-85](https://linear.app/outfitter/issue/DIS-85) | Hermes adapter and two coherent local turns | DIS-70, DIS-79, DIS-80, DIS-81, DIS-82, DIS-84 |
 | [DIS-86](https://linear.app/outfitter/issue/DIS-86) | Hermes ambiguity/replay/attention recovery | DIS-85 |
 | [DIS-87](https://linear.app/outfitter/issue/DIS-87) | Desktop A → Dispatch B → Desktop C coexistence | DIS-86 |
@@ -35,7 +35,7 @@ This is a dependency graph, not a requirement to work through every row serially
 
 DIS-81/82 extract the minimum request/evidence contract with actual Codex callers and preserve current guarantees. Hermes native creation, replay windows, crash recovery and attention are exercised in DIS-85/86; Claude-specific hook/generation/resolution proof remains in DIS-50/51/52. The first adapter must not wait for a generic recovery framework or a full network read model.
 
-Matt is the native Linear assignee for the active foundation and initial Hermes issues. #Dispatch is the execution owner for DIS-70/78–83; the Hermes Desktop agent is the intended execution owner for DIS-84 onward. No Hermes app user is available in Linear, so this plan and the handoff carry that worker distinction without triggering a different agent integration.
+Matt is the native Linear assignee for the active foundation and initial Hermes issues. #Dispatch owns execution and source-control coordination through DIS-88, with bounded research, implementation and review workers. A dedicated Hermes Desktop conversation on the local default profile provides independent native-runtime research. Keep one source owner for each shared migration and one live writer per synthetic Hermes session.
 
 ## Current wave gates
 
@@ -55,6 +55,14 @@ Keep the change within the control protocol and CLI/MCP transport projection. De
 
 Verify matching/mismatching/malformed hashes, unknown checked method, changed daemon between preflight and execution, zero handler calls on rejection, CLI/MCP error parity and existing compatibility behavior. Run the smallest relevant suites, then `just check`; request local review after green checks. Keep the PR draft and record hosted CI for its exact head.
 
+### 3. DIS-79–88: complete the foundation and native Hermes path
+
+Implement and review the binding migration before enabling provider routing. Extract the minimum prepared-request and observation seams with real Codex callers, then consume the verified Hermes contract in a small native API adapter. Keep independent startup as a focused slice and prove it before claiming Hermes-only availability.
+
+In parallel with shared code, inspect the installed Hermes contract and use the authorized local default profile for synthetic live checks. Record version, profile, session/run IDs, replay scope and canonical history evidence. Alternate Desktop and API writers only after the preceding turn is demonstrably idle. An acceptance response or a closed event stream alone never proves execution.
+
+After two coherent Dispatch turns, exercise replay/conflict, lost acknowledgment, unavailable runtime and attention boundaries, using isolated services for destructive fault simulations. Verify Desktop continuity and operator diagnostics, then run a fresh full-stack review. Continue through correctable findings; stop only at a concrete capability or authority boundary and preserve a precise pickup record.
+
 ## Hermes pickup contract
 
 The [Linear handoff](https://linear.app/outfitter/document/hermes-agent-handoff-prerequisites-workflow-and-pickup-gates-5dd9c614285a) is the portable entry point. It must work without another agent's gitignored files.
@@ -71,7 +79,7 @@ A completed document, a passing transport probe or a green unrelated revision do
 
 ## Verification and authority
 
-Use repository tasks and `uv`; new behavior follows TDD. Full gates include lint, format, strict types, unit/examples tests and package contents. Live integration/scenarios are separate opt-in isolated proofs with temporary Dispatch/provider homes and synthetic state. Documentation-only changes do not need a new live provider turn.
+Use repository tasks and `uv`; new behavior follows TDD. Full gates include lint, format, strict types, unit/examples tests and package contents. Automated integration/scenarios use temporary Dispatch/provider homes and synthetic state. Matt separately authorized live interaction on Hermes's local default profile for this task; use dedicated synthetic sessions and retain their evidence. Documentation-only changes do not need a new live provider turn.
 
 Each phase is a Graphite branch. A local reviewer must score at least 4/5 with no open P0/P1/P2 before the next phase. Record commands, revision, review and unresolved limits in [RETRO.md](RETRO.md). Keep source-control mutations with the coordinator. PRs remain draft until the applicable current-head checks and readiness authorization are satisfied. Merge, publication, installed-runtime changes and public deployment are separate actions.
 

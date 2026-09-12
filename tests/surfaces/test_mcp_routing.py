@@ -340,12 +340,14 @@ async def test_tool_call_prehandshake_baseline_ops_gated_by_reported_version(
 
     monkeypatch.setattr(mcp, "_call_daemon_bound", fake_bound)
 
-    # Parent-version daemon: the baseline proves ``stop`` parses identically.
+    # Parent-version daemon: the baseline proves ``lane-rename`` parses identically.
     stopped = await handle_tool_call(
-        Path("/nonexistent.sock"), "dispatch_thread_write", {"op": "stop", "lane": "@a"}
+        Path("/nonexistent.sock"),
+        "dispatch_thread_write",
+        {"op": "rename", "old": "T1", "new": "renamed"},
     )
     assert stopped.isError is False
-    assert forwarded == ["stop"]
+    assert forwarded == ["lane-rename"]
 
     # This read op was added after the parent release, so it is not eligible
     # for the pre-handshake read allowance even though older daemons would
@@ -358,7 +360,7 @@ async def test_tool_call_prehandshake_baseline_ops_gated_by_reported_version(
     assert new_read.isError is True
     assert new_read.meta is not None
     assert new_read.meta["dispatchCode"] == "daemon_stale"
-    assert forwarded == ["stop"]
+    assert forwarded == ["lane-rename"]
 
     # Older pre-handshake daemon (e.g. v0.8.2's ``send`` had no ``content``):
     # Baseline writes are blocked with the actionable restart hint; unchanged reads pass.
@@ -374,13 +376,13 @@ async def test_tool_call_prehandshake_baseline_ops_gated_by_reported_version(
     assert isinstance(first, TextContent)
     assert "version 0.10.0" in first.text
     assert "dispatch down && dispatch up" in first.text
-    assert forwarded == ["stop"]
+    assert forwarded == ["lane-rename"]
 
     listed = await handle_tool_call(
         Path("/nonexistent.sock"), "dispatch_daemon_read", {"op": "models"}
     )
     assert listed.isError is False
-    assert forwarded == ["stop", "models"]
+    assert forwarded == ["lane-rename", "models"]
 
     # Below the read baseline floor (v0.9.0's ``usage`` output predates the
     # provider runtime summary): reads are blocked too.
@@ -394,7 +396,7 @@ async def test_tool_call_prehandshake_baseline_ops_gated_by_reported_version(
     first_read = read_blocked.content[0]
     assert isinstance(first_read, TextContent)
     assert "version 0.9.0" in first_read.text
-    assert forwarded == ["stop", "models"]
+    assert forwarded == ["lane-rename", "models"]
 
 
 async def test_hash_capable_tool_call_uses_checked_execution_envelope(
