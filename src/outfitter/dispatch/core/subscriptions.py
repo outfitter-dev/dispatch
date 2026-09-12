@@ -17,6 +17,7 @@ from outfitter.dispatch.client.events import (
 )
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.registry.models import Lane, Subscription
+from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
 
 from . import queue
 from .message_attribution import codex_thread_link, render_dispatch_message
@@ -155,8 +156,14 @@ async def _deliver_subscription(
 async def _tail_text(ctx: Ctx, lane: Lane, tail: int) -> str | None:
     if tail <= 0:
         return None
+    if (
+        lane.provider != "codex"
+        or lane.binding_id != DEFAULT_CODEX_BINDING_ID
+        or lane.provider_session_id != lane.id
+    ):
+        return None
     try:
-        result = await ctx.client.thread_read(lane.id, include_turns=True)
+        result = await ctx.client.thread_read(lane.provider_session_id, include_turns=True)
     except Exception as exc:
         ctx.log.warning("subscription.tail_read_failed", lane=lane.id, error=str(exc))
         return None

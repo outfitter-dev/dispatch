@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
+import pytest
 import pytest_asyncio
 
 from outfitter.dispatch.client.errors import AppServerError
@@ -95,6 +96,25 @@ async def test_supervisor_restarts_and_restores_lanes_on_crash(store: Registry) 
 
     await supervisor.stop()
     await asyncio.wait_for(task, timeout=1)
+
+
+async def test_supervisor_skips_non_default_provider_bindings(store: Registry) -> None:
+    await store.add_lane(
+        id="dsp_other",
+        handle="@other",
+        source="own",
+        status="idle",
+        provider="codex",
+        binding_id="profile-a",
+        provider_session_id="native-shared",
+    )
+    ctx = make_ctx(store)
+    client = FakeSupervisedClient()
+    supervisor = Supervisor(ctx, lambda: pytest.fail("must not respawn"), lambda: pytest.fail())
+
+    await supervisor._restore_lanes(client)
+
+    assert not client.calls
 
 
 async def test_supervisor_recovers_and_drains_idle_queue_on_start(store: Registry) -> None:

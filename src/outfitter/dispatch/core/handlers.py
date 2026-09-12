@@ -63,6 +63,7 @@ from outfitter.dispatch.registry.models import (
     ThreadItem,
     ThreadItemRef,
 )
+from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
 
 from . import queue
 from .backfill import backfill_codex_history
@@ -192,7 +193,7 @@ from .server_request_policy import expected_response
 from .server_requests import respond_to_server_request
 from .staging import StageContent, stage_session
 from .sync import SourceIdentity, SyncLimits, scan_codex_jsonl
-from .topology import observe_thread, observe_threads, topology_views
+from .topology import lane_topology_views, observe_thread, observe_threads, topology_views
 from .turn_settings import (
     load_turn_start_settings,
     runtime_settings_for_lane,
@@ -211,6 +212,9 @@ class _ManagedIdentityPayload(TypedDict):
     lane: str
     ref: str
     id: str
+    provider: str
+    binding_id: str
+    provider_session_id: str | None
     title: str | None
     handle: str | None
     managed: bool
@@ -236,7 +240,7 @@ class _SubscriptionSettings(TypedDict):
 @dataclass(frozen=True)
 class _IndexedHistory:
     indexed: list[ThreadItem]
-    refs: dict[tuple[str, str, str], list[ThreadItemRef]]
+    refs: dict[tuple[str, str, str, str], list[ThreadItemRef]]
 
 
 _ATTACHED_WRITE_LOCK_REASON = (
@@ -245,13 +249,36 @@ _ATTACHED_WRITE_LOCK_REASON = (
 )
 
 
+def _has_default_codex_binding(lane: Lane) -> bool:
+    return (
+        lane.provider == "codex"
+        and lane.binding_id == DEFAULT_CODEX_BINDING_ID
+        and lane.provider_session_id == lane.id
+    )
+
+
+def _require_default_codex_binding(lane: Lane, operation: str) -> str:
+    if not _has_default_codex_binding(lane):
+        raise CapabilityUnavailableError(
+            f"{operation} is unavailable for provider binding {lane.provider}:{lane.binding_id}"
+        )
+    assert lane.provider_session_id is not None
+    return lane.provider_session_id
+
+
 def _can_write(lane: Lane, ctx: Ctx) -> bool:
+    if not _has_default_codex_binding(lane):
+        return False
     return lane.source == "own" or ctx.policy.allow_attached_writes
 
 
 def _capabilities(lane: Lane, ctx: Ctx) -> LaneCapabilities:
+    readable = _has_default_codex_binding(lane)
     writable = _can_write(lane, ctx)
     return LaneCapabilities(
+        read=readable,
+        sync=readable,
+        tail=readable,
         send=writable,
         context=writable,
         steer=writable,
@@ -269,6 +296,8 @@ def _capabilities(lane: Lane, ctx: Ctx) -> LaneCapabilities:
 def _write_locked_reason(lane: Lane, ctx: Ctx) -> str | None:
     if _can_write(lane, ctx):
         return None
+    if not _has_default_codex_binding(lane):
+        return f"provider binding {lane.provider}:{lane.binding_id} execution is not supported"
     if lane.source == "attached":
         return _ATTACHED_WRITE_LOCK_REASON
     return "thread is not writable"
@@ -278,6 +307,9 @@ def _ref(lane: Lane, ctx: Ctx) -> LaneRef:
     return LaneRef(
         ref=lane.ref,
         id=lane.id,
+        provider=lane.provider,
+        binding_id=lane.binding_id,
+        provider_session_id=lane.provider_session_id,
         handle=lane.handle,
         source=lane.source,
         status=lane.status,
@@ -312,6 +344,9 @@ def _managed_identity(lane: Lane, ctx: Ctx) -> _ManagedIdentityPayload:
         "lane": lane.id,
         "ref": lane.ref,
         "id": lane.id,
+        "provider": lane.provider,
+        "binding_id": lane.binding_id,
+        "provider_session_id": lane.provider_session_id,
         "title": lane.handle.removeprefix("@"),
         "handle": lane.handle,
         "managed": True,
@@ -502,7 +537,9 @@ async def _resolve_self(ctx: Ctx, caller_thread_id: str | None) -> Lane:
     thread_id = caller_thread_id or os.environ.get("CODEX_THREAD_ID")
     if not thread_id:
         raise ValidationError("self requires CODEX_THREAD_ID from the current Codex thread")
-    lane = await ctx.registry.find_lane(thread_id)
+    lane = await ctx.registry.find_lane_by_provider_session(
+        "codex", DEFAULT_CODEX_BINDING_ID, thread_id
+    )
     if lane is None:
         raise ValidationError("self requires the current Codex thread to be managed by dispatch")
     return lane
@@ -516,6 +553,10 @@ async def _resolve_thread_target(ctx: Ctx, ref: str) -> tuple[str, Lane | None]:
 def _require_writable(lane: Lane, ctx: Ctx) -> None:
     if _can_write(lane, ctx):
         return
+    if not _has_default_codex_binding(lane):
+        raise CapabilityUnavailableError(
+            f"provider binding {lane.provider}:{lane.binding_id} execution is not supported"
+        )
     if lane.source == "attached":
         raise AuthorityError(
             f"lane {lane.handle} ({lane.ref}) has source=attached and is read-only by "
@@ -530,8 +571,9 @@ def _require_writable(lane: Lane, ctx: Ctx) -> None:
 
 async def _prepare_attached_write(lane: Lane, ctx: Ctx) -> None:
     if lane.source == "attached":
+        native_id = _require_default_codex_binding(lane, "attached write")
         try:
-            await ctx.client.thread_resume(lane.id, exclude_turns=True)
+            await ctx.client.thread_resume(native_id, exclude_turns=True)
         except ClientAppServerError as exc:
             if exc.code == -32600 and "already has an active writer" in exc.message:
                 raise CapabilityUnavailableError(
@@ -1327,8 +1369,9 @@ async def _record_direct_send_receipt(
     await ctx.registry.upsert_message_receipt(
         MessageReceipt(
             lane=lane.id,
-            provider="codex",
-            provider_thread_id=lane.id,
+            provider=lane.provider,
+            binding_id=lane.binding_id,
+            provider_thread_id=lane.provider_session_id or lane.id,
             status=status,  # type: ignore[arg-type]
             error=error,
             created_at=now,
@@ -1352,8 +1395,9 @@ async def _record_queue_receipt(
         MessageReceipt(
             lane=lane.id,
             queued_message_id=queued_message_id,
-            provider="codex",
-            provider_thread_id=lane.id,
+            provider=lane.provider,
+            binding_id=lane.binding_id,
+            provider_thread_id=lane.provider_session_id or lane.id,
             dispatch_message_id=f"queue:{queued_message_id}",
             status=status,  # type: ignore[arg-type]
             error=error,
@@ -1450,7 +1494,8 @@ async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
         case "steer":
             turn_id = _require_active_turn(lane, "steer")
             await _prepare_attached_write(lane, ctx)
-            await ctx.client.turn_steer(lane.id, turn_id, wire.text, input_items=wire.input_items)
+            native_id = _require_default_codex_binding(lane, "steer")
+            await ctx.client.turn_steer(native_id, turn_id, wire.text, input_items=wire.input_items)
             await ctx.registry.log_action(
                 "steer", lane=lane.id, detail=message_audit_detail(wire, ctx.capture)
             )
@@ -1465,8 +1510,9 @@ async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
                 for item in rich.input_items
                 if item.type == "text"
             )
+            native_id = _require_default_codex_binding(lane, "context")
             await ctx.client.inject_items(
-                lane.id,
+                native_id,
                 [{"type": "message", "role": "user", "content": parts}],
             )
             await ctx.registry.log_action(
@@ -1476,7 +1522,8 @@ async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
         case "interject":
             turn_id = _require_active_turn(lane, "interject")
             await _prepare_attached_write(lane, ctx)
-            await ctx.client.turn_interrupt(lane.id, turn_id)
+            native_id = _require_default_codex_binding(lane, "interject")
+            await ctx.client.turn_interrupt(native_id, turn_id)
             await ctx.registry.log_action("interrupt", lane=lane.id, detail="interject")
             return await _send_rich(lane, rich, wire, ctx, op="interject", prepare=False)
         case "queue":
@@ -1517,8 +1564,9 @@ async def _send_rich(
             await _prepare_attached_write(lane, ctx)
         turn_settings = await load_turn_start_settings(ctx.registry, lane.id)
         await ctx.registry.update_lane_status(lane.id, "busy")
+        native_id = _require_default_codex_binding(lane, op)
         await ctx.client.turn_start(
-            lane.id,
+            native_id,
             wire.text,
             cwd=lane.cwd or ".",
             input_items=wire.input_items,
@@ -1556,7 +1604,8 @@ async def steer(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
     _require_writable(lane, ctx)
     turn_id = _require_active_turn(lane, "steer")
     await _prepare_attached_write(lane, ctx)
-    await ctx.client.turn_steer(lane.id, turn_id, inp.text)
+    native_id = _require_default_codex_binding(lane, "steer")
+    await ctx.client.turn_steer(native_id, turn_id, inp.text)
     await ctx.registry.log_action("steer", lane=lane.id, detail=inp.text[:120])
     return ActionAck(**_managed_identity(lane, ctx), op="steer")
 
@@ -1570,7 +1619,8 @@ async def brief(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
         "content": [{"type": "input_text", "text": inp.text}],
     }
     await _prepare_attached_write(lane, ctx)
-    await ctx.client.inject_items(lane.id, [item])
+    native_id = _require_default_codex_binding(lane, "context")
+    await ctx.client.inject_items(native_id, [item])
     await ctx.registry.log_action("brief", lane=lane.id, detail=inp.text[:120])
     return ActionAck(**_managed_identity(lane, ctx), op="brief")
 
@@ -1580,7 +1630,8 @@ async def interrupt(inp: LaneInput, ctx: Ctx) -> ActionAck:
     _require_writable(lane, ctx)
     turn_id = _require_active_turn(lane, "interrupt")
     await _prepare_attached_write(lane, ctx)
-    await ctx.client.turn_interrupt(lane.id, turn_id)
+    native_id = _require_default_codex_binding(lane, "interrupt")
+    await ctx.client.turn_interrupt(native_id, turn_id)
     await ctx.registry.log_action("interrupt", lane=lane.id)
     return ActionAck(**_managed_identity(lane, ctx), op="interrupt")
 
@@ -1590,7 +1641,8 @@ async def stop(inp: LaneInput, ctx: Ctx) -> ActionAck:
     _require_writable(lane, ctx)
     turn_id = _require_active_turn(lane, "stop")
     await _prepare_attached_write(lane, ctx)
-    await ctx.client.turn_interrupt(lane.id, turn_id)
+    native_id = _require_default_codex_binding(lane, "stop")
+    await ctx.client.turn_interrupt(native_id, turn_id)
     await ctx.registry.log_action("stop", lane=lane.id)
     return ActionAck(**_managed_identity(lane, ctx), op="stop")
 
@@ -1904,11 +1956,12 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
     model_settings = await ctx.registry.get_lane_model_settings(lane.id)
     transcript: list[TranscriptItem] = []
     if inp.topology:
-        thread = await _read_thread_metadata(ctx, lane.id)
+        native_id = _require_default_codex_binding(lane, "topology")
+        thread = await _read_thread_metadata(ctx, native_id)
         await observe_thread(ctx.registry, thread, relationship_source="thread/read")
         descendants = await ctx.client.thread_list(
             limit=inp.topology_limit,
-            ancestor_thread_id=lane.id,
+            ancestor_thread_id=native_id,
             archived=False,
             sort_direction="desc",
             sort_key="updated_at",
@@ -1921,10 +1974,11 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
             relationship_source="thread/list:ancestor",
         )
     if inp.include_transcript:
-        result = await ctx.client.thread_read(lane.id, include_turns=True)
+        native_id = _require_default_codex_binding(lane, "transcript")
+        result = await ctx.client.thread_read(native_id, include_turns=True)
         await index_codex_thread_read(ctx.registry, lane, result, ctx.capture)
         transcript = _transcript_from_thread(result, limit=inp.max_items)
-    topology = await topology_views(ctx.registry, [lane.id], max_nodes=inp.topology_limit)
+    topology = await lane_topology_views(ctx.registry, [lane], max_nodes=inp.topology_limit)
     return LaneDetail(
         **_ref(lane, ctx).model_dump(),
         active_turn_id=lane.active_turn_id,
@@ -1943,6 +1997,7 @@ async def sync_lane(inp: LaneSyncInput, ctx: Ctx) -> LaneSyncResult:
         lane = await _register_attached_thread(thread, ctx, sync=False, audit_op="attach")
     else:
         lane = resolved.lane
+    _require_default_codex_binding(lane, "sync")
     jsonl_budget = max(1, inp.max_bytes // 2)
     try:
         async with asyncio.timeout(inp.max_seconds):
@@ -2009,11 +2064,13 @@ async def rename_lane(inp: LaneRenameInput, ctx: Ctx) -> ThreadActionRef:
         await ctx.registry.log_action("lane-rename", lane=thread_id, detail=inp.new)
         return _action_ref(thread_id=thread_id)
 
+    thread_id = _require_default_codex_binding(lane, "rename")
+
     handle = _handle(inp.new)
     existing = await ctx.registry.find_lane_by_handle(handle)
     if existing is not None and existing.id != lane.id:
         raise ValidationError(f"lane handle {handle!r} is already registered")
-    await ctx.client.thread_set_name(lane.id, handle.removeprefix("@"))
+    await ctx.client.thread_set_name(thread_id, handle.removeprefix("@"))
     await ctx.registry.update_lane_handle(lane.id, handle)
     await ctx.registry.log_action("lane-rename", lane=lane.id, detail=handle)
     return _action_ref(thread_id=lane.id, lane=await ctx.registry.get_lane(lane.id))
@@ -2024,9 +2081,10 @@ async def watch(inp: WatchInput, ctx: Ctx) -> WatchOutput:
     if resolved.lane is None:
         raise NotFoundError(f"no managed thread {inp.lane!r}")
     lane = resolved.lane
+    native_id = _require_default_codex_binding(lane, "tail")
     if inp.timeout == 0:
         return WatchOutput(**_managed_identity(lane, ctx), events=[], timed_out=True)
-    stream = ctx.client.raw_events(lane.id)
+    stream = ctx.client.raw_events(native_id)
     events: list[WatchEvent] = []
     timed_out = False
     loop = asyncio.get_running_loop()
@@ -2059,7 +2117,8 @@ async def transcript(inp: TranscriptInput, ctx: Ctx) -> TranscriptOutput:
     if resolved.lane is None:
         raise NotFoundError(f"no managed thread {inp.lane!r}")
     lane = resolved.lane
-    result = await ctx.client.thread_read(lane.id, include_turns=True)
+    native_id = _require_default_codex_binding(lane, "transcript")
+    result = await ctx.client.thread_read(native_id, include_turns=True)
     await index_codex_thread_read(ctx.registry, lane, result, ctx.capture)
     return TranscriptOutput(
         **_managed_identity(lane, ctx),
@@ -2084,7 +2143,8 @@ async def history(inp: HistoryInput, ctx: Ctx) -> HistoryOutput:
     if inp.lane is None:
         raise ValidationError("history view requires a thread selector")
     lane = await _resolve(ctx, inp.lane)
-    result = await ctx.client.thread_read(lane.id, include_turns=True)
+    native_id = _require_default_codex_binding(lane, "history")
+    result = await ctx.client.thread_read(native_id, include_turns=True)
     summary, items, tools, files = await _history_details(lane, result, ctx)
     if mode == "summary":
         return HistoryOutput(mode="summary", thread=summary, tools=tools, files=files)
@@ -2312,7 +2372,9 @@ async def query(inp: QueryInput, ctx: Ctx) -> QueryOutput:
         lane = lane_map.get(item.lane)
         if lane is None:
             continue
-        refs = refs_by_item.get((item.provider, item.provider_thread_id, item.item_id), [])
+        refs = refs_by_item.get(
+            (item.provider, item.binding_id, item.provider_thread_id, item.item_id), []
+        )
         matches.append(_query_match(lane, item, refs, query=inp.query))
     return QueryOutput(query=inp.query, matches=matches, scanned=scanned)
 
@@ -2490,7 +2552,11 @@ async def _search_one_thread(
     resolved = await resolve_thread_selector(
         ctx, inp.lane, allow_unmanaged_raw=True, allow_fuzzy=True
     )
-    thread_id = resolved.thread_id
+    thread_id = (
+        _require_default_codex_binding(resolved.lane, "search")
+        if resolved.lane is not None
+        else resolved.thread_id
+    )
     result = await ctx.client.thread_read(thread_id, include_turns=True)
     try:
         thread = ThreadResult.model_validate(result).thread
@@ -2721,7 +2787,8 @@ async def goal_get(inp: GoalGetInput, ctx: Ctx) -> GoalView:
     if resolved.lane is None:
         raise NotFoundError(f"no managed thread {inp.lane!r}")
     lane = resolved.lane
-    goal = await ctx.client.thread_goal_get(lane.id)
+    native_id = _require_default_codex_binding(lane, "goal read")
+    goal = await ctx.client.thread_goal_get(native_id)
     return GoalView(**_managed_identity(lane, ctx), goal=_goal(goal) if goal is not None else None)
 
 
@@ -2729,15 +2796,16 @@ async def goal_set(inp: GoalSetInput, ctx: Ctx) -> GoalView:
     lane = await _resolve(ctx, inp.lane)
     _require_writable(lane, ctx)
     await _prepare_attached_write(lane, ctx)
+    native_id = _require_default_codex_binding(lane, "goal write")
     if inp.objective is None and inp.status is None and inp.token_budget is None:
         raise ValidationError("goal-set requires objective, status, or token_budget")
-    if inp.objective is None and await ctx.client.thread_goal_get(lane.id) is None:
+    if inp.objective is None and await ctx.client.thread_goal_get(native_id) is None:
         raise ValidationError(
             "goal-set requires objective when creating a goal; status and token_budget "
             "only update an existing goal"
         )
     goal = await ctx.client.thread_goal_set(
-        lane.id,
+        native_id,
         objective=inp.objective,
         status=inp.status,
         token_budget=inp.token_budget,
@@ -2750,7 +2818,8 @@ async def goal_clear(inp: GoalClearInput, ctx: Ctx) -> GoalView:
     lane = await _resolve(ctx, inp.lane)
     _require_writable(lane, ctx)
     await _prepare_attached_write(lane, ctx)
-    await ctx.client.thread_goal_clear(lane.id)
+    native_id = _require_default_codex_binding(lane, "goal write")
+    await ctx.client.thread_goal_clear(native_id)
     await ctx.registry.log_action("goal-clear", lane=lane.id)
     return GoalView(**_managed_identity(lane, ctx), goal=None)
 
@@ -2759,6 +2828,7 @@ async def fork(inp: ForkInput, ctx: Ctx) -> LaneRef:
     source = await _resolve(ctx, inp.lane)
     _require_writable(source, ctx)
     await _prepare_attached_write(source, ctx)
+    source_native_id = _require_default_codex_binding(source, "fork")
     resolved_model = await resolve_model_settings(
         ctx,
         model=inp.model,
@@ -2772,7 +2842,7 @@ async def fork(inp: ForkInput, ctx: Ctx) -> LaneRef:
         ctx, inp.permission_profile, cwd=str(Path(fork_cwd).expanduser().resolve())
     )
     thread = await ctx.client.thread_fork(
-        source.id,
+        source_native_id,
         cwd=inp.cwd or source.cwd,
         permission_profile=permission_profile,
         sandbox=inp.sandbox,
@@ -2824,7 +2894,8 @@ async def rollback(inp: RollbackInput, ctx: Ctx) -> LaneRef:
     lane = await _resolve(ctx, inp.lane)
     _require_writable(lane, ctx)
     await _prepare_attached_write(lane, ctx)
-    await ctx.client.thread_rollback(lane.id, inp.turns)
+    native_id = _require_default_codex_binding(lane, "rollback")
+    await ctx.client.thread_rollback(native_id, inp.turns)
     await ctx.registry.set_active_turn(lane.id, None)
     await ctx.registry.update_lane_status(lane.id, "idle")
     await ctx.registry.log_action("rollback", lane=lane.id, detail=f"{inp.turns} turn(s)")
@@ -2835,7 +2906,8 @@ async def compact(inp: CompactInput, ctx: Ctx) -> ActionAck:
     lane = await _resolve(ctx, inp.lane)
     _require_writable(lane, ctx)
     await _prepare_attached_write(lane, ctx)
-    await ctx.client.thread_compact_start(lane.id)
+    native_id = _require_default_codex_binding(lane, "compact")
+    await ctx.client.thread_compact_start(native_id)
     await ctx.registry.log_action("compact", lane=lane.id)
     return ActionAck(**_managed_identity(lane, ctx), op="compact")
 
@@ -2848,8 +2920,12 @@ async def roster(inp: RosterInput, ctx: Ctx) -> Roster:
         resolved = await resolve_thread_selector(
             ctx, selector, allow_unmanaged_raw=True, allow_fuzzy=False
         )
-        parent_thread_id = resolved.thread_id if inp.parent is not None else None
-        ancestor_thread_id = resolved.thread_id if inp.parent is None else None
+        if resolved.lane is not None:
+            native_id = _require_default_codex_binding(resolved.lane, "topology")
+        else:
+            native_id = resolved.thread_id
+        parent_thread_id = native_id if inp.parent is not None else None
+        ancestor_thread_id = native_id if inp.parent is None else None
         active = await ctx.client.thread_list(
             limit=inp.topology_limit,
             archived=False,
@@ -2885,13 +2961,11 @@ async def roster(inp: RosterInput, ctx: Ctx) -> Roster:
         related = [*active, *archived]
         selected_ids = {thread.id for thread in related}
         if inp.root is not None:
-            selected_ids.add(resolved.thread_id)
+            selected_ids.add(native_id)
         lanes = [lane for lane in lanes if lane.id in selected_ids]
     syncs = await ctx.registry.get_lane_sync_many([lane.id for lane in lanes])
     models = await ctx.registry.get_lane_model_settings_many([lane.id for lane in lanes])
-    topology = await topology_views(
-        ctx.registry, [lane.id for lane in lanes], max_nodes=inp.topology_limit
-    )
+    topology = await lane_topology_views(ctx.registry, lanes, max_nodes=inp.topology_limit)
     return Roster(
         lanes=[
             _list_item(
@@ -2946,10 +3020,15 @@ async def discover(inp: DiscoverInput, ctx: Ctx) -> Discovery:
         resolved = await resolve_thread_selector(
             ctx, selector, allow_unmanaged_raw=True, allow_fuzzy=False
         )
+        native_id = (
+            _require_default_codex_binding(resolved.lane, "discovery")
+            if resolved.lane is not None
+            else resolved.thread_id
+        )
         if inp.parent is not None:
-            parent_thread_id = resolved.thread_id
+            parent_thread_id = native_id
         else:
-            ancestor_thread_id = resolved.thread_id
+            ancestor_thread_id = native_id
     threads = await ctx.client.thread_list(
         limit=inp.limit,
         archived=inp.archived,
@@ -3227,6 +3306,8 @@ def _model_catalog_item(entry: ModelCatalogEntry) -> ModelCatalogItem:
 
 async def archive(inp: ThreadTargetInput, ctx: Ctx) -> ThreadActionRef:
     thread_id, lane = await _resolve_thread_target(ctx, inp.target)
+    if lane is not None:
+        thread_id = _require_default_codex_binding(lane, "archive")
     try:
         await ctx.client.thread_archive(thread_id)
     except ClientAppServerError as exc:
@@ -3247,6 +3328,8 @@ def _is_no_rollout_archive_error(exc: ClientAppServerError) -> bool:
 
 async def restore(inp: ThreadTargetInput, ctx: Ctx) -> ThreadActionRef:
     thread_id, lane = await _resolve_thread_target(ctx, inp.target)
+    if lane is not None:
+        thread_id = _require_default_codex_binding(lane, "restore")
     thread = await ctx.client.thread_unarchive(thread_id)
     await observe_thread(
         ctx.registry, thread, lifecycle_state="active", relationship_source="thread/unarchive"

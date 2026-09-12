@@ -6,12 +6,20 @@ from hashlib import sha256
 
 BASE58BTC_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 CODEX_REF_SOURCE = "0"
+GENERIC_REF_SOURCE = "1"
 
 
 def codex_ref_payload(thread_id: str) -> str:
     """Return the four-character base58btc hash payload for a Codex thread id."""
 
     digest = sha256(f"codex:{thread_id}".encode()).digest()
+    return _base58btc(digest)[:4]
+
+
+def generic_ref_payload(lane_id: str) -> str:
+    """Return a short payload derived from an opaque Dispatch lane key."""
+
+    digest = sha256(f"dispatch:{lane_id}".encode()).digest()
     return _base58btc(digest)[:4]
 
 

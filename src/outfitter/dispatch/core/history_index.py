@@ -13,7 +13,6 @@ from outfitter.dispatch.core.codex_items import normalize_codex_item
 from outfitter.dispatch.registry.models import Lane, ThreadItem, ThreadItemRef, ThreadTurn
 from outfitter.dispatch.registry.store import Registry
 
-_CODEX_PROVIDER = "codex"
 _TURN_STATUSES: set[str] = {"started", "completed", "failed", "interrupted", "unknown"}
 
 
@@ -41,7 +40,7 @@ async def index_codex_thread_read(
         registry,
         lane,
         [turn for turn in turns if isinstance(turn, dict)],
-        provider_thread_id=_string(thread.get("id")) or lane.id,
+        provider_thread_id=_string(thread.get("id")) or lane.provider_session_id or lane.id,
         capture=capture,
         completion_source="thread-read",
     )
@@ -59,7 +58,7 @@ async def index_codex_turns_page(
         registry,
         lane,
         [turn.model_dump(by_alias=True, exclude_none=True) for turn in turns],
-        provider_thread_id=lane.id,
+        provider_thread_id=lane.provider_session_id or lane.id,
         capture=capture,
         completion_source="thread-turns-list",
     )
@@ -87,7 +86,8 @@ async def index_codex_items_page(
         item_ids.add(item_id)
         item, refs = normalize_codex_item(
             raw_item,
-            provider_thread_id=lane.id,
+            provider_thread_id=lane.provider_session_id or lane.id,
+            binding_id=lane.binding_id,
             lane=lane.id,
             turn_id=turn_id,
             inserted_at=now,
@@ -98,8 +98,9 @@ async def index_codex_items_page(
     await registry.upsert_thread_history_snapshot(
         turns=[],
         items=indexed_items,
-        provider=_CODEX_PROVIDER,
-        provider_thread_id=lane.id,
+        provider=lane.provider,
+        binding_id=lane.binding_id,
+        provider_thread_id=lane.provider_session_id or lane.id,
         turn_ids=set(),
         item_ids=item_ids,
         prune_missing=False,
@@ -131,7 +132,8 @@ async def _index_codex_turns(
         turn_error = bound_text(_turn_error(raw_turn.get("error")), policy)
         indexed_turns.append(
             ThreadTurn(
-                provider=_CODEX_PROVIDER,
+                provider=lane.provider,
+                binding_id=lane.binding_id,
                 provider_thread_id=provider_thread_id,
                 lane=lane.id,
                 turn_id=turn_id,
@@ -157,6 +159,7 @@ async def _index_codex_turns(
             item, refs = normalize_codex_item(
                 raw_item,
                 provider_thread_id=provider_thread_id,
+                binding_id=lane.binding_id,
                 lane=lane.id,
                 turn_id=turn_id,
                 inserted_at=now,
@@ -173,7 +176,8 @@ async def _index_codex_turns(
     await registry.upsert_thread_history_snapshot(
         turns=indexed_turns,
         items=indexed_items,
-        provider=_CODEX_PROVIDER,
+        provider=lane.provider,
+        binding_id=lane.binding_id,
         provider_thread_id=provider_thread_id,
         turn_ids=seen_turn_ids,
         item_ids=seen_item_ids,

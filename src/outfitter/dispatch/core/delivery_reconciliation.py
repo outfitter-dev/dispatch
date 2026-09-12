@@ -8,11 +8,24 @@ import json
 from outfitter.dispatch.client.errors import ClientError
 from outfitter.dispatch.client.models import ThreadTurn
 from outfitter.dispatch.contracts.context import Ctx
+from outfitter.dispatch.registry.models import Lane
+from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
 
 MAX_CHECKS = 3
 MAX_PAGES = 4
 MAX_HISTORY_BYTES = 1_000_000
 MAX_READINESS_CHECKS = 3
+
+
+def _native_id(lane: Lane | None) -> str | None:
+    if (
+        lane is None
+        or lane.provider != "codex"
+        or lane.binding_id != DEFAULT_CODEX_BINDING_ID
+        or lane.provider_session_id != lane.id
+    ):
+        return None
+    return lane.provider_session_id
 
 
 async def reconcile_pending(ctx: Ctx) -> None:
@@ -80,6 +93,10 @@ async def reconcile_accepted_after_reconnect(ctx: Ctx) -> None:
 
 async def reconcile_receipt(delivery_id: str, ctx: Ctx, *, automatic: bool = True) -> None:
     receipt = await ctx.registry.get_delivery(delivery_id)
+    lane = await ctx.registry.find_lane(receipt.lane)
+    native_id = _native_id(lane)
+    if native_id is None:
+        return
     if receipt.status == "completed" and receipt.execution_status == "completed":
         if (
             not automatic
@@ -131,7 +148,7 @@ async def reconcile_receipt(delivery_id: str, ctx: Ctx, *, automatic: bool = Tru
                         receipt.id, status="accepted", submission_id=submission.id
                     )
                     return
-            turn, reason = await _find_arrival(ctx, receipt.lane, receipt.id, expected)
+            turn, reason = await _find_arrival(ctx, native_id, receipt.id, expected)
     except (ClientError, TimeoutError) as exc:
         turn, reason = None, f"provider history unavailable: {exc}"
     if turn is None:
@@ -188,12 +205,15 @@ async def _refresh_idle_readiness(lane_id: str, ctx: Ctx) -> bool:
                 lane = await ctx.registry.find_lane(lane_id)
                 if lane is None or lane.status in ("archived", "error"):
                     return False
+                native_id = _native_id(lane)
+                if native_id is None:
+                    return False
                 try:
-                    result = await ctx.client.thread_read(lane_id, include_turns=False)
+                    result = await ctx.client.thread_read(native_id, include_turns=False)
                 except (ClientError, TimeoutError):
                     continue
                 thread = result.get("thread")
-                if not isinstance(thread, dict) or thread.get("id") != lane_id:
+                if not isinstance(thread, dict) or thread.get("id") != native_id:
                     continue
                 status = thread.get("status")
                 if not isinstance(status, dict):

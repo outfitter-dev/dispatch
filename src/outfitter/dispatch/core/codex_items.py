@@ -12,6 +12,7 @@ from outfitter.dispatch.core.capture import (
     bound_redacted_text,
 )
 from outfitter.dispatch.registry.models import ThreadItem, ThreadItemRef
+from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
 
 CODEX_ITEM_TYPES = frozenset(
     {
@@ -41,6 +42,7 @@ def normalize_codex_item(
     raw_item: dict[str, object],
     *,
     provider_thread_id: str,
+    binding_id: str = DEFAULT_CODEX_BINDING_ID,
     lane: str,
     turn_id: str | None,
     inserted_at: str,
@@ -62,6 +64,7 @@ def normalize_codex_item(
         arguments = str(arguments)
     item = ThreadItem(
         provider="codex",
+        binding_id=binding_id,
         provider_thread_id=provider_thread_id,
         item_id=item_id,
         lane=lane,
@@ -202,6 +205,7 @@ def _item_refs(
     return [
         ThreadItemRef(
             provider=item.provider,
+            binding_id=item.binding_id,
             provider_thread_id=item.provider_thread_id,
             item_id=item.item_id,
             ref_type=ref_type,

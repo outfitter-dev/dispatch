@@ -33,8 +33,6 @@ from outfitter.dispatch.registry.models import (
 )
 from outfitter.dispatch.registry.store import Registry
 
-_CODEX_PROVIDER = "codex"
-
 
 async def index_codex_lane_event(
     registry: Registry,
@@ -48,8 +46,9 @@ async def index_codex_lane_event(
     retained_payload = _retained_payload(event, policy)
     received_at = registry.now_iso()
     provider_event = ProviderEvent(
-        provider=_CODEX_PROVIDER,
-        provider_thread_id=lane.id,
+        provider=lane.provider,
+        binding_id=lane.binding_id,
+        provider_thread_id=lane.provider_session_id or lane.id,
         lane=lane.id,
         event_type=_event_type(event),
         provider_event_id=_provider_event_id(event),
@@ -66,7 +65,8 @@ async def index_codex_lane_event(
     if isinstance(event, ItemStarted | ItemCompleted) and event.item is not None:
         item, refs = normalize_codex_item(
             event.item,
-            provider_thread_id=lane.id,
+            provider_thread_id=lane.provider_session_id or lane.id,
+            binding_id=lane.binding_id,
             lane=lane.id,
             turn_id=event.turn_id,
             inserted_at=received_at,
@@ -74,7 +74,10 @@ async def index_codex_lane_event(
             capture=policy,
         )
         existing = await registry.find_thread_item(
-            item.provider, item.provider_thread_id, item.item_id
+            item.provider,
+            item.provider_thread_id,
+            item.item_id,
+            binding_id=item.binding_id,
         )
         stale_start = (
             isinstance(event, ItemStarted)
@@ -256,8 +259,9 @@ def _thread_turn(
 ) -> ThreadTurn | None:
     if isinstance(event, TurnStarted) and event.turn_id is not None:
         return ThreadTurn(
-            provider=_CODEX_PROVIDER,
-            provider_thread_id=lane.id,
+            provider=lane.provider,
+            binding_id=lane.binding_id,
+            provider_thread_id=lane.provider_session_id or lane.id,
             lane=lane.id,
             turn_id=event.turn_id,
             status="started",
@@ -266,8 +270,9 @@ def _thread_turn(
         )
     if isinstance(event, TurnCompleted) and event.turn_id is not None:
         return ThreadTurn(
-            provider=_CODEX_PROVIDER,
-            provider_thread_id=lane.id,
+            provider=lane.provider,
+            binding_id=lane.binding_id,
+            provider_thread_id=lane.provider_session_id or lane.id,
             lane=lane.id,
             turn_id=event.turn_id,
             status="completed",
@@ -278,8 +283,9 @@ def _thread_turn(
     if isinstance(event, TurnFailed) and event.turn_id is not None:
         message = bound_text(event.message, capture)
         return ThreadTurn(
-            provider=_CODEX_PROVIDER,
-            provider_thread_id=lane.id,
+            provider=lane.provider,
+            binding_id=lane.binding_id,
+            provider_thread_id=lane.provider_session_id or lane.id,
             lane=lane.id,
             turn_id=event.turn_id,
             status=event.execution_status,
@@ -348,8 +354,9 @@ def _state(
 ) -> LaneRuntimeState:
     return LaneRuntimeState(
         lane=lane.id,
-        provider=_CODEX_PROVIDER,
-        provider_thread_id=lane.id,
+        provider=lane.provider,
+        binding_id=lane.binding_id,
+        provider_thread_id=lane.provider_session_id or lane.id,
         status=status,  # type: ignore[arg-type]
         active_turn_id=active_turn_id,
         latest_turn_id=latest_turn_id,

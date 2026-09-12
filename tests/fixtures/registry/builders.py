@@ -117,6 +117,7 @@ def lane_runtime_settings(
 def provider_event(
     *,
     lane: str = "L1",
+    binding_id: str = "codex-default",
     provider_thread_id: str = "thread-1",
     event_type: str = "turn/started",
     provider_event_id: str | None = "event-1",
@@ -125,6 +126,7 @@ def provider_event(
 ) -> ProviderEvent:
     return ProviderEvent(
         provider="codex",
+        binding_id=binding_id,
         provider_thread_id=provider_thread_id,
         lane=lane,
         event_type=event_type,
@@ -141,6 +143,7 @@ def provider_event(
 def provider_thread_observation(
     *,
     provider: str = "codex",
+    binding_id: str = "codex-default",
     provider_thread_id: str = "thread-1",
     parent_thread_id: str | None = None,
     forked_from_id: str | None = None,
@@ -149,6 +152,7 @@ def provider_thread_observation(
 ) -> ProviderThreadObservation:
     return ProviderThreadObservation(
         provider=provider,
+        binding_id=binding_id,
         provider_thread_id=provider_thread_id,
         session_id="session-1",
         parent_thread_id=parent_thread_id,
@@ -221,12 +225,14 @@ def provider_capacity_observation(
 def server_request(
     *,
     provider_session_id: str = "app-server-1",
+    binding_id: str = "codex-default",
     provider_thread_id: str | None = "thread-1",
     lane: str | None = "L1",
     request_id: int | str = 1,
     received_at: str | None = None,
 ) -> ServerRequest:
     return ServerRequest(
+        binding_id=binding_id,
         provider_session_id=provider_session_id,
         provider_thread_id=provider_thread_id,
         lane=lane,
@@ -240,6 +246,7 @@ def server_request(
 def thread_turn(
     *,
     lane: str = "L1",
+    binding_id: str = "codex-default",
     provider_thread_id: str = "thread-1",
     turn_id: str = "turn-1",
     status: str = "started",
@@ -247,6 +254,7 @@ def thread_turn(
 ) -> ThreadTurn:
     return ThreadTurn(
         provider="codex",
+        binding_id=binding_id,
         provider_thread_id=provider_thread_id,
         turn_id=turn_id,
         lane=lane,
@@ -259,6 +267,7 @@ def thread_turn(
 def thread_item(
     *,
     lane: str = "L1",
+    binding_id: str = "codex-default",
     provider_thread_id: str = "thread-1",
     turn_id: str = "turn-1",
     item_id: str = "item-1",
@@ -278,6 +287,7 @@ def thread_item(
 ) -> ThreadItem:
     return ThreadItem(
         provider="codex",
+        binding_id=binding_id,
         provider_thread_id=provider_thread_id,
         item_id=item_id,
         lane=lane,
@@ -306,12 +316,14 @@ def thread_item(
 def thread_item_ref(
     *,
     provider_thread_id: str = "thread-1",
+    binding_id: str = "codex-default",
     item_id: str = "item-1",
     ref_type: str = "tool",
     ref_value: str = "bash",
 ) -> ThreadItemRef:
     return ThreadItemRef(
         provider="codex",
+        binding_id=binding_id,
         provider_thread_id=provider_thread_id,
         item_id=item_id,
         ref_type=ref_type,
@@ -322,6 +334,7 @@ def thread_item_ref(
 def message_receipt(
     *,
     lane: str = "L1",
+    binding_id: str = "codex-default",
     provider_thread_id: str = "thread-1",
     dispatch_message_id: str = "dispatch-message-1",
     status: str = "created",
@@ -331,6 +344,7 @@ def message_receipt(
     return MessageReceipt(
         lane=lane,
         provider="codex",
+        binding_id=binding_id,
         provider_thread_id=provider_thread_id,
         dispatch_message_id=dispatch_message_id,
         status=status,  # type: ignore[arg-type]
@@ -342,12 +356,14 @@ def message_receipt(
 def lane_runtime_state(
     *,
     lane: str = "L1",
+    binding_id: str = "codex-default",
     provider_thread_id: str = "thread-1",
     updated_at: str | None = None,
 ) -> LaneRuntimeState:
     return LaneRuntimeState(
         lane=lane,
         provider="codex",
+        binding_id=binding_id,
         provider_thread_id=provider_thread_id,
         status="busy",
         active_turn_id="turn-1",

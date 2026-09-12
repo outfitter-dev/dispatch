@@ -19,8 +19,9 @@ from outfitter.dispatch.client.models import (
 )
 from outfitter.dispatch.config import CapturePolicy
 from outfitter.dispatch.contracts.context import LaneClient
+from outfitter.dispatch.contracts.errors import CapabilityUnavailableError
 from outfitter.dispatch.registry.models import Lane
-from outfitter.dispatch.registry.store import Registry
+from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID, Registry
 
 from .history_index import index_codex_items_page, index_codex_turns_page
 
@@ -83,6 +84,15 @@ async def backfill_codex_history(
 ) -> HistoryBackfillResult:
     """Reconcile recent turns first, then resume bounded older history."""
 
+    if (
+        lane.provider != "codex"
+        or lane.binding_id != DEFAULT_CODEX_BINDING_ID
+        or lane.provider_session_id != lane.id
+    ):
+        raise CapabilityUnavailableError(
+            f"history sync is unavailable for provider binding {lane.provider}:{lane.binding_id}"
+        )
+    native_id = lane.provider_session_id
     started = monotonic()
     deadline = started + max_seconds
     initial_request = ThreadResumeInitialTurnsPageParams(
@@ -93,7 +103,7 @@ async def backfill_codex_history(
     try:
         resumed = await _within_deadline(
             client.thread_resume_full(
-                lane.id,
+                native_id,
                 exclude_turns=True,
                 initial_turns_page=initial_request,
             ),
@@ -105,7 +115,7 @@ async def backfill_codex_history(
             raise
         try:
             await _within_deadline(
-                client.thread_resume(lane.id, exclude_turns=True),
+                client.thread_resume(native_id, exclude_turns=True),
                 deadline=deadline,
                 monotonic=monotonic,
             )
