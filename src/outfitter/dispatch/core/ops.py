@@ -84,6 +84,23 @@ from .models import (
     WatchInput,
     WatchOutput,
 )
+from .providers import ALL_CODEX_ACTIONS
+
+
+def _provider_state_example(ownership: str) -> dict[str, object]:
+    return {
+        "ownership": ownership,
+        "activity": "idle",
+        "supported_actions": sorted(action.value for action in ALL_CODEX_ACTIONS),
+        "readiness": "ready",
+        "readiness_reason": None,
+        "source": "runtime_binding",
+        "as_of": None,
+        "generation": None,
+        "partial": False,
+        "uncertain": False,
+    }
+
 
 OPEN = define_op(
     id="open",
@@ -124,6 +141,7 @@ OPEN = define_op(
                     "rollback": True,
                     "compact": True,
                 },
+                "provider_state": _provider_state_example("own"),
                 "write_locked_reason": None,
             },
         )
@@ -175,6 +193,7 @@ NEW = define_op(
                     "rollback": True,
                     "compact": True,
                 },
+                "provider_state": _provider_state_example("own"),
                 "write_locked_reason": None,
                 "message_accepted": False,
                 "goal_set": False,
@@ -355,6 +374,7 @@ ATTACH = define_op(
                     "rollback": False,
                     "compact": False,
                 },
+                "provider_state": _provider_state_example("attached"),
                 "write_locked_reason": (
                     "attached thread; Dispatch does not own this App Server thread "
                     "(enable policy.allow_attached_writes to override)"
