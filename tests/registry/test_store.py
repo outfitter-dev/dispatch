@@ -45,6 +45,26 @@ def _clock() -> datetime:
     return datetime(2026, 6, 3, 12, 0, 0, tzinfo=UTC)
 
 
+async def test_terminal_thread_turn_status_is_absorbing(store: Registry) -> None:
+    await store.add_lane(id="thread-1", handle="@thread", source="own")
+    completed = thread_turn(lane="thread-1", status="completed")
+    await store.upsert_thread_turn(completed)
+    await store.upsert_thread_turn(
+        completed.model_copy(
+            update={"status": "started", "updated_at": "2026-06-03T12:01:00+00:00"}
+        )
+    )
+
+    observed = await store.get_thread_turn(
+        completed.provider,
+        completed.provider_thread_id,
+        completed.turn_id,
+        binding_id=completed.binding_id,
+    )
+
+    assert observed.status == "completed"
+
+
 @pytest_asyncio.fixture
 async def store() -> AsyncIterator[Registry]:
     s = await Registry.open(now=_clock)
@@ -1824,7 +1844,7 @@ async def test_v17_migration_adds_replace_in_place_provider_capacity_table(
         async with migrated._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
         assert row is not None
-        assert int(row[0]) == SCHEMA_VERSION == 25
+        assert int(row[0]) == SCHEMA_VERSION == 26
     finally:
         await migrated.close()
 

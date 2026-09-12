@@ -71,7 +71,7 @@ class Reactor:
         route.recheck(self._ctx.provider_session_id or None)
         async for event in route.adapter.events():
             try:
-                await self.handle(event)
+                await self.handle(event, generation=route.availability.generation)
             except Exception:  # never let one bad event kill the reactor
                 self._ctx.log.exception("reactor.handle_failed", lane=event.lane_id)
 
@@ -89,7 +89,7 @@ class Reactor:
     async def handle_account_event(self, event: AccountRateLimitsUpdated) -> None:
         await observe_codex_rate_limits(self._ctx, event.rate_limits)
 
-    async def handle(self, event: LaneEvent) -> None:
+    async def handle(self, event: LaneEvent, *, generation: str | None = None) -> None:
         registry = self._ctx.registry
         if isinstance(event, ThreadStarted) and event.thread is not None:
             await observe_thread(
@@ -113,20 +113,23 @@ class Reactor:
         if isinstance(event, TurnCompleted | TurnFailed):
             from .delivery import observe_delivery_execution
 
-            await observe_delivery_execution(lane.id, event.turn_id, self._ctx)
+            await observe_delivery_execution(
+                lane.id, event.turn_id, self._ctx, generation=generation
+            )
 
         if isinstance(event, TurnStarted):
             await registry.record_turn_started(lane.id, event.turn_id)
             await registry.touch_lane_event(lane.id)
         elif isinstance(event, TurnCompleted):
-            await registry.record_turn_completed(lane.id, event.turn_id)
+            ended_current = await registry.record_turn_completed_if_active(lane.id, event.turn_id)
             await registry.touch_lane_event(lane.id)
             await process_event_subscriptions(self._ctx, lane, event)
-            await self._fire_event(lane.id, "turn_completed")
-            await drain_next_queued_message(self._ctx, lane.id)
+            if ended_current:
+                await self._fire_event(lane.id, "turn_completed")
+                await drain_next_queued_message(self._ctx, lane.id)
         elif isinstance(event, TurnFailed):
             message = bound_text(event.message, self._ctx.capture)
-            await registry.record_turn_failed(
+            await registry.record_turn_failed_if_active(
                 lane.id,
                 event.turn_id,
                 message.text if message is not None else None,

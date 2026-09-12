@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime
 
 from outfitter.dispatch.client.errors import ClientError
 from outfitter.dispatch.client.models import ThreadTurn
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.contracts.errors import CapabilityUnavailableError
 from outfitter.dispatch.registry.models import Lane
+from outfitter.dispatch.registry.observations import ProviderCorrelation, ProviderObservation
 
 from .providers import ProviderAction, ProviderRoute, route_lane
 
@@ -148,8 +150,21 @@ async def reconcile_receipt(delivery_id: str, ctx: Ctx, *, automatic: bool = Tru
                     )
                     submission = None
                 if submission is not None:
-                    await ctx.registry.update_delivery(
-                        receipt.id, status="accepted", submission_id=submission.id
+                    await ctx.registry.apply_receipt_observation(
+                        ProviderObservation(
+                            provider=receipt.provider,
+                            binding_id=receipt.binding_id,
+                            native_session_id=receipt.native_session_id or receipt.lane,
+                            kind="accepted",
+                            correlation=ProviderCorrelation(
+                                delivery_id=receipt.id,
+                                correlation_id=receipt.correlation_id,
+                                native_submission_id=submission.id,
+                            ),
+                            generation=route.availability.generation,
+                            source="history",
+                            received_at=datetime.fromisoformat(ctx.registry.now_iso()),
+                        )
                     )
                     return
             turn, reason = await _find_arrival(ctx, route, receipt.id, expected)
@@ -172,23 +187,45 @@ async def reconcile_receipt(delivery_id: str, ctx: Ctx, *, automatic: bool = Tru
         attention = (
             "automatic checks exhausted; " if checked.reconciliation_attempts >= MAX_CHECKS else ""
         )
-        await ctx.registry.update_delivery(
-            delivery_id,
-            status="ambiguous",
-            error=(
-                f"{reason}; {attention}delivery remains held; inspect provider history and "
-                f"run dispatch delivery reconcile {delivery_id}; do not resend"
-            )[:2000],
+        await ctx.registry.apply_receipt_observation(
+            ProviderObservation(
+                provider=receipt.provider,
+                binding_id=receipt.binding_id,
+                native_session_id=receipt.native_session_id or receipt.lane,
+                kind="uncertain",
+                correlation=ProviderCorrelation(
+                    delivery_id=receipt.id, correlation_id=receipt.correlation_id
+                ),
+                generation=route.availability.generation,
+                source="history",
+                received_at=datetime.fromisoformat(ctx.registry.now_iso()),
+                partial=True,
+                reason=(
+                    f"{reason}; {attention}delivery remains held; inspect provider history and "
+                    f"run dispatch delivery reconcile {delivery_id}; do not resend"
+                )[:2000],
+            )
         )
         if attention:
             ctx.log.warning("delivery.needs_attention", delivery_id=delivery_id, lane=receipt.lane)
         return
-    await ctx.registry.update_delivery(
-        delivery_id,
-        status="completed" if turn.status == "completed" else "accepted",
-        turn_id=turn.id,
-        execution_status=turn.status,
-        error=turn.error.message if turn.error is not None else None,
+    await ctx.registry.apply_receipt_observation(
+        ProviderObservation(
+            provider=receipt.provider,
+            binding_id=receipt.binding_id,
+            native_session_id=receipt.native_session_id or receipt.lane,
+            kind="started" if turn.status == "inProgress" else turn.status,
+            correlation=ProviderCorrelation(
+                delivery_id=receipt.id,
+                correlation_id=receipt.correlation_id,
+                native_submission_id=receipt.submission_id,
+                native_run_id=turn.id,
+            ),
+            generation=route.availability.generation,
+            source="history",
+            received_at=datetime.fromisoformat(ctx.registry.now_iso()),
+            reason=turn.error.message if turn.error is not None else None,
+        )
     )
     from .delivery import observe_delivery_execution
 
@@ -215,6 +252,9 @@ async def _refresh_idle_readiness(lane_id: str, ctx: Ctx) -> bool:
                 try:
                     route.recheck(ctx.provider_session_id or None)
                     result = await route.adapter.read(route.target, include_turns=False)
+                    route.recheck(ctx.provider_session_id or None)
+                except CapabilityUnavailableError:
+                    return False
                 except (ClientError, TimeoutError):
                     continue
                 thread = result.get("thread")
@@ -226,7 +266,18 @@ async def _refresh_idle_readiness(lane_id: str, ctx: Ctx) -> bool:
                 status = thread.get("status")
                 if not isinstance(status, dict):
                     continue
-                if status.get("type") != "idle":
+                readiness = ProviderObservation(
+                    provider=route.target.provider,
+                    binding_id=route.target.binding_id,
+                    native_session_id=route.target.native_session_id,
+                    kind="readiness",
+                    correlation=ProviderCorrelation(),
+                    generation=route.availability.generation,
+                    source="read",
+                    received_at=datetime.fromisoformat(ctx.registry.now_iso()),
+                    readiness="ready" if status.get("type") == "idle" else "busy",
+                )
+                if readiness.readiness != "ready":
                     return False
                 # A newer event winning the CAS ends this check; it is not
                 # permission to immediately overwrite that event on a retry.

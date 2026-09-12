@@ -68,6 +68,7 @@ from .models import (
     Trigger,
     WhenAdapter,
 )
+from .observations import ProviderObservation, ReceiptTransition
 from .refs import (
     BASE58BTC_ALPHABET,
     CODEX_REF_SOURCE,
@@ -78,7 +79,7 @@ from .refs import (
 )
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 DEFAULT_CODEX_BINDING_ID = "codex-default"
 
 
@@ -275,6 +276,10 @@ CREATE TABLE IF NOT EXISTS deliveries (
     lane TEXT NOT NULL,
     mode TEXT NOT NULL CHECK(mode IN ('send', 'queue')),
     transport TEXT NOT NULL DEFAULT 'turn',
+    provider TEXT NOT NULL DEFAULT 'codex',
+    binding_id TEXT NOT NULL DEFAULT 'codex-default',
+    native_session_id TEXT,
+    correlation_id TEXT,
     submission_id TEXT,
     submitted_payload TEXT,
     payload TEXT NOT NULL,
@@ -288,6 +293,11 @@ CREATE TABLE IF NOT EXISTS deliveries (
     queue_id INTEGER UNIQUE,
     error TEXT,
     reconciliation_attempts INTEGER NOT NULL DEFAULT 0,
+    evidence_source TEXT,
+    evidence_provider_time TEXT,
+    evidence_received_at TEXT,
+    evidence_partial INTEGER NOT NULL DEFAULT 0,
+    evidence_generation TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE,
@@ -873,6 +883,8 @@ class Registry:
             await self._ensure_binding_scope_v24()
         if user_version < 25:
             await self._ensure_delivery_submitted_payload_column()
+        if user_version < 26:
+            await self._ensure_delivery_observation_columns()
 
     async def _ensure_binding_scope_v24(self) -> None:
         """Add binding identity without changing stable lane keys or local row ids."""
@@ -1001,6 +1013,44 @@ class Registry:
             columns = {str(row["name"]) for row in await cur.fetchall()}
         if "submitted_payload" not in columns:
             await self._conn.execute("ALTER TABLE deliveries ADD COLUMN submitted_payload TEXT")
+
+    async def _ensure_delivery_observation_columns(self) -> None:
+        async with self._conn.execute("PRAGMA table_info(deliveries)") as cur:
+            columns = {str(row["name"]) for row in await cur.fetchall()}
+        additions = (
+            ("provider", "TEXT NOT NULL DEFAULT 'codex'"),
+            ("binding_id", f"TEXT NOT NULL DEFAULT '{DEFAULT_CODEX_BINDING_ID}'"),
+            ("native_session_id", "TEXT"),
+            ("correlation_id", "TEXT"),
+            ("evidence_source", "TEXT"),
+            ("evidence_provider_time", "TEXT"),
+            ("evidence_received_at", "TEXT"),
+            ("evidence_partial", "INTEGER NOT NULL DEFAULT 0"),
+            ("evidence_generation", "TEXT"),
+        )
+        for name, definition in additions:
+            if name not in columns:
+                await self._conn.execute(f"ALTER TABLE deliveries ADD COLUMN {name} {definition}")
+        await self._conn.execute(
+            "UPDATE deliveries SET "
+            "provider = CASE WHEN json_valid(payload) "
+            "THEN COALESCE(json_extract(payload, '$.request.target.provider'), provider) "
+            "ELSE provider END, "
+            "binding_id = CASE WHEN json_valid(payload) "
+            "THEN COALESCE(json_extract(payload, '$.request.target.binding_id'), binding_id) "
+            "ELSE binding_id END, "
+            "native_session_id = CASE WHEN json_valid(payload) "
+            "THEN COALESCE(native_session_id, "
+            "json_extract(payload, '$.request.target.native_session_id'), lane) "
+            "ELSE COALESCE(native_session_id, lane) END, "
+            "correlation_id = CASE WHEN json_valid(payload) "
+            "THEN COALESCE(correlation_id, json_extract(payload, '$.request.correlation_id'), id) "
+            "ELSE COALESCE(correlation_id, id) END"
+        )
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_deliveries_provider_run "
+            "ON deliveries(provider, binding_id, native_session_id, turn_id)"
+        )
 
     async def _ensure_queued_message_content_column(self) -> None:
         async with self._conn.execute("PRAGMA table_info(queued_messages)") as cur:
@@ -1687,6 +1737,23 @@ class Registry:
             await self._conn.commit()
 
     @_serialized_access
+    async def record_turn_completed_if_active(self, lane_id: str, turn_id: str | None) -> bool:
+        """Complete lane activity only when this is still its active native run."""
+
+        if turn_id is None:
+            return False
+        async with self._write_lock:
+            cur = await self._conn.execute(
+                "UPDATE lanes SET active_turn_id = NULL, latest_turn_id = ?, "
+                "latest_turn_status = 'completed', latest_error = NULL, latest_error_at = NULL, "
+                "status = 'idle', updated_at = ? WHERE id = ? "
+                "AND (active_turn_id IS NULL OR active_turn_id = ?)",
+                (turn_id, self._now().isoformat(), lane_id, turn_id),
+            )
+            await self._conn.commit()
+        return cur.rowcount == 1
+
+    @_serialized_access
     async def record_turn_failed(
         self,
         lane_id: str,
@@ -1712,6 +1779,39 @@ class Registry:
                 ),
             )
             await self._conn.commit()
+
+    @_serialized_access
+    async def record_turn_failed_if_active(
+        self,
+        lane_id: str,
+        turn_id: str | None,
+        message: str | None,
+        *,
+        execution_status: Literal["failed", "interrupted"] = "failed",
+    ) -> bool:
+        """Fail lane activity only when this is still its active native run."""
+
+        if turn_id is None:
+            return False
+        now = self._now().isoformat()
+        async with self._write_lock:
+            cur = await self._conn.execute(
+                "UPDATE lanes SET active_turn_id = NULL, latest_turn_id = ?, "
+                "latest_turn_status = ?, latest_error = ?, latest_error_at = ?, "
+                "status = 'error', updated_at = ? WHERE id = ? "
+                "AND (active_turn_id IS NULL OR active_turn_id = ?)",
+                (
+                    turn_id,
+                    execution_status,
+                    message,
+                    now if message is not None else None,
+                    now,
+                    lane_id,
+                    turn_id,
+                ),
+            )
+            await self._conn.commit()
+        return cur.rowcount == 1
 
     @_serialized_access
     async def record_turn_request_failed(self, lane_id: str, message: str | None) -> None:
@@ -1795,6 +1895,10 @@ class Registry:
         submitted_payload: str | None = None,
         delivery_id: str | None = None,
         transport: DeliveryTransport = "turn",
+        provider: str = "codex",
+        binding_id: str = DEFAULT_CODEX_BINDING_ID,
+        native_session_id: str | None = None,
+        correlation_id: str | None = None,
     ) -> tuple[DeliveryReceipt, bool]:
         """Reserve an idempotent delivery and its optional legacy queue row."""
 
@@ -1804,9 +1908,10 @@ class Registry:
             async with self._transaction():
                 await self._conn.execute(
                     "INSERT INTO deliveries "
-                    "(id, key, lane, mode, submitted_payload, payload, transport, status, "
+                    "(id, key, lane, mode, submitted_payload, payload, transport, provider, "
+                    "binding_id, native_session_id, correlation_id, status, "
                     "created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
                     (
                         receipt_id,
                         key,
@@ -1815,6 +1920,10 @@ class Registry:
                         submitted_payload,
                         payload,
                         transport,
+                        provider,
+                        binding_id,
+                        native_session_id or lane,
+                        correlation_id or receipt_id,
                         now,
                         now,
                     ),
@@ -1984,6 +2093,151 @@ class Registry:
         return await self.get_delivery(delivery_id)
 
     @_serialized_access
+    async def apply_receipt_observation(
+        self, observation: ProviderObservation
+    ) -> ReceiptTransition:
+        """Apply evidence only when it identifies one frozen delivery target exactly."""
+
+        correlation = observation.correlation
+        if correlation.delivery_id is None or correlation.correlation_id is None:
+            receipt = (
+                await self.get_delivery(correlation.delivery_id)
+                if correlation.delivery_id is not None
+                else None
+            )
+            return ReceiptTransition(
+                receipt=receipt,
+                matched=False,
+                reason="missing receipt correlation",
+            )
+        receipt = await self.get_delivery(correlation.delivery_id)
+        if (receipt.provider, receipt.binding_id, receipt.native_session_id) != (
+            observation.provider,
+            observation.binding_id,
+            observation.native_session_id,
+        ):
+            return ReceiptTransition(
+                receipt=receipt, matched=False, reason="provider binding mismatch"
+            )
+        if receipt.correlation_id != correlation.correlation_id:
+            return ReceiptTransition(
+                receipt=receipt, matched=False, reason="request correlation mismatch"
+            )
+        if receipt.turn_id is not None and receipt.turn_id != correlation.native_run_id:
+            return ReceiptTransition(receipt=receipt, matched=False, reason="native run mismatch")
+        if (
+            receipt.submission_id is not None
+            and correlation.native_submission_id is not None
+            and receipt.submission_id != correlation.native_submission_id
+        ):
+            return ReceiptTransition(
+                receipt=receipt, matched=False, reason="native submission mismatch"
+            )
+        if observation.kind in {"started", "completed", "failed", "interrupted"} and (
+            correlation.native_run_id is None
+        ):
+            return ReceiptTransition(
+                receipt=receipt, matched=False, reason="missing native run evidence"
+            )
+        if observation.kind == "accepted" and (
+            correlation.native_run_id is None and correlation.native_submission_id is None
+        ):
+            return ReceiptTransition(
+                receipt=receipt, matched=False, reason="missing positive provider evidence"
+            )
+        if receipt.status == "completed" or receipt.execution_status in {
+            "completed",
+            "failed",
+            "interrupted",
+        }:
+            return ReceiptTransition(
+                receipt=receipt,
+                matched=True,
+                reason="terminal receipt already settled",
+            )
+        status: DeliveryStatus = receipt.status
+        execution_status = receipt.execution_status
+        if observation.kind in {"accepted", "started"}:
+            if receipt.status not in {"completed", "failed"}:
+                status = "accepted"
+            if observation.kind == "started" and execution_status not in {
+                "completed",
+                "failed",
+                "interrupted",
+            }:
+                execution_status = "inProgress"
+        elif observation.kind == "completed":
+            status = "completed"
+            execution_status = "completed"
+        elif observation.kind in {"failed", "interrupted"}:
+            status = "accepted"
+            execution_status = cast(DeliveryExecutionStatus, observation.kind)
+        elif observation.kind == "uncertain" and receipt.status not in {
+            "accepted",
+            "completed",
+            "failed",
+        }:
+            status = "ambiguous"
+
+        provider_time = (
+            observation.provider_time.isoformat() if observation.provider_time is not None else None
+        )
+        received_at = observation.received_at.isoformat()
+        updated_at = self.now_iso()
+        async with self._transaction():
+            changed = await self._conn.execute(
+                "UPDATE deliveries SET status = ?, execution_status = ?, "
+                "turn_id = COALESCE(turn_id, ?), submission_id = COALESCE(submission_id, ?), "
+                "error = ?, evidence_source = ?, evidence_provider_time = ?, "
+                "evidence_received_at = ?, evidence_partial = ?, evidence_generation = ?, "
+                "updated_at = ? WHERE id = ? AND provider = ? AND binding_id = ? "
+                "AND native_session_id = ? AND correlation_id = ? "
+                "AND (turn_id IS NULL OR ? IS NULL OR turn_id = ?) "
+                "AND (submission_id IS NULL OR ? IS NULL OR submission_id = ?)",
+                (
+                    status,
+                    execution_status,
+                    correlation.native_run_id,
+                    correlation.native_submission_id,
+                    observation.reason,
+                    observation.source,
+                    provider_time,
+                    received_at,
+                    observation.partial,
+                    observation.generation,
+                    updated_at,
+                    receipt.id,
+                    observation.provider,
+                    observation.binding_id,
+                    observation.native_session_id,
+                    correlation.correlation_id,
+                    correlation.native_run_id,
+                    correlation.native_run_id,
+                    correlation.native_submission_id,
+                    correlation.native_submission_id,
+                ),
+            )
+            if (
+                changed.rowcount == 1
+                and receipt.queue_id is not None
+                and status in {"accepted", "completed"}
+            ):
+                await self._conn.execute(
+                    "UPDATE queued_messages SET status = 'sent', updated_at = ?, error = NULL "
+                    "WHERE id = ?",
+                    (updated_at, receipt.queue_id),
+                )
+        current = await self.get_delivery(receipt.id)
+        if changed.rowcount != 1:
+            reason = (
+                "native run mismatch"
+                if current.turn_id != correlation.native_run_id
+                else "native submission mismatch"
+            )
+            return ReceiptTransition(receipt=current, matched=False, reason=reason)
+        return ReceiptTransition(receipt=current, matched=True, changed=current != receipt)
+
+    @_serialized_access
     async def lane_delivery_held(self, lane: str) -> bool:
         async with self._conn.execute(
             "SELECT 1 FROM deliveries WHERE lane = ? "
@@ -2024,6 +2278,18 @@ class Registry:
         async with self._conn.execute(
             "SELECT * FROM deliveries WHERE lane = ? AND turn_id = ? ORDER BY created_at, id",
             (lane, turn_id),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_delivery(row) for row in rows]
+
+    @_serialized_access
+    async def delivery_for_provider_run(
+        self, provider: str, binding_id: str, native_session_id: str, native_run_id: str
+    ) -> list[DeliveryReceipt]:
+        async with self._conn.execute(
+            "SELECT * FROM deliveries WHERE provider = ? AND binding_id = ? "
+            "AND native_session_id = ? AND turn_id = ? ORDER BY created_at, id",
+            (provider, binding_id, native_session_id, native_run_id),
         ) as cur:
             rows = await cur.fetchall()
         return [_row_to_delivery(row) for row in rows]
@@ -3604,7 +3870,8 @@ class Registry:
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(provider, binding_id, provider_thread_id, turn_id) DO UPDATE SET "
             "lane = COALESCE(excluded.lane, thread_turns.lane), "
-            "status = CASE WHEN excluded.status = 'unknown' "
+            "status = CASE WHEN thread_turns.status IN ('completed', 'failed', 'interrupted') "
+            "THEN thread_turns.status WHEN excluded.status = 'unknown' "
             "THEN thread_turns.status ELSE excluded.status END, "
             "started_at = COALESCE(excluded.started_at, thread_turns.started_at), "
             "completed_at = COALESCE(excluded.completed_at, thread_turns.completed_at), "
@@ -4623,7 +4890,9 @@ def _row_to_queued_message(row: aiosqlite.Row) -> QueuedMessage:
 
 
 def _row_to_delivery(row: aiosqlite.Row) -> DeliveryReceipt:
-    return DeliveryReceipt.model_validate(_row_dict(row))
+    data = _row_dict(row)
+    data["evidence_partial"] = bool(data["evidence_partial"])
+    return DeliveryReceipt.model_validate(data)
 
 
 def _row_to_provider_event(row: aiosqlite.Row) -> ProviderEvent:

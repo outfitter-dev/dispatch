@@ -712,6 +712,21 @@ class LaneCapabilities(BaseModel):
     compact: bool
 
 
+class ProviderStateView(BaseModel):
+    """Bounded local provider state; support stays separate from readiness."""
+
+    ownership: LaneSource
+    activity: LaneStatus
+    supported_actions: list[str] = Field(default_factory=list)
+    readiness: Literal["ready", "unavailable", "unknown"] = "unknown"
+    readiness_reason: str | None = None
+    source: str | None = None
+    as_of: str | None = None
+    generation: str | None = None
+    partial: bool = True
+    uncertain: bool = True
+
+
 class LaneRef(BaseModel):
     ref: str
     id: str
@@ -724,6 +739,7 @@ class LaneRef(BaseModel):
     cwd: str | None = None
     writable: bool = Field(description="Whether turn-writing commands are allowed.")
     capabilities: LaneCapabilities = Field(description="Current authority capabilities.")
+    provider_state: ProviderStateView
     write_locked_reason: str | None = Field(
         default=None, description="Why turn-writing commands are blocked, if blocked."
     )
@@ -1218,6 +1234,10 @@ class DeliveryView(BaseModel):
     lane: str
     mode: DeliveryMode
     transport: DeliveryTransport = "turn"
+    provider: str = "codex"
+    binding_id: str = "codex-default"
+    native_session_id: str | None = None
+    correlation_id: str | None = None
     submission_id: str | None = None
     status: DeliveryStatus
     execution_status: Literal["inProgress", "completed", "failed", "interrupted"] | None = None
@@ -1225,6 +1245,11 @@ class DeliveryView(BaseModel):
     queue_id: int | None = None
     error: str | None = None
     reconciliation_attempts: int = 0
+    evidence_source: str | None = None
+    evidence_provider_time: str | None = None
+    evidence_received_at: str | None = None
+    evidence_partial: bool = False
+    evidence_generation: str | None = None
     created_at: str
     updated_at: str
 

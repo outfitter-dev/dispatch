@@ -398,9 +398,15 @@ class CodexLaneAdapter:
                 if not isinstance(turn_id, str):
                     turn_id = result.get("turnId")
                 submission_id = result.get("submissionId")
+                native_submission_id = submission_id if isinstance(submission_id, str) else None
+                native_turn_id = turn_id if isinstance(turn_id, str) else None
+                if native_submission_id is None and native_turn_id is None:
+                    return ProviderSubmissionUnknown(
+                        error="provider response omitted native submission and run correlation"
+                    )
                 return ProviderSubmissionAccepted(
-                    submission_id=submission_id if isinstance(submission_id, str) else None,
-                    turn_id=turn_id if isinstance(turn_id, str) else None,
+                    submission_id=native_submission_id,
+                    turn_id=native_turn_id,
                 )
         except AppServerError as exc:
             if exc.code in {-32600, -32601, -32602}:

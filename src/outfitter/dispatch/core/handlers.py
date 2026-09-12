@@ -137,6 +137,7 @@ from .models import (
     PermissionProfileItem,
     PermissionProfilesInput,
     PermissionProfilesOutput,
+    ProviderStateView,
     QueryInput,
     QueryMatch,
     QueryOutput,
@@ -314,6 +315,22 @@ def _write_locked_reason(lane: Lane, ctx: Ctx) -> str | None:
 
 
 def _ref(lane: Lane, ctx: Ctx) -> LaneRef:
+    facts = router_for(ctx).facts_for_lane(lane)
+    provider_state = ProviderStateView(
+        ownership=lane.source,
+        activity=lane.status,
+        supported_actions=(
+            sorted(action.value for action in facts.supported_actions) if facts is not None else []
+        ),
+        readiness=(
+            "unknown" if facts is None else "ready" if facts.availability.ready else "unavailable"
+        ),
+        readiness_reason=facts.availability.reason if facts is not None else None,
+        source="runtime_binding" if facts is not None else None,
+        generation=facts.availability.generation if facts is not None else None,
+        partial=facts is None,
+        uncertain=facts is None,
+    )
     return LaneRef(
         ref=lane.ref,
         id=lane.id,
@@ -326,6 +343,7 @@ def _ref(lane: Lane, ctx: Ctx) -> LaneRef:
         cwd=lane.cwd,
         writable=_can_write(lane, ctx),
         capabilities=_capabilities(lane, ctx),
+        provider_state=provider_state,
         write_locked_reason=_write_locked_reason(lane, ctx),
     )
 
