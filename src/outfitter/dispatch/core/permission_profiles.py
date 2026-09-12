@@ -9,6 +9,9 @@ from outfitter.dispatch.client.errors import AppServerError
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.contracts.errors import ValidationError
 from outfitter.dispatch.registry.models import PermissionProfileEntry
+from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
+
+from .providers import ProviderAction, router_for
 
 
 @dataclass(frozen=True)
@@ -18,8 +21,12 @@ class PermissionProfileSnapshot:
 
 
 async def refresh_permission_profiles(ctx: Ctx, *, cwd: str) -> PermissionProfileSnapshot:
+    route = router_for(ctx).route_binding(
+        "codex", DEFAULT_CODEX_BINDING_ID, ProviderAction.PERMISSION_PROFILE_READ
+    )
+    route.recheck(ctx.provider_session_id or None)
     cwd = str(Path(cwd).expanduser().resolve())
-    profiles = await ctx.client.permission_profile_list(cwd=cwd)
+    profiles = await route.adapter.permission_profile_list(cwd=cwd)
     now = ctx.registry.now_iso()
     entries = [
         PermissionProfileEntry(

@@ -20,6 +20,7 @@ from outfitter.dispatch.registry.models import (
 )
 from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
 
+from .providers import ProviderAction, router_for
 from .server_request_policy import (
     PlannedResponse,
     automatic_response,
@@ -47,6 +48,10 @@ class ServerRequestManager:
         self._timeouts: set[asyncio.Task[None]] = set()
 
     async def run(self) -> None:
+        route = router_for(self._ctx).route_binding(
+            "codex", DEFAULT_CODEX_BINDING_ID, ProviderAction.SERVER_REQUEST_STREAM
+        )
+        route.recheck(self._ctx.provider_session_id or None)
         stale_open = await self._ctx.registry.list_open_server_requests_except_session(
             self._ctx.provider_session_id
         )
@@ -67,7 +72,7 @@ class ServerRequestManager:
             for lane_id in lanes:
                 await _clear_attention_if_resolved(self._ctx, lane_id)
         try:
-            async for incoming in self._ctx.client.server_requests(None):
+            async for incoming in route.adapter.server_requests():
                 try:
                     await self.handle(incoming)
                 except Exception:
@@ -185,12 +190,17 @@ async def respond_to_server_request(
 
 
 async def _send_response(ctx: Ctx, request: ServerRequest, plan: PlannedResponse) -> bool:
+    route = router_for(ctx).route_binding(
+        request.provider, request.binding_id, ProviderAction.SERVER_REQUEST_RESPONSE
+    )
+    route.recheck(request.provider_session_id)
     local_id = _local_id(request)
     claimed = await ctx.registry.claim_server_request_by_id(local_id)
     if claimed is None:
         return False
     try:
-        await ctx.client.respond_server_request(
+        route.recheck(ctx.provider_session_id or None)
+        await route.adapter.respond_server_request(
             claimed.request_id,
             result=plan.result,
             error=plan.error,

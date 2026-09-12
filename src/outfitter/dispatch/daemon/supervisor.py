@@ -16,10 +16,10 @@ from uuid import uuid4
 
 from outfitter.dispatch.client.errors import AppServerError, ClientError
 from outfitter.dispatch.contracts.context import Ctx, LaneClient
-from outfitter.dispatch.contracts.errors import DispatchError
+from outfitter.dispatch.contracts.errors import CapabilityUnavailableError, DispatchError
 from outfitter.dispatch.core.permission_profiles import resolve_permission_profile
+from outfitter.dispatch.core.providers import ProviderAction, ProviderRouter, route_lane
 from outfitter.dispatch.core.queue import drain_idle_queues
-from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
 
 
 class SupervisedClient(LaneClient, Protocol):
@@ -50,9 +50,12 @@ class Supervisor:
         """Run the recover loop, starting from an already-connected client."""
         client = initial
         while True:  # not `while not self._stopped` — stop() flips it during the await below
-            await self._ctx.registry.recover_deliveries()
             self._ctx.client = client
             self._ctx.provider_session_id = uuid4().hex
+            self._ctx.providers = ProviderRouter.default_codex(
+                client, generation=self._ctx.provider_session_id
+            )
+            await self._ctx.registry.recover_deliveries()
             self._client = client
             reactor_task = asyncio.create_task(self._run_reactor())
             # Broadcaster subscriptions register eagerly once the reactor task runs.
@@ -93,11 +96,9 @@ class Supervisor:
         """
         validated_profiles: dict[tuple[str, str], str] = {}
         for lane in await self._ctx.registry.list_lanes():
-            if (
-                lane.provider != "codex"
-                or lane.binding_id != DEFAULT_CODEX_BINDING_ID
-                or lane.provider_session_id != lane.id
-            ):
+            try:
+                route = route_lane(self._ctx, lane, ProviderAction.SYNC)
+            except CapabilityUnavailableError:
                 self._ctx.log.info(
                     "lane.restore_unsupported_binding",
                     lane=lane.id,
@@ -105,7 +106,6 @@ class Supervisor:
                     binding_id=lane.binding_id,
                 )
                 continue
-            native_id = lane.provider_session_id
             try:
                 sync = await self._ctx.registry.get_lane_sync(lane.id)
                 observed = sync is not None and sync.observation_enabled
@@ -123,18 +123,23 @@ class Supervisor:
                             validated_profiles[key] = validated
                         permission_profile = validated_profiles[key]
                     try:
-                        await client.thread_resume(
-                            native_id,
+                        route.recheck(self._ctx.provider_session_id or None)
+                        await route.adapter.resume(
+                            route.target,
                             permission_profile=permission_profile,
                             exclude_turns=True,
                         )
                     except AppServerError as exc:
                         if exc.code != -32602:
                             raise
-                        await client.thread_resume(native_id, permission_profile=permission_profile)
+                        route.recheck(self._ctx.provider_session_id or None)
+                        await route.adapter.resume(
+                            route.target, permission_profile=permission_profile
+                        )
                     self._ctx.log.info("lane.resumed", lane=lane.id, source=lane.source)
                 else:
-                    await client.thread_read(native_id, include_turns=False)
+                    route.recheck(self._ctx.provider_session_id or None)
+                    await route.adapter.read(route.target, include_turns=False)
                     self._ctx.log.info("lane.metadata_read", lane=lane.id, source=lane.source)
             except (ClientError, DispatchError) as exc:
                 await self._ctx.registry.update_lane_status(lane.id, "error")

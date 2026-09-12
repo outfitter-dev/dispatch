@@ -11,10 +11,10 @@ from outfitter.dispatch.client.errors import ClientError
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.contracts.errors import DispatchError, project_error
 from outfitter.dispatch.registry.models import Lane, MessageReceipt, QueuedMessage
-from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
 
 from .capture import bound_text
 from .model_registry import validate_lane_input_modalities
+from .providers import ProviderAction, route_lane
 from .rich_input import (
     materialize_remote_images,
     message_audit_detail,
@@ -33,13 +33,11 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
     lane = await ctx.registry.find_lane(lane_id)
     if lane is None or lane.status != "idle":
         return False
-    if (
-        lane.provider != "codex"
-        or lane.binding_id != DEFAULT_CODEX_BINDING_ID
-        or lane.provider_session_id != lane.id
-    ):
+    try:
+        route = route_lane(ctx, lane, ProviderAction.SEND)
+        route.recheck(ctx.provider_session_id or None)
+    except DispatchError:
         return False
-    native_id = lane.provider_session_id
     if await ctx.registry.lane_delivery_held(lane.id):
         return False
     message = await ctx.registry.next_pending_message(lane.id)
@@ -71,11 +69,13 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
             await validate_lane_input_modalities(ctx, lane.id, frozenset({"image"}))
         wire = await materialize_remote_images(rich)
         if lane.source == "attached" and ctx.policy.allow_attached_writes:
-            await ctx.client.thread_resume(native_id, exclude_turns=True)
+            route.recheck(ctx.provider_session_id or None)
+            await route.adapter.resume(route.target, exclude_turns=True)
         turn_settings = await load_turn_start_settings(ctx.registry, lane.id)
         await ctx.registry.update_lane_status(lane.id, "busy")
-        await ctx.client.turn_start(
-            native_id,
+        route.recheck(ctx.provider_session_id or None)
+        await route.adapter.start_turn(
+            route.target,
             wire.text,
             cwd=lane.cwd or ".",
             input_items=wire.input_items,

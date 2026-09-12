@@ -16,6 +16,9 @@ from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID, Registry
 def observation_from_thread(
     thread: ThreadInfo,
     *,
+    provider: str = "codex",
+    binding_id: str = DEFAULT_CODEX_BINDING_ID,
+    provider_thread_id: str | None = None,
     lifecycle_state: ProviderThreadLifecycleState | None = None,
     relationship_source: str,
     observed_at: str | None = None,
@@ -26,8 +29,9 @@ def observation_from_thread(
     spawned_nickname = spawned.get("agent_nickname")
     spawned_role = spawned.get("agent_role")
     return ProviderThreadObservation(
-        binding_id=DEFAULT_CODEX_BINDING_ID,
-        provider_thread_id=thread.id,
+        provider=provider,
+        binding_id=binding_id,
+        provider_thread_id=provider_thread_id or thread.id,
         session_id=thread.session_id,
         parent_thread_id=thread.parent_thread_id
         or (spawned_parent if isinstance(spawned_parent, str) else None),
@@ -51,12 +55,18 @@ async def observe_thread(
     registry: Registry,
     thread: ThreadInfo,
     *,
+    provider: str = "codex",
+    binding_id: str = DEFAULT_CODEX_BINDING_ID,
+    provider_thread_id: str | None = None,
     lifecycle_state: ProviderThreadLifecycleState | None = None,
     relationship_source: str,
 ) -> None:
     await registry.upsert_provider_thread(
         observation_from_thread(
             thread,
+            provider=provider,
+            binding_id=binding_id,
+            provider_thread_id=provider_thread_id,
             lifecycle_state=lifecycle_state,
             relationship_source=relationship_source,
             observed_at=registry.now_iso(),
@@ -68,6 +78,8 @@ async def observe_threads(
     registry: Registry,
     threads: list[ThreadInfo],
     *,
+    provider: str = "codex",
+    binding_id: str = DEFAULT_CODEX_BINDING_ID,
     lifecycle_state: ProviderThreadLifecycleState | None = None,
     relationship_source: str,
 ) -> None:
@@ -76,6 +88,8 @@ async def observe_threads(
         [
             observation_from_thread(
                 thread,
+                provider=provider,
+                binding_id=binding_id,
                 lifecycle_state=lifecycle_state,
                 relationship_source=relationship_source,
                 observed_at=observed_at,

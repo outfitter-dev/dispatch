@@ -61,6 +61,7 @@ from outfitter.dispatch.client.native_queue import QueuedSubmission, ThreadQueue
 from outfitter.dispatch.config import CapturePolicy, RuntimePolicy
 
 if TYPE_CHECKING:
+    from outfitter.dispatch.core.providers import ProviderRouter
     from outfitter.dispatch.registry.store import Registry
 
 
@@ -278,3 +279,4 @@ class Ctx:
     policy: RuntimePolicy = field(default_factory=RuntimePolicy)
     capture: CapturePolicy = field(default_factory=CapturePolicy)
     provider_session_id: str = ""
+    providers: ProviderRouter | None = None
