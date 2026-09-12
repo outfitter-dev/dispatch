@@ -22,6 +22,9 @@ from outfitter.dispatch.registry.models import (
     ProviderResetCredit,
     ProviderUsageSummary,
 )
+from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
+
+from .providers import ProviderAction, router_for
 
 
 def _fingerprint(value: str) -> str:
@@ -188,10 +191,14 @@ async def _save_account_failure(
 async def refresh_codex_capacity(ctx: Ctx) -> ProviderCapacityObservation:
     """Refresh one local Codex observation without retaining raw auth payloads."""
 
+    route = router_for(ctx).route_binding(
+        "codex", DEFAULT_CODEX_BINDING_ID, ProviderAction.ACCOUNT_READ
+    )
+    route.recheck(ctx.provider_session_id or None)
     observed_at = ctx.registry.now_iso()
     existing = await ctx.registry.get_provider_capacity_observation("codex")
     try:
-        account = await ctx.client.account_read()
+        account = await route.adapter.account_read()
     except ClientError as exc:
         state = _error_state(exc)
         return await _save_account_failure(
@@ -224,9 +231,10 @@ async def refresh_codex_capacity(ctx: Ctx) -> ProviderCapacityObservation:
             )
         )
 
+    route.recheck(ctx.provider_session_id or None)
     limits_result, usage_result = await asyncio.gather(
-        ctx.client.account_rate_limits_read(),
-        ctx.client.account_usage_read(),
+        route.adapter.account_rate_limits_read(),
+        route.adapter.account_usage_read(),
         return_exceptions=True,
     )
     limits = limits_result if isinstance(limits_result, AccountRateLimitsResult) else None

@@ -30,6 +30,7 @@ from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
 from .capacity import observe_codex_rate_limits
 from .capture import bound_text
 from .event_index import index_codex_lane_event
+from .providers import ProviderAction, router_for
 from .queue import drain_next_queued_message
 from .server_requests import ServerRequestManager
 from .subscriptions import process_event_subscriptions
@@ -64,14 +65,22 @@ class Reactor:
                 await reconciliation
 
     async def _run_lane_events(self) -> None:
-        async for event in self._ctx.client.events(None):
+        route = router_for(self._ctx).route_binding(
+            "codex", DEFAULT_CODEX_BINDING_ID, ProviderAction.EVENT_STREAM
+        )
+        route.recheck(self._ctx.provider_session_id or None)
+        async for event in route.adapter.events():
             try:
                 await self.handle(event)
             except Exception:  # never let one bad event kill the reactor
                 self._ctx.log.exception("reactor.handle_failed", lane=event.lane_id)
 
     async def _run_account_events(self) -> None:
-        async for event in self._ctx.client.account_events():
+        route = router_for(self._ctx).route_binding(
+            "codex", DEFAULT_CODEX_BINDING_ID, ProviderAction.EVENT_STREAM
+        )
+        route.recheck(self._ctx.provider_session_id or None)
+        async for event in route.adapter.account_events():
             try:
                 await self.handle_account_event(event)
             except Exception:

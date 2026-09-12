@@ -17,22 +17,12 @@ from outfitter.dispatch.contracts.errors import (
     ValidationError,
 )
 from outfitter.dispatch.registry.models import Lane
-from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
 
 from .models import DeliveryLookupInput, DeliveryView, SendInput
+from .providers import ProviderAction, route_lane
 from .turn_settings import TurnStartSettings, load_turn_start_settings
 
 _SETTINGS = TypeAdapter(TurnStartSettings)
-
-
-def _native_id(lane: Lane) -> str | None:
-    if (
-        lane.provider != "codex"
-        or lane.binding_id != DEFAULT_CODEX_BINDING_ID
-        or lane.provider_session_id != lane.id
-    ):
-        return None
-    return lane.provider_session_id
 
 
 async def get_receipt(inp: DeliveryLookupInput, ctx: Ctx) -> DeliveryView:
@@ -48,11 +38,9 @@ async def reconcile_receipt_request(inp: DeliveryLookupInput, ctx: Ctx) -> Deliv
 
 
 async def send_reserved(inp: SendInput, lane: Lane, text: str, ctx: Ctx) -> DeliveryView:
-    if _native_id(lane) is None:
-        raise CapabilityUnavailableError(
-            f"provider binding {lane.provider}:{lane.binding_id} execution is not supported"
-        )
     native = lane.source == "attached" and inp.mode == "queue"
+    route = route_lane(ctx, lane, ProviderAction.QUEUE_NATIVE if native else ProviderAction.SEND)
+    route.recheck(ctx.provider_session_id or None)
     if lane.source != "own" and not native:
         raise AuthorityError("idempotent delivery currently requires a Dispatch-owned thread")
     if native and inp.content:
@@ -103,9 +91,11 @@ async def submit_reserved(delivery_id: str, ctx: Ctx) -> bool:
     lane = await ctx.registry.find_lane(receipt.lane)
     if lane is None:
         raise NotFoundError(f"no managed thread {receipt.lane!r}")
-    native_id = _native_id(lane)
-    if native_id is None:
-        return False
+    action = (
+        ProviderAction.QUEUE_NATIVE if receipt.transport == "native_queue" else ProviderAction.SEND
+    )
+    route = route_lane(ctx, lane, action)
+    route.recheck(ctx.provider_session_id or None)
     payload = json.loads(receipt.payload)
     if not await ctx.registry.claim_delivery(delivery_id):
         return False
@@ -118,9 +108,10 @@ async def submit_reserved(delivery_id: str, ctx: Ctx) -> bool:
     try:
         if receipt.transport == "native_queue":
             async with asyncio.timeout(15):
+                route.recheck(ctx.provider_session_id or None)
                 provider_call_entered = True
-                submission = await ctx.client.thread_queue_add(
-                    native_id, payload["text"], client_user_message_id=receipt.id
+                submission = await route.adapter.queue_add(
+                    route.target, payload["text"], client_user_message_id=receipt.id
                 )
             if (
                 submission.client_user_message_id != receipt.id
@@ -136,9 +127,10 @@ async def submit_reserved(delivery_id: str, ctx: Ctx) -> bool:
         settings = _SETTINGS.validate_python(payload["settings"])
         await ctx.registry.update_lane_status(receipt.lane, "busy")
         async with asyncio.timeout(15):
+            route.recheck(ctx.provider_session_id or None)
             provider_call_entered = True
-            result = await ctx.client.turn_start(
-                native_id,
+            result = await route.adapter.start_turn(
+                route.target,
                 payload["text"],
                 cwd=payload["cwd"],
                 client_user_message_id=receipt.id,
