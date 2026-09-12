@@ -64,15 +64,26 @@ def test_default_codex_route_fixes_exact_native_identity_and_separate_facts() ->
         availability=ProviderAvailability(ready=True, generation="generation-1"),
         durability=durability,
     )
-    route = ProviderRouter((adapter,)).route_lane(_lane(), ProviderAction.SEND)
+    router = ProviderRouter((adapter,))
+    route = router.route_lane(_lane(), ProviderAction.SEND)
 
     assert route.target.native_session_id == "native-codex"
     assert route.target.binding_id == DEFAULT_CODEX_BINDING_ID
     assert route.availability.ready is True
     assert route.durability == durability
-    route.recheck("generation-1")
+    route.recheck()
+    router.register_adapter(
+        CodexLaneAdapter(
+            client,
+            availability=ProviderAvailability(ready=True, generation="generation-2"),
+        )
+    )
     with pytest.raises(CapabilityUnavailableError, match="generation changed"):
-        route.recheck("generation-2")
+        route.recheck()
+
+    current = router.route_lane(_lane(), ProviderAction.SEND)
+    with pytest.raises(CapabilityUnavailableError, match="generation changed"):
+        current.recheck_generation("generation-1")
 
 
 @pytest.mark.parametrize(
@@ -198,20 +209,14 @@ async def test_action_support_projects_capabilities_and_blocks_before_client_io(
         await store.close()
 
 
-async def test_generation_guard_precedes_lane_and_receipt_mutation() -> None:
+async def test_unavailable_binding_precedes_lane_and_receipt_mutation() -> None:
     store = await Registry.open()
     try:
         lane = await store.add_lane(id="native-codex", handle="@lane", source="own", status="idle")
         client = FakeLaneClient()
         ctx = make_ctx(store, client)
-        ctx.provider_session_id = "generation-2"
-        ctx.providers = ProviderRouter(
-            (
-                CodexLaneAdapter(
-                    client,
-                    availability=ProviderAvailability(ready=True, generation="generation-1"),
-                ),
-            )
+        ctx.providers = ProviderRouter.unavailable_codex(
+            "provider binding codex:codex-default connection generation changed"
         )
 
         with pytest.raises(CapabilityUnavailableError, match="generation changed"):
@@ -241,12 +246,16 @@ async def test_sync_rechecks_generation_before_delayed_history_io() -> None:
         stale.read_result = {"thread": {"id": "native-codex"}}
         fresh = FakeLaneClient()
         ctx = make_ctx(store, stale)
-        ctx.provider_session_id = "generation-1"
         ctx.providers = ProviderRouter.default_codex(stale, generation="generation-1")
 
         def reconnect() -> None:
-            ctx.provider_session_id = "generation-2"
-            ctx.providers = ProviderRouter.default_codex(fresh, generation="generation-2")
+            assert ctx.providers is not None
+            ctx.providers.register_adapter(
+                CodexLaneAdapter(
+                    fresh,
+                    availability=ProviderAvailability(ready=True, generation="generation-2"),
+                )
+            )
 
         stale.after_read = reconnect
         lane = await store.add_lane(id="native-codex", handle="@lane", source="own")

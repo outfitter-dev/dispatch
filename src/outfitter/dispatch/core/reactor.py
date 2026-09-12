@@ -68,7 +68,7 @@ class Reactor:
         route = router_for(self._ctx).route_binding(
             "codex", DEFAULT_CODEX_BINDING_ID, ProviderAction.EVENT_STREAM
         )
-        route.recheck(self._ctx.provider_session_id or None)
+        route.recheck()
         async for event in route.adapter.events():
             try:
                 await self.handle(event, generation=route.availability.generation)
@@ -79,7 +79,7 @@ class Reactor:
         route = router_for(self._ctx).route_binding(
             "codex", DEFAULT_CODEX_BINDING_ID, ProviderAction.EVENT_STREAM
         )
-        route.recheck(self._ctx.provider_session_id or None)
+        route.recheck()
         async for event in route.adapter.account_events():
             try:
                 await self.handle_account_event(event)

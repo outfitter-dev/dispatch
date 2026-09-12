@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
 
@@ -599,14 +599,13 @@ class CodexLaneAdapter:
 class BoundCodexHistoryClient:
     """History-only client fixed to one already-routed lane target."""
 
-    def __init__(self, route: ProviderRoute, current_generation: Callable[[], str | None]) -> None:
+    def __init__(self, route: ProviderRoute) -> None:
         self._route = route
-        self._current_generation = current_generation
 
     def _check(self, thread_id: str) -> None:
         if thread_id != self._route.target.native_session_id:
             raise CapabilityUnavailableError("history call attempted to change its routed target")
-        self._route.recheck(self._current_generation())
+        self._route.recheck()
 
     async def thread_resume(
         self,
@@ -684,23 +683,32 @@ class ProviderRoute:
     adapter: CodexLaneAdapter
     availability: ProviderAvailability
     durability: ProviderDurability
+    _current_availability: Callable[[], ProviderAvailability] = field(repr=False, compare=False)
 
-    def history_client(
-        self, current_generation: Callable[[], str | None]
-    ) -> BoundCodexHistoryClient:
-        return BoundCodexHistoryClient(self, current_generation)
+    def history_client(self) -> BoundCodexHistoryClient:
+        return BoundCodexHistoryClient(self)
 
-    def recheck(self, generation: str | None) -> None:
-        if not self.availability.ready:
+    def recheck(self) -> None:
+        current = self._current_availability()
+        if not current.ready:
             raise CapabilityUnavailableError(
-                self.availability.reason
+                current.reason
                 or (
                     f"provider binding {self.target.provider}:"
                     f"{self.target.binding_id} is unavailable"
                 )
             )
         expected = self.availability.generation
-        if expected is not None and generation != expected:
+        if current.generation != expected:
+            raise CapabilityUnavailableError(
+                f"provider binding {self.target.provider}:{self.target.binding_id} "
+                "connection generation changed"
+            )
+
+    def recheck_generation(self, generation: str) -> None:
+        """Fence work that belongs to one persisted connection generation."""
+        self.recheck()
+        if self.availability.generation != generation:
             raise CapabilityUnavailableError(
                 f"provider binding {self.target.provider}:{self.target.binding_id} "
                 "connection generation changed"
@@ -715,15 +723,25 @@ class ProviderLaunchRoute:
     adapter: CodexLaneAdapter
     availability: ProviderAvailability
     durability: ProviderDurability
+    _current_availability: Callable[[], ProviderAvailability] = field(repr=False, compare=False)
 
-    def recheck(self, generation: str | None) -> None:
-        if not self.availability.ready:
+    def recheck(self) -> None:
+        current = self._current_availability()
+        if not current.ready:
             raise CapabilityUnavailableError(
-                self.availability.reason
+                current.reason
                 or f"provider binding {self.provider}:{self.binding_id} is unavailable"
             )
         expected = self.availability.generation
-        if expected is not None and generation != expected:
+        if current.generation != expected:
+            raise CapabilityUnavailableError(
+                f"provider binding {self.provider}:{self.binding_id} connection generation changed"
+            )
+
+    def recheck_generation(self, generation: str) -> None:
+        """Fence work that belongs to one persisted connection generation."""
+        self.recheck()
+        if self.availability.generation != generation:
             raise CapabilityUnavailableError(
                 f"provider binding {self.provider}:{self.binding_id} connection generation changed"
             )
@@ -733,9 +751,10 @@ class ProviderRouter:
     """Resolve exact provider bindings without implicit fallback."""
 
     def __init__(self, adapters: tuple[CodexLaneAdapter, ...]) -> None:
-        self._adapters = {
-            (adapter.facts.provider, adapter.facts.binding_id): adapter for adapter in adapters
-        }
+        self._adapters: dict[tuple[str, str], CodexLaneAdapter] = {}
+        self._facts: dict[tuple[str, str], ProviderBindingFacts] = {}
+        for adapter in adapters:
+            self.register_adapter(adapter)
         if len(self._adapters) != len(adapters):
             raise ValueError("provider adapters must have unique provider/binding identities")
 
@@ -750,9 +769,56 @@ class ProviderRouter:
             )
         )
 
+    @classmethod
+    def unavailable_codex(cls, reason: str) -> ProviderRouter:
+        router = cls(())
+        router.register_unavailable(
+            provider="codex",
+            binding_id=DEFAULT_CODEX_BINDING_ID,
+            supported_actions=ALL_CODEX_ACTIONS,
+            reason=reason,
+        )
+        return router
+
+    def register_adapter(self, adapter: CodexLaneAdapter) -> None:
+        key = (adapter.facts.provider, adapter.facts.binding_id)
+        self._adapters[key] = adapter
+        self._facts[key] = adapter.facts
+
+    def register_unavailable(
+        self,
+        *,
+        provider: str,
+        binding_id: str,
+        supported_actions: frozenset[ProviderAction],
+        reason: str,
+        generation: str | None = None,
+        durability: ProviderDurability | None = None,
+    ) -> None:
+        key = (provider, binding_id)
+        self._adapters.pop(key, None)
+        self._facts[key] = ProviderBindingFacts(
+            provider=provider,
+            binding_id=binding_id,
+            supported_actions=supported_actions,
+            availability=ProviderAvailability(ready=False, reason=reason, generation=generation),
+            durability=durability or ProviderDurability(),
+        )
+
+    def facts_for_binding(self, provider: str, binding_id: str) -> ProviderBindingFacts | None:
+        return self._facts.get((provider, binding_id))
+
+    def _availability(self, provider: str, binding_id: str) -> ProviderAvailability:
+        facts = self._facts.get((provider, binding_id))
+        if facts is None:
+            return ProviderAvailability(
+                ready=False,
+                reason=f"provider binding {provider}:{binding_id} is not registered",
+            )
+        return facts.availability
+
     def facts_for_lane(self, lane: Lane) -> ProviderBindingFacts | None:
-        adapter = self._adapters.get((lane.provider, lane.binding_id))
-        return adapter.facts if adapter is not None else None
+        return self.facts_for_binding(lane.provider, lane.binding_id)
 
     def route_lane(self, lane: Lane, action: ProviderAction) -> ProviderRoute:
         native_id = lane.provider_session_id
@@ -773,6 +839,12 @@ class ProviderRouter:
 
         adapter = self._adapters.get((target.provider, target.binding_id))
         if adapter is None:
+            facts = self._facts.get((target.provider, target.binding_id))
+            if facts is not None:
+                raise CapabilityUnavailableError(
+                    facts.availability.reason
+                    or f"provider binding {target.provider}:{target.binding_id} is unavailable"
+                )
             raise CapabilityUnavailableError(
                 f"provider binding {target.provider}:{target.binding_id} execution is not "
                 "supported because the binding is not registered"
@@ -802,6 +874,7 @@ class ProviderRouter:
             adapter=adapter,
             availability=availability,
             durability=adapter.facts.durability,
+            _current_availability=lambda: self._availability(target.provider, target.binding_id),
         )
 
     def route_binding(
@@ -809,6 +882,12 @@ class ProviderRouter:
     ) -> ProviderLaunchRoute:
         adapter = self._adapters.get((provider, binding_id))
         if adapter is None:
+            facts = self._facts.get((provider, binding_id))
+            if facts is not None:
+                raise CapabilityUnavailableError(
+                    facts.availability.reason
+                    or f"provider binding {provider}:{binding_id} is unavailable"
+                )
             raise CapabilityUnavailableError(
                 f"provider binding {provider}:{binding_id} is not registered"
             )
@@ -828,6 +907,7 @@ class ProviderRouter:
             adapter=adapter,
             availability=availability,
             durability=adapter.facts.durability,
+            _current_availability=lambda: self._availability(provider, binding_id),
         )
 
     def route_session(
@@ -849,6 +929,7 @@ class ProviderRouter:
             adapter=binding.adapter,
             availability=binding.availability,
             durability=binding.durability,
+            _current_availability=binding._current_availability,
         )
 
     def route_launch(self, provider: str | None, action: ProviderAction) -> ProviderLaunchRoute:
@@ -863,7 +944,9 @@ class ProviderRouter:
 def router_for(ctx: Ctx) -> ProviderRouter:
     if ctx.providers is not None:
         return ctx.providers
-    return ProviderRouter.default_codex(ctx.client, generation=ctx.provider_session_id or None)
+    if ctx.client is None:
+        return ProviderRouter.unavailable_codex("Codex App Server is unavailable")
+    return ProviderRouter.default_codex(ctx.client, generation=ctx.connection_generation or None)
 
 
 def route_lane(ctx: Ctx, lane: Lane, action: ProviderAction) -> ProviderRoute:

@@ -47,15 +47,21 @@ async def test_readiness_from_replaced_generation_cannot_mark_lane_idle() -> Non
         async def thread_read(
             self, thread_id: str, include_turns: bool = False
         ) -> dict[str, object]:
-            ctx.provider_session_id = "generation-2"
-            ctx.providers = ProviderRouter.default_codex(self, generation="generation-2")
+            ctx.connection_generation = "generation-2"
+            assert ctx.providers is not None
+            ctx.providers.register_adapter(
+                CodexLaneAdapter(
+                    self,
+                    availability=ProviderAvailability(ready=True, generation="generation-2"),
+                )
+            )
             return {"thread": {"id": thread_id, "status": {"type": "idle"}}}
 
     try:
         await store.add_lane(id="target", handle="@target", source="own", status="busy")
         client = ReconnectingClient()
         ctx = make_ctx(store, client)
-        ctx.provider_session_id = "generation-1"
+        ctx.connection_generation = "generation-1"
         ctx.providers = ProviderRouter(
             (
                 CodexLaneAdapter(
