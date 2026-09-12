@@ -25,6 +25,23 @@ def _write_fake_codex(path: Path, version: str) -> None:
     path.chmod(0o755)
 
 
+def _write_hermes_config(
+    dispatch_home: Path,
+    *,
+    hermes_home: Path,
+    source_root: Path,
+    interpreter: Path,
+) -> None:
+    dispatch_home.mkdir(parents=True, exist_ok=True)
+    (dispatch_home / "config.toml").write_text(
+        "[providers.hermes]\n"
+        f'hermes_home = "{hermes_home}"\n'
+        f'source_root = "{source_root}"\n'
+        f'interpreter = "{interpreter}"\n'
+        'profile = "default"\n'
+    )
+
+
 def _create_v3_registry(path: Path) -> None:
     with sqlite3.connect(path) as conn:
         conn.executescript(
@@ -149,6 +166,111 @@ def test_doctor_reports_missing_console_scripts_and_skips_app_server(
     assert checks["codex_binary"].status == "fail"
     assert checks["app_server"].status == "warn"
     assert checks["app_server"].recovery is not None
+
+
+def test_doctor_reports_hermes_binding_as_unconfigured_without_negotiated_claims(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setenv("DISPATCH_HOME", str(tmp_path / "dispatch-home"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+
+    report = run_doctor(DoctorOptions(app_server=False))
+
+    check = next(item for item in report.checks if item.name == "hermes_binding")
+    assert check.status == "ok"
+    assert check.summary == "optional Hermes binding is not configured"
+    assert check.data == {
+        "provider": "hermes",
+        "binding_id": "hermes-default",
+        "configured": False,
+        "negotiated": False,
+        "readiness": "unknown",
+        "supported_actions": [],
+        "required_native_capabilities": [
+            "prompt_submit_if_idle_v1",
+            "prompt_turn_correlation_v1",
+        ],
+    }
+
+
+def test_doctor_validates_hermes_binding_without_starting_interpreter(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    dispatch_home = tmp_path / "dispatch-home"
+    hermes_home = tmp_path / "hermes-home"
+    source_root = tmp_path / "hermes-source"
+    interpreter = tmp_path / "hermes-python"
+    execution_marker = tmp_path / "interpreter-ran"
+    hermes_home.mkdir()
+    source_root.mkdir()
+    interpreter.write_text(f"#!/bin/sh\ntouch '{execution_marker}'\n")
+    interpreter.chmod(0o755)
+    _write_hermes_config(
+        dispatch_home,
+        hermes_home=hermes_home,
+        source_root=source_root,
+        interpreter=interpreter,
+    )
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setenv("DISPATCH_HOME", str(dispatch_home))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+
+    report = run_doctor(DoctorOptions(app_server=False))
+
+    check = next(item for item in report.checks if item.name == "hermes_binding")
+    assert check.status == "ok"
+    assert check.summary == "Hermes binding is statically configured"
+    assert check.data == {
+        "provider": "hermes",
+        "binding_id": "hermes-default",
+        "profile": "default",
+        "transport": "owned_stdio",
+        "gateway_module": "tui_gateway.entry",
+        "configured": True,
+        "negotiated": False,
+        "readiness": "unknown",
+        "supported_actions": ["launch", "send"],
+        "required_native_capabilities": [
+            "prompt_submit_if_idle_v1",
+            "prompt_turn_correlation_v1",
+        ],
+    }
+    assert execution_marker.exists() is False
+
+
+def test_doctor_fails_closed_for_invalid_hermes_binding(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    dispatch_home = tmp_path / "dispatch-home"
+    _write_hermes_config(
+        dispatch_home,
+        hermes_home=tmp_path / "missing-home",
+        source_root=tmp_path / "missing-source",
+        interpreter=tmp_path / "missing-python",
+    )
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setenv("DISPATCH_HOME", str(dispatch_home))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+
+    report = run_doctor(DoctorOptions(app_server=False))
+
+    check = next(item for item in report.checks if item.name == "hermes_binding")
+    assert check.status == "fail"
+    assert check.summary == "Hermes binding configuration is invalid"
+    assert check.detail == "providers.hermes.hermes_home must be an existing directory"
+    assert check.data == {
+        "provider": "hermes",
+        "binding_id": "hermes-default",
+        "configured": True,
+        "negotiated": False,
+        "readiness": "unknown",
+        "supported_actions": [],
+        "required_native_capabilities": [
+            "prompt_submit_if_idle_v1",
+            "prompt_turn_correlation_v1",
+        ],
+    }
 
 
 def test_doctor_warns_when_resolved_codex_is_below_supported_floor(

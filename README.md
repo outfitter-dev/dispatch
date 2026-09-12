@@ -1,6 +1,6 @@
 # dispatch
 
-Local control plane for orchestrating Codex agent lanes over the Codex App Server.
+Local control plane for orchestrating Codex and dedicated Hermes agent lanes.
 One authored contract per operation, projected to CLI + MCP (+ remote later) with no drift.
 
 ## Quick Start
@@ -108,6 +108,16 @@ max_payload_bytes = 65536
 `dispatch doctor` reports the active capture mode and warns when debug/raw
 retention is enabled.
 
+Hermes is an opt-in execution provider. Configure one owned native gateway under
+`[providers.hermes]` before selecting `--provider hermes`; the binding requires
+absolute paths for the Hermes home, installed source root, and executable
+interpreter. The configured gateway must negotiate both
+`prompt_submit_if_idle_v1` and `prompt_turn_correlation_v1`. The first slice
+supports dedicated sessions with an explicit existing `--cwd` and plain text.
+It does not attach to Desktop sessions or use the HTTP Runs API as an automatic fallback. See the
+[`Hermes operator guide`](docs/usage/README.md#hermes-owned-sessions) and the
+[native provider contract](docs/research/hermes-native-provider-contract.md).
+
 `new` reports whether the first message was accepted by the App Server, not whether
 assistant work completed. Use `get` to inspect the latest turn state and persisted
 App Server errors, or `watch` for a bounded live event sample. Slash commands in
@@ -126,10 +136,12 @@ For the operator guide, CLI/MCP examples, triggers, and plugin setup, start at
 [`docs/usage/README.md`](docs/usage/README.md).
 
 Start troubleshooting with `dispatch doctor`. It checks PATH visibility, the Codex CLI
-and auth footprint, daemon socket/pidfile state, registry schema/integrity, packaged
-skills/plugin assets, and a low-risk Codex App Server initialize smoke. If doctor reports
-an old registry schema, stop the daemon and run `dispatch registry migrate` before
-starting it again.
+and auth footprint, configured provider bindings, daemon socket/pidfile state, registry
+schema/integrity, packaged skills/plugin assets, and a low-risk Codex App Server
+initialize smoke. When Hermes is configured, use `dispatch daemon status --json` after `dispatch
+up` for live gateway capability and readiness evidence. If doctor reports an old
+registry schema, stop the daemon and run `dispatch registry migrate` before starting
+it again.
 
 Dispatch owns a stdio App Server by default. An advanced local setup may instead attach
 to an existing WebSocket-over-Unix App Server with

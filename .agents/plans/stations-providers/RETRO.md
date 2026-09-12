@@ -56,7 +56,7 @@ The native HTTP Runs probe passed keyed replay/conflict, two-turn continuity, ca
 
 ### Verification and review
 
-- Native stdio proved two coherent turns, actual terminal execution in the selected cwd, and clean process restart with a new runtime ID while retaining the stored session key, context and cwd. Both owned gateway processes exited normally after the synthetic sessions were idle. The portable evidence summary and limits are in the [provider contract](../../../docs/research/hermes-native-provider-contract.md).
+- Native stdio proved two coherent turns, actual terminal execution in the selected cwd, and clean process restart with a new runtime ID while retaining the stored session key, context and cwd. The positive continuity probe used isolated Hermes patch `00712d1f0fdc8fd3b97dc762dbcc0db7b10d04af`, which is local and unpublished; both owned gateway processes exited normally after the synthetic sessions were idle. The portable evidence summary and limits are in the [provider contract](../../../docs/research/hermes-native-provider-contract.md).
 - Three research collaborators, including a dedicated native Hermes Desktop conversation, inspected the installed source at `939e45c91d751fadd94dcd1b873ac3cb44846213`. No installed source, shared configuration, credentials or existing user conversation was edited. Native agent invocation can have provider-owned profile effects, which the report discloses.
 - Hermes's canonical runner passed `tests/tui_gateway/test_auto_continue.py` with 20 tests in 2.9 seconds, using its clean environment and isolated per-test homes. This supports the documented native recovery behavior; it does not certify a Dispatch adapter.
 - Independent research review reached 5/5 with zero open findings after correcting stale-marker resume safety, lazy-watch successor/runtime limits and interpreter provenance. The contract also records unpaginated history fallback and the need for unique attribution when native autonomous turns exist.
@@ -68,3 +68,30 @@ No merge, release, installed Dispatch registry migration, runtime replacement or
 
 - A subsequent source-pinned audit of Hermes `939e45c91d751fadd94dcd1b873ac3cb44846213` found an idle-check/claim race with unsolicited single-start heartbeat and bot turns. Sequence fencing, a streaming acknowledgment and `running:false` do not prove which prompt produced an arbitrary terminal event.
 - DIS-94 is actively preparing an isolated upstream additive `prompt_turn_correlation_v1` contract: atomic admission with an owner token and a native turn id echoed in start, terminal, error and retained evidence. It is not installed or verified. Until it is adopted, Dispatch must refuse durable Hermes send receipts rather than infer success. The existing two-turn/cwd probe remains valid native continuity evidence; generation quarantine and unknown-outcome handling remain separate limits.
+
+## September 12, 2026 — DIS-85/86 adapter handoff and DIS-88 operator slice
+
+The local DIS-85/86 source slice now has typed Hermes capability negotiation,
+dedicated owned sessions, immutable launch/send reservations, bounded
+correlated observations, attention holds and generation quarantine. Operator
+guidance describes the binding and exact supported/unsupported launch surface,
+local keyed replay/conflict behavior, unknown-outcome holds and generation
+fencing. It explicitly separates the installed stock Hermes runtime from the
+local unpublished gateway patch that supplies
+`prompt_submit_if_idle_v1` and `prompt_turn_correlation_v1`.
+
+This documentation slice updates the root README, usage guide and delivery
+contract, native and HTTP research boundaries, ADR-0028, the stations/providers
+plan, the first-party dispatch skill and plugin README. The plugin README links
+only four operator documents that the package gate must force-include beside
+the installed assets: `docs/usage/README.md`, `docs/usage/deliveries.md`,
+`docs/research/hermes-native-provider-contract.md`, and
+`docs/research/hermes-http-runs-contract.md`. Source-relative links resolve in
+the checkout and must resolve to the matching `outfitter/dispatch/assets/docs`
+paths after installation.
+
+Stock `939e45c`/`0.21.2` capability refusal remains the expected installed
+runtime result; no stock durable Hermes send is claimed. Package contents,
+installed asset link resolution, doctor diagnostics and final exact-head review
+remain with the DIS-88 implementation owner. No live retry, installed runtime
+replacement, merge, release or deployment was performed for this docs slice.

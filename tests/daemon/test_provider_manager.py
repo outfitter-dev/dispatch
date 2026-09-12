@@ -173,6 +173,8 @@ async def test_shutdown_closes_external_client_without_stopping_runtime() -> Non
     assert snapshot.state == "stopped"
     assert snapshot.owns_process is False
     assert snapshot.connection_generation == "external-7"
+    assert snapshot.supported_actions == ("read",)
+    assert snapshot.durability == ProviderDurability()
 
 
 async def test_shutdown_closes_generation_that_becomes_ready_during_stop() -> None:

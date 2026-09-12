@@ -4,7 +4,7 @@ Research date: September 12, 2026. Governing work: [DIS-84](https://linear.app/o
 
 ## Integration decision
 
-Use a Dispatch-owned, long-lived Hermes TUI gateway over stdio JSON-RPC for the initial coding-thread adapter. This is the maintained native boundary used by Hermes's TUI and supported for custom hosts. Hermes owns inference, tools, memory and canonical history. Dispatch owns stable thread identity, immutable requests, reservations, ordering, local receipts and recovery decisions. Start one gateway per explicitly configured provider binding, not a process per turn.
+Use a Dispatch-owned, long-lived Hermes TUI gateway over stdio JSON-RPC for the initial coding-thread adapter. This is the maintained native boundary used by Hermes's TUI and supported for custom hosts. Hermes owns inference, tools, memory and canonical history. Dispatch owns stable thread identity, immutable requests, reservations, ordering, local receipts and recovery decisions. Start one gateway per explicitly configured provider binding, not a process per turn. The adapter requires the additive `prompt_submit_if_idle_v1` and `prompt_turn_correlation_v1` capabilities; a stock gateway that lacks either capability is unavailable for durable Dispatch sends.
 
 The first supported ownership model is dedicated Dispatch-managed sessions on the selected profile. Implement plain text, explicit existing session cwd, creation, continuation, native completion observations and bounded history. Advertise other controls only after their own tests pass. Do not attach to arbitrary Desktop sessions or infer shared live context from a shared database.
 
@@ -12,7 +12,7 @@ The [HTTP Runs investigation](hermes-http-runs-contract.md) remains valid for ex
 
 ## Evidence boundaries
 
-Installed source was `939e45c91d751fadd94dcd1b873ac3cb44846213`; Desktop displayed `0.21.2` / `939e45c`. The existing HTTP runtime independently reported `0.21.2`. The owned stdio probe launched the installed source explicitly. These observations do not establish the exact code loaded by every pre-existing service.
+Installed source was `939e45c91d751fadd94dcd1b873ac3cb44846213`; Desktop displayed `0.21.2` / `939e45c`. The existing HTTP runtime independently reported `0.21.2`. The stock refusal probe launched the installed source explicitly. The positive stdio continuity probe used an isolated source-pinned Hermes patch at `00712d1f0fdc8fd3b97dc762dbcc0db7b10d04af`; that patch supplies the correlation contract required by the adapter, but is local and unpublished. These observations do not establish the exact code loaded by every pre-existing service.
 
 Matt authorized direct interaction with Hermes on the local `default` profile. The coordinator used new synthetic sessions for live proof. Automated tests and destructive fault simulations remain isolated. Existing user conversations, credentials, configuration and services were preserved. The owned probe used a process-scoped startup-sweep fence and shut down only its own gateway after its sessions were idle. Native startup still registered its own heartbeat and could perform configured MCP discovery/model prewarming.
 
@@ -24,7 +24,8 @@ Full local endpoints, process IDs, paths and probe logs remain in local evidence
 
 | Check | Result | Practical limit |
 | --- | --- | --- |
-| Native stdio startup | `gateway.ready` observed; `gateway.capabilities` returned `per_session_exclusive_submit:true`; session info reported Desktop contract 6 and default profile. | Sparse negotiation, not proof of every native method. |
+| Patched native stdio startup | The isolated source-pinned gateway returned `gateway.ready` and negotiated both `prompt_submit_if_idle_v1` and `prompt_turn_correlation_v1`; session info reported Desktop contract 6 and the default profile. | Sparse negotiation, not proof of every native method or stock-runtime support. |
+| Stock capability refusal | The installed `939e45c91d751fadd94dcd1b873ac3cb44846213` / `0.21.2` gateway did not advertise the required request-correlation capability; the isolated Dispatch probe exited with `capability_unavailable` and made no lane, launch, delivery or workspace changes. | A truthful refusal check, not evidence that stock Hermes can serve the adapter. |
 | Native creation | `session.create` returned a short runtime ID, a separate stored session key and the requested existing cwd. | An empty draft is not yet a durable stored session. |
 | Two coherent turns | A replied `ACK silver-pine-846`; B recalled `silver-pine-846` without a supplied transcript. Both emitted `message.complete` with `status:complete`, then settled info with `running:false`; canonical user/assistant rows agreed. | Live single-owner evidence, not native idempotency or crash recovery. |
 | Tool working directory | Native terminal `pwd` reported the selected temporary project directory. | Directory selection, not a sandbox or approval-policy guarantee. |
@@ -61,7 +62,7 @@ For bounded investigation of unresolved work, the inspected `lazy:true` watch pa
 
 Freeze the submitted intent separately from the effective provider request. The latter includes the exact binding, stored/runtime identities, process generation, cwd, supported settings, prompt digest, JSON-RPC request ID and pre-submit history watermark. Local reservation and claim happen before native I/O; no database transaction spans that I/O.
 
-Allow one unresolved Dispatch submission per Hermes thread. `prompt.submit` takes the runtime `session_id` and `text`. Its JSON-RPC response currently reports only `status:streaming`. The request ID correlates that acknowledgment, not a durable native turn. Do not invent a Hermes run/turn ID from the local delivery ID or label the acknowledgment execution completion.
+Allow one unresolved Dispatch submission per Hermes thread. `prompt.submit` takes the runtime `session_id` and `text`. On stock `939e45c`, its JSON-RPC response reports only `status:streaming`; the request ID correlates that acknowledgment, not a durable native turn. The required additive correlation capability returns an opaque native `turn_id` for supported gateways. Do not invent a Hermes run/turn ID from the local delivery ID or label an acknowledgment execution completion.
 
 Events arrive as JSON-RPC `event` notifications with type, runtime session ID and payload. `message.complete` carries native status/text; settled `session.info` separately reports whether the foreground session is running. Tool completion carries native tool correlation and result. Map these to the pending local request only when the exact binding/runtime/generation, exclusive-owner scope and evidence uniquely establish correlation. One pending client request alone is insufficient if Hermes starts goals, loops, delegation/process notifications or other unsolicited turns. Track unsolicited activity separately, keep those modes outside the initial advertised contract, and retain uncertainty whenever the native event cannot be attributed. Persist the received evidence and canonical row correlation. A terminal answer, readiness for the next input and completion of detached background work remain separate facts.
 
@@ -69,7 +70,7 @@ Events arrive as JSON-RPC `event` notifications with type, runtime session ID an
 
 The source-pinned `939e45c91d751fadd94dcd1b873ac3cb44846213` gateway cannot positively establish that an arbitrary `message.complete` belongs to an accepted `prompt.submit`. Its idle check and in-process claim are separate: a notification poller can claim an idle session before direct submission acquires its lock, and the direct path then sets the shared running flag without rechecking it. Heartbeat and bot-mailbox turns can each produce the same single `message.start` → `message.complete` shape as an ordinary prompt. A pre-submit sequence watermark, `status:streaming`, one pending receipt, replay order, or a later `running:false` are therefore insufficient ownership proof.
 
-Dispatch must fail closed for durable Hermes send receipts on that stock contract. The additive upstream contract is the capability `prompt_turn_correlation_v1`: atomically allocate an opaque `turn_id` while claiming an idle session; keep a per-turn owner token so only that owner can release the claim; return the id from accepted submit; and echo it in start, terminal completion, terminal error, active/settled info, and retained or replayed evidence. Dispatch may resolve only an exact matching id in the current gateway generation; missing, mismatched, truncated, or restart-era evidence remains unknown. [DIS-94](https://linear.app/outfitter/issue/DIS-94) is actively implementing and testing this in an isolated upstream worktree. It is not a verified capability or an installed-runtime change. The synthetic two-turn/cwd probe remains positive evidence of native continuity, not production request-correlation proof.
+Dispatch must fail closed for durable Hermes send receipts on that stock contract. The additive upstream contract is the capability `prompt_turn_correlation_v1`: atomically allocate an opaque `turn_id` while claiming an idle session; keep a per-turn owner token so only that owner can release the claim; return the id from accepted submit; and echo it in start, terminal completion, terminal error, active/settled info, and retained or replayed evidence. Dispatch may resolve only an exact matching id in the current gateway generation; missing, mismatched, truncated, or restart-era evidence remains unknown. [DIS-94](https://linear.app/outfitter/issue/DIS-94) produced and tested this contract in the isolated `00712d1f0fdc8fd3b97dc762dbcc0db7b10d04af` patch used by the positive local probe. It remains an unpublished dependency and is not an installed-runtime change. The stock Hermes runtime therefore remains unsupported for durable Dispatch sends.
 
 Hermes has no native idempotency key or durable request-indexed turn record on this transport. A local key prevents Dispatch from issuing the same request again; it does not prove native admission. After a write failure, timeout, lost acknowledgment or process death, preserve unknown outcome and block later work. Never resend the prompt, replace the session, switch transport or perform ordinary auto-continuing resume to repair uncertainty.
 
@@ -91,7 +92,17 @@ The currently running Desktop child uses an ephemeral loopback endpoint and toke
 
 ## Remaining implementation gates
 
-The native probe is not Dispatch integration. DIS-85/86 still require frozen-request and local-receipt tests, typed observations, CLI/MCP end-to-end turns, lost first-create/submit acknowledgment, process death, blocked unknown outcomes, exact local replay/conflict, source-pinned lazy recovery with crash markers, malformed protocol, capability/version mismatch, duplicate/out-of-order events, compression, ownership contention, and controls/attention correlation. Destructive fault tests use isolated native state or synthetic transports.
+The native probe is not Dispatch integration. The DIS-85/86 source slice now
+covers typed capability negotiation, frozen-request and local-receipt seams,
+bounded observations, exact local replay/conflict, generation quarantine and
+attention correlation with isolated synthetic transports. Remaining DIS-88/87
+gates include provider-facing CLI/MCP end-to-end turns, truthful stock refusal and
+package diagnostics, installed asset verification, and live Desktop coexistence.
+Lost first-create/submit acknowledgment, process death, crash markers,
+duplicate/out-of-order events, compression and ownership contention remain
+fail-closed recovery boundaries. Lazy watch and native history lookup are not
+recovery mechanisms. Destructive fault tests use isolated native state or synthetic
+transports.
 
 DIS-83 must prove provider startup independence before advertising Hermes-only operation or Codex-down availability. DIS-87 must prove live Desktop coexistence before enabling attachment. DIS-88 covers truthful diagnostics, unsupported modes, packaging and operator recovery. Neither a successful native probe nor a green shared migration passes those gates by itself.
 

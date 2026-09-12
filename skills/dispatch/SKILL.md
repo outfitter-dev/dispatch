@@ -124,16 +124,57 @@ uv run dispatch new --name my-lane --preset reviewer --no-send
 
 For rich initial input, repeat `--image PATH` and `--image-url HTTPS_URL`; add `--image-detail auto|low|high|original` when the default detail is not appropriate. Local images must be PNG, JPEG, GIF, or WebP and at most 20 MiB. Remote images must use HTTPS and resolve publicly; Dispatch fetches them under a shared 15-second deadline into ephemeral App Server inputs and never stores the bytes.
 
-`new` selects the execution provider with `--provider codex|claude`, plus
-CLI-only boolean shorthands `--codex` and `--claude` that marshal to the same
-canonical input. Config `[defaults]` and `[presets.*]` accept the canonical
-`provider` key only (no shorthands); CLI flags win over presets, which win over
-defaults. Omitting all selectors launches a Codex lane. Provider selectors are
-mutually exclusive — any combination of two, even the redundant
+`new` selects the execution provider with `--provider codex|claude|hermes`, plus
+CLI-only boolean shorthands `--codex`, `--claude`, and `--hermes` that marshal to
+the same canonical input. Config `[defaults]` and `[presets.*]` accept the
+canonical `provider` key only (no shorthands); CLI flags win over presets, which
+win over defaults. Omitting all selectors launches a Codex lane. Provider
+selectors are mutually exclusive — any combination of two, even the redundant
 `--claude --provider claude`, is rejected before any lane work. This execution
 provider is distinct from `--model-provider`, and the Claude execution provider is
 not launchable yet: resolving to it — from a flag, preset, or config default —
 fails with a validation error at launch, never with a silent Codex fallback.
+
+Hermes is an opt-in provider for dedicated local sessions. It requires a configured
+owned stdio gateway and the explicit upstream capability contract
+`prompt_submit_if_idle_v1` plus `prompt_turn_correlation_v1`; the stock Hermes
+`939e45c`/`0.21.2` runtime does not advertise the latter, so Dispatch must refuse
+durable Hermes sends rather than infer completion. The capability patch is a local,
+unpublished dependency until it is separately verified and adopted upstream.
+
+Configure the binding in global `~/.dispatch/config.toml`:
+
+```toml
+[providers.hermes]
+hermes_home = "/Users/me/.hermes"
+source_root = "/Users/me/src/hermes-agent"
+interpreter = "/Users/me/src/hermes-agent/.venv/bin/python"
+profile = "default"
+```
+
+All paths must be absolute. The worker starts the configured interpreter as
+`python -m tui_gateway.entry` with `HERMES_HOME` and the configured source root,
+and owns only that child. It does not discover or stop Desktop, serve, or Runs
+processes. Launch with an existing directory and plain text:
+
+```bash
+uv run dispatch doctor
+uv run dispatch new --name hermes-review --provider hermes \
+  --cwd /path/to/project --text "Review the current changes." \
+  --idempotency-key hermes:review:1 --json
+uv run dispatch send <dispatch-ref> "Address the highest priority finding." \
+  --idempotency-key hermes:review:2 --json
+```
+
+The first Hermes slice rejects goals, images or structured content, output
+schemas, custom instructions, staging, workspace/worktree setup, subscriptions,
+and Codex-only model or permission overrides before provider I/O. It does not
+attach to arbitrary Desktop sessions or fall back to HTTP Runs. When supplied,
+reuse an exact launch/send key and request to replay the local record; changing the request is
+`delivery_conflict`. Keep unknown or ambiguous receipts held and inspect them
+with `delivery get` or `delivery reconcile`; never resend to repair a lost
+acknowledgment. A generation change fences existing Hermes sessions, while exact
+local receipt replay remains available.
 
 Omit permission-profile, sandbox, approval, model, and service-tier settings when Codex defaults are
 acceptable. `dispatch new` omits unset policy/model fields from `thread/start`

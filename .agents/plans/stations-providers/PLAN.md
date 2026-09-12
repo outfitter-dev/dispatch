@@ -57,13 +57,21 @@ Verify matching/mismatching/malformed hashes, unknown checked method, changed da
 
 ### 3. DIS-79–88: complete the foundation and native Hermes path
 
-Implement and review the binding migration before enabling provider routing. Extract the minimum prepared-request and observation seams with real Codex callers, then consume the [verified Hermes contract](../../../docs/research/hermes-native-provider-contract.md) in a small owned stdio adapter. Keep independent startup as a focused slice and prove it before claiming Hermes-only availability.
+Implement and review the binding migration before enabling provider routing. Extract the minimum prepared-request and observation seams with real Codex callers, then consume the [verified Hermes contract](../../../docs/research/hermes-native-provider-contract.md) in a small owned stdio adapter that requires both `prompt_submit_if_idle_v1` and `prompt_turn_correlation_v1`. Keep independent startup as a focused slice and prove it before claiming Hermes-only availability.
 
 In parallel with shared code, inspect the installed Hermes contract and use the authorized local default profile for synthetic live checks. Record version, profile, durable/runtime session identities, native run IDs where they exist, replay scope and canonical history evidence. The initial adapter owns dedicated sessions. Desktop/API warm alternation failed the native prerequisite check and remains unsupported; any future coexistence test must establish both idle state and coherent native context. An acceptance response or a closed event stream alone never proves execution.
 
-The native stdio proof passed two coherent turns, per-session terminal cwd and one clean gateway restart. It has no native keyed admission or durable request-indexed turn ID. A source-pinned audit found that idle check/claim can race single-start heartbeat or bot turns, so sequence, streaming acknowledgment and `running:false` cannot correlate an arbitrary terminal to the submitted request. [DIS-94](https://linear.app/outfitter/issue/DIS-94) is actively preparing the additive `prompt_turn_correlation_v1` contract: atomic admission with an owner token plus a turn id echoed through start, terminal, error and retained evidence. Until that isolated upstream work is verified and adopted, stock Hermes is unavailable for durable send receipts; the two-turn probe remains continuity/cwd evidence only. Unknown outcomes never retransmit. Automatic ordinary resume remains disabled across generation changes until Hermes provides a supported non-executing recovery guarantee; lazy watch is an exact-segment diagnostic path, not an execution resume.
+The native stdio proof passed two coherent turns, per-session terminal cwd and one clean gateway restart. A source-pinned audit found that stock Hermes can race idle check/claim against heartbeat or bot turns and cannot correlate a terminal event to one submitted prompt. [DIS-94](https://linear.app/outfitter/issue/DIS-94) produced the additive `prompt_turn_correlation_v1` contract exercised by the isolated patch at `00712d1f0fdc8fd3b97dc762dbcc0db7b10d04af`: atomic admission with an owner token and a native turn id echoed through start, terminal, error and retained evidence. The patch is local and unpublished, so stock Hermes remains unavailable for durable send receipts. Unknown outcomes never retransmit. Automatic ordinary resume, lazy watch and native history lookup remain disabled as recovery paths across generation changes; old sessions stay quarantined.
 
-After two coherent Dispatch turns, exercise replay/conflict, lost acknowledgment, unavailable runtime and attention boundaries, using isolated services for destructive fault simulations. Verify Desktop continuity and operator diagnostics, then run a fresh full-stack review. Continue through correctable findings; stop only at a concrete capability or authority boundary and preserve a precise pickup record.
+The DIS-85/86 adapter slice now has typed native capability negotiation, frozen
+Hermes requests, local launch/delivery replay and conflict handling, bounded
+pre-ACK/live observations, attention holds, and generation quarantine under
+isolated tests. It still needs the provider-facing CLI/MCP and package/runtime
+proof owned by DIS-88, plus live Desktop coexistence from DIS-87. Verify
+unsupported stock capability, diagnostics, and installed asset guidance before
+claiming an operator-ready Hermes path. Continue through correctable findings;
+stop only at a concrete capability or authority boundary and preserve a precise
+pickup record.
 
 ## Hermes pickup contract
 
@@ -76,6 +84,14 @@ Before marking DIS-85 ready to start, the coordinator records:
 3. DIS-84's actual runtime/profile/API proof and unsupported cases.
 4. Known Codex startup dependency and provider capability limits.
 5. Worktree/branch ownership and the next concrete implementation step.
+
+For DIS-88, the installed `dispatch` and `dm` assets must contain usable Hermes
+guidance without depending on an unshipped repository checkout. The plugin's
+operator links target the packaged copies of `docs/usage/README.md`,
+`docs/usage/deliveries.md`, `docs/research/hermes-native-provider-contract.md`,
+and `docs/research/hermes-http-runs-contract.md`; package checks must verify those
+links resolve. Keep the stock Hermes refusal and local unpublished correlation
+patch explicit in both source and installed guidance.
 
 A completed document, a passing transport probe or a green unrelated revision does not pass this gate. Read live issue state and evidence. If the foundation is not ready, the Hermes agent may investigate DIS-84 but must not duplicate migrations or start live integration.
 
