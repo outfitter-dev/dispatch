@@ -200,6 +200,9 @@ Checks include:
 - packaged `dispatch`/`dm` skills and plugin MCP config.
 - low-risk App Server initialize smoke through owned stdio or the explicitly configured
   shared Unix socket.
+- static validation of a configured `[providers.hermes]` binding when present. The
+  live Hermes gateway capability and readiness result is reported by
+  `dispatch daemon status --json` after `dispatch up`.
 
 Common recovery paths:
 
@@ -316,11 +319,11 @@ uv run dispatch new --name docs-review --preset reviewer --no-send
 ```
 
 `new` chooses the execution provider with the canonical
-`--provider codex|claude` option; omitting it selects Codex. The CLI also
-projects one boolean shorthand per provider — `--codex` and `--claude` — that
-marshal to the same canonical `provider` input. The shorthands are CLI-only
-sugar: MCP, remote schemas, config, and presets expose only the canonical
-enum — set `provider = "codex"` (or `"claude"`) under `[defaults]` or
+`--provider codex|claude|hermes` option; omitting it selects Codex. The CLI also
+projects one boolean shorthand per provider — `--codex`, `--claude`, and
+`--hermes` — that marshal to the same canonical `provider` input. The shorthands
+are CLI-only sugar: MCP, remote schemas, config, and presets expose only the
+canonical enum — set `provider = "codex"`, `"claude"`, or `"hermes"` under `[defaults]` or
 `[presets.*]`, with the usual precedence (CLI flags win over presets, presets
 win over defaults). Provider selectors are mutually exclusive, and every
 multiple-selector form is rejected before any provider, worktree, or registry
@@ -328,7 +331,10 @@ work — including redundant pairs like `--claude --provider claude`. The
 execution provider is distinct from the Codex App Server `--model-provider`.
 The Claude execution provider is not launchable yet; resolving to it — from a
 flag, preset, or config default — fails with a validation error at launch (it
-never falls back to Codex) until the Claude provider vertical lands.
+never falls back to Codex) until the Claude provider vertical lands. Hermes is
+launchable only when its configured owned gateway is ready and advertises both
+`prompt_submit_if_idle_v1` and `prompt_turn_correlation_v1`; an unavailable or
+unsupported binding fails before lane work and never falls back to Codex or HTTP.
 
 ```bash
 uv run dispatch new --name docs-review --codex --no-send
@@ -377,6 +383,65 @@ effort = "low"
 [presets.safe-profile]
 permission_profile = ":read-only"
 ```
+
+Configure the optional Hermes binding in the global config. All three paths are
+required, absolute, and validated before the daemon starts the provider worker;
+`profile` is currently fixed to `default`:
+
+```toml
+[providers.hermes]
+hermes_home = "/Users/me/.hermes"
+source_root = "/Users/me/src/hermes-agent"
+interpreter = "/Users/me/src/hermes-agent/.venv/bin/python"
+profile = "default"
+```
+
+The worker launches the configured interpreter as `python -m tui_gateway.entry`
+with the configured source root and `HERMES_HOME`. It owns that gateway child and
+its stdio connection; it does not discover or stop an existing Hermes Desktop,
+serve, or Runs process. Keep secrets in Hermes's profile. Do not put credentials
+or mutable active-profile markers in Dispatch config.
+
+Hermes's first operator path is a dedicated session with an explicit existing
+directory and plain text:
+
+```bash
+uv run dispatch new --name hermes-review --provider hermes \
+  --cwd /path/to/project --text "Review the current changes." \
+  --idempotency-key hermes:review:1 --json
+uv run dispatch send <dispatch-ref> "Address the highest priority finding." \
+  --idempotency-key hermes:review:2 --json
+uv run dispatch delivery get <receipt-id> --json
+```
+
+When supplied, Hermes launch and send idempotency keys bind reservations locally.
+Repeating the exact key and input replays the same local record; changing the input raises
+`delivery_conflict`. Preserve an `unknown` or `ambiguous` result and inspect it
+with `delivery get` or `delivery reconcile`; Dispatch never creates a second
+native turn to repair a lost acknowledgment. A `completed` receipt requires a
+matching native `turn_id` and terminal evidence from the same gateway generation.
+
+The first Hermes launch supports `name`, explicit `cwd`, presets, prefix, and
+plain text when the gateway advertises both `prompt_submit_if_idle_v1` and
+`prompt_turn_correlation_v1`. Goals, images or other structured content, output schemas, custom
+instructions, staging, workspace/worktree setup, subscriptions, and Codex-only
+model or permission overrides are rejected before provider I/O. Hermes's native
+cwd is the selected session directory; no Dispatch workspace preparation is
+performed.
+
+Use `dispatch doctor` before a Hermes launch. It distinguishes a missing or
+invalid static binding; it does not start Hermes or negotiate capabilities.
+After `dispatch up`, `dispatch daemon status --json` shows the binding's
+readiness after required capability negotiation, supported actions, durability,
+generation and bounded failure reason. A gateway generation change fences existing
+Hermes lanes: exact local receipt replay remains available, while new
+submissions to the old session stop before reservation or provider I/O. Create a
+new dedicated session only after the replacement generation is ready.
+
+See the [native Hermes provider contract](../research/hermes-native-provider-contract.md)
+for the wire boundary and evidence limits, the [HTTP Runs alternative](../research/hermes-http-runs-contract.md)
+for the explicitly API-managed path, and [reserved text delivery](deliveries.md)
+for receipt states and bounded reconciliation.
 
 Preset order matters: global settings load first, repo settings override them,
 later presets win, and CLI flags win over presets. Omit permission-profile,

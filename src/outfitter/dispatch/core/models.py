@@ -1583,6 +1583,12 @@ class StatusInput(BaseModel):
     pass
 
 
+class ProviderDurabilityView(BaseModel):
+    local_reservation: bool
+    provider_idempotency: bool
+    native_evidence: bool
+
+
 class ProviderBindingStatusView(BaseModel):
     provider: str
     binding_id: str
@@ -1592,6 +1598,8 @@ class ProviderBindingStatusView(BaseModel):
     observed_at: str
     connection_generation: str | None = None
     owns_process: bool
+    supported_actions: list[str]
+    durability: ProviderDurabilityView
 
 
 class StatusOutput(BaseModel):

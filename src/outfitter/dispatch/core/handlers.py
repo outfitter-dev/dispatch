@@ -155,6 +155,7 @@ from .models import (
     PermissionProfilesInput,
     PermissionProfilesOutput,
     ProviderBindingStatusView,
+    ProviderDurabilityView,
     ProviderStateView,
     QueryInput,
     QueryMatch,
@@ -3810,6 +3811,12 @@ async def status(inp: StatusInput, ctx: Ctx) -> StatusOutput:
                 observed_at=snapshot.observed_at,
                 connection_generation=snapshot.connection_generation,
                 owns_process=snapshot.owns_process,
+                supported_actions=list(snapshot.supported_actions),
+                durability=ProviderDurabilityView(
+                    local_reservation=snapshot.durability.local_reservation,
+                    provider_idempotency=snapshot.durability.provider_idempotency,
+                    native_evidence=snapshot.durability.native_evidence,
+                ),
             )
             for snapshot in ctx.provider_manager.snapshots()
         ]
