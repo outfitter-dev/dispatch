@@ -47,3 +47,19 @@ Matt expanded the assignment through the shared foundation and native Hermes imp
 - The migration was tested only on isolated state. It was not run on the installed Dispatch registry. No installed runtime replacement, merge, release or deployment was performed.
 
 DIS-80 may begin from this reviewed slice. The separately researched Hermes transport remains subject to DIS-81/82 reservation/observation and adapter integration gates; its successful native probes do not bypass them.
+
+## September 12, 2026 — native Hermes transport research
+
+DIS-79 is draft PR #113 at `0390cbbc4d0842d79ad75b2825e8224680f8d242`, with exact-head CI passing. DIS-80 implementation continues in the foundation worktree while the independently reviewed DIS-84 research is recorded in this documentation slice.
+
+The native HTTP Runs probe passed keyed replay/conflict, two-turn continuity, canonical history, cancellation and polling. It also proved an unsuitable coding-workspace boundary and a failed warm Desktop/API context sequence. The selected initial coding transport is the maintained native TUI gateway over owned stdio, using dedicated sessions and the explicitly authorized default profile.
+
+### Verification and review
+
+- Native stdio proved two coherent turns, actual terminal execution in the selected cwd, and clean process restart with a new runtime ID while retaining the stored session key, context and cwd. Both owned gateway processes exited normally after the synthetic sessions were idle. The portable evidence summary and limits are in the [provider contract](../../../docs/research/hermes-native-provider-contract.md).
+- Three research collaborators, including a dedicated native Hermes Desktop conversation, inspected the installed source at `939e45c91d751fadd94dcd1b873ac3cb44846213`. No installed source, shared configuration, credentials or existing user conversation was edited. Native agent invocation can have provider-owned profile effects, which the report discloses.
+- Hermes's canonical runner passed `tests/tui_gateway/test_auto_continue.py` with 20 tests in 2.9 seconds, using its clean environment and isolated per-test homes. This supports the documented native recovery behavior; it does not certify a Dispatch adapter.
+- Independent research review reached 5/5 with zero open findings after correcting stale-marker resume safety, lazy-watch successor/runtime limits and interpreter provenance. The contract also records unpaginated history fallback and the need for unique attribution when native autonomous turns exist.
+- The initial adapter must preserve unknown outcomes without retransmission and quarantine stored sessions after an owner generation change until supported safe resume exists. This concrete upstream limit does not prevent the correctly bounded same-generation implementation after DIS-80/81/82 pass.
+
+No merge, release, installed Dispatch registry migration, runtime replacement or service deployment occurred. The owned native processes were temporary proof clients using the existing default profile; existing Desktop and API services remained running.
