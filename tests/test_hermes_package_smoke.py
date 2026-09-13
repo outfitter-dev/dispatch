@@ -99,3 +99,78 @@ def test_readme_hermes_operator_guide_anchor_exists() -> None:
 
     assert "(docs/usage/README.md#hermes-owned-sessions)" in (repository / "README.md").read_text()
     assert "\n### Hermes Owned Sessions\n" in (repository / "docs/usage/README.md").read_text()
+
+
+def test_parse_args_builds_from_checkout_unless_wheel_is_supplied() -> None:
+    assert check_hermes_package_smoke._parse_args([]).wheel is None
+    assert check_hermes_package_smoke._parse_args(["--", "--wheel", "dist/x.whl"]).wheel == Path(
+        "dist/x.whl"
+    )
+
+
+def test_source_evidence_for_supplied_wheel_does_not_claim_head(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def forbid_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise AssertionError(f"supplied wheel must not probe git: {argv}")
+
+    monkeypatch.setattr(subprocess, "run", forbid_run)
+
+    assert check_hermes_package_smoke._source_evidence(tmp_path, built_from_checkout=False) == {
+        "revision": None,
+        "dirty": None,
+        "revision_binding": "unverified",
+    }
+
+
+def test_source_evidence_for_checkout_build_records_head(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        stdout = "abc123\n" if argv[1] == "rev-parse" else " M file\n"
+        return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert check_hermes_package_smoke._source_evidence(tmp_path, built_from_checkout=True) == {
+        "revision": "abc123",
+        "dirty": True,
+        "revision_binding": "checkout_build",
+    }
+
+
+def test_build_wheel_builds_the_anchored_checkout_into_out_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repository = tmp_path / "checkout"
+    out_dir = tmp_path / "build"
+    calls: list[list[str]] = []
+
+    def fake_command(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "outfitter_dispatch-0.0.0-py3-none-any.whl").write_bytes(b"wheel")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(check_hermes_package_smoke, "_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr(check_hermes_package_smoke, "_command", fake_command)
+
+    wheel = check_hermes_package_smoke._build_wheel(repository, out_dir)
+
+    assert wheel == out_dir / "outfitter_dispatch-0.0.0-py3-none-any.whl"
+    assert calls == [
+        ["/usr/bin/uv", "build", "--wheel", "--out-dir", str(out_dir), str(repository)]
+    ]
+
+
+def test_build_wheel_requires_exactly_one_built_wheel(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def fake_command(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(check_hermes_package_smoke, "_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr(check_hermes_package_smoke, "_command", fake_command)
+
+    with pytest.raises(check_hermes_package_smoke.SmokeFailure, match="produced 0 wheels"):
+        check_hermes_package_smoke._build_wheel(tmp_path / "checkout", tmp_path / "build")

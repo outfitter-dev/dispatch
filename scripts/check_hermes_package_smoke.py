@@ -1,7 +1,11 @@
 """Verify an installed local wheel through a synthetic Hermes gateway.
 
-This opt-in smoke installs the supplied wheel into a temporary environment. It
-uses no native Hermes profile, credential, service, model, or live Codex socket.
+This opt-in smoke builds a wheel from this checkout (or installs a supplied
+``--wheel``) into a temporary environment. It uses no native Hermes profile,
+credential, service, model, or live Codex socket.
+
+Only a wheel built here is bound to the recorded checkout revision; a supplied
+wheel records ``revision_binding: "unverified"`` and no revision claim.
 """
 
 from __future__ import annotations
@@ -20,6 +24,9 @@ from pathlib import Path
 from typing import Any
 
 _TIMEOUT_SECONDS = 30.0
+_BUILD_TIMEOUT_SECONDS = 300.0
+_REVISION_BINDING_CHECKOUT = "checkout_build"
+_REVISION_BINDING_UNVERIFIED = "unverified"
 _OUTPUT_LIMIT = 4_000
 _FIRST_MARKER = "DIS88-SYNTHETIC-FIRST-MARKER"
 _SECOND_PROMPT = "Recall the marker from the earlier turn."
@@ -139,9 +146,11 @@ class SmokeFailure(RuntimeError):
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    wheel = args.wheel.expanduser().resolve()
-    if not wheel.is_file() or wheel.suffix != ".whl":
-        raise SystemExit(f"--wheel must name an existing wheel: {wheel}")
+    supplied_wheel = None if args.wheel is None else args.wheel.expanduser().resolve()
+    if supplied_wheel is not None and (
+        not supplied_wheel.is_file() or supplied_wheel.suffix != ".whl"
+    ):
+        raise SystemExit(f"--wheel must name an existing wheel: {supplied_wheel}")
     repository = Path(__file__).resolve().parents[1]
     fixture = repository / "tests/fixtures/hermes_package_gateway"
     if not (fixture / "tui_gateway/entry.py").is_file():
@@ -152,11 +161,10 @@ def main(argv: list[str] | None = None) -> int:
         "status": "failed",
         "scope": "installed local wheel with deterministic synthetic Hermes gateway",
         "source": {
-            "revision": _source_revision(repository),
-            "dirty": _source_dirty(repository),
+            **_source_evidence(repository, built_from_checkout=supplied_wheel is None),
             "script_sha256": _sha256(Path(__file__)),
             "fixture_sha256": _tree_sha256(fixture),
-            "wheel_sha256": _sha256(wheel),
+            "wheel_sha256": None,
         },
         "required_capabilities": _REQUIRED_CAPABILITIES,
         "evidence_limits": {
@@ -173,6 +181,10 @@ def main(argv: list[str] | None = None) -> int:
     success = False
     try:
         paths = _prepare(root, fixture)
+        wheel = (
+            _build_wheel(repository, root / "build") if supplied_wheel is None else supplied_wheel
+        )
+        evidence["source"]["wheel_sha256"] = _sha256(wheel)
         installed = _install(wheel, paths)
         env = _isolated_env(paths)
         schemas = {
@@ -379,7 +391,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     if raw and raw[0] == "--":
         raw = raw[1:]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--wheel", required=True, type=Path, help="locally built wheel to install")
+    parser.add_argument(
+        "--wheel",
+        type=Path,
+        default=None,
+        help=(
+            "install this pre-built wheel instead of building one from this checkout; "
+            "its revision binding is recorded as unverified"
+        ),
+    )
     return parser.parse_args(raw)
 
 
@@ -402,10 +422,26 @@ def _prepare(root: Path, fixture: Path) -> dict[str, Path]:
     return paths
 
 
-def _install(wheel: Path, paths: dict[str, Path]) -> dict[str, str]:
+def _uv() -> str:
     uv = shutil.which("uv")
     if uv is None:
-        raise SmokeFailure("uv is required to create the isolated environment")
+        raise SmokeFailure("uv is required to build the wheel and create the isolated environment")
+    return uv
+
+
+def _build_wheel(repository: Path, out_dir: Path) -> Path:
+    _command(
+        [_uv(), "build", "--wheel", "--out-dir", str(out_dir), str(repository)],
+        timeout=_BUILD_TIMEOUT_SECONDS,
+    )
+    wheels = sorted(out_dir.glob("*.whl")) if out_dir.is_dir() else []
+    if len(wheels) != 1:
+        raise SmokeFailure(f"checkout build produced {len(wheels)} wheels in {out_dir}")
+    return wheels[0]
+
+
+def _install(wheel: Path, paths: dict[str, Path]) -> dict[str, str]:
+    uv = _uv()
     _command([uv, "venv", "--python", sys.executable, str(paths["venv"])])
     python = paths["venv"] / "bin/python"
     _command([uv, "pip", "install", "--python", str(python), str(wheel)])
@@ -505,7 +541,10 @@ def _wait_for_hermes_ready(
             last = _parse_json(result.stdout, "daemon status")
             provider = _provider(last, "hermes")
             if provider.get("state") == "ready":
-                _expect(provider.get("supported_actions") == ["launch", "send"], provider)
+                _expect(
+                    provider.get("supported_actions") == ["launch", "send", "transcript"],
+                    provider,
+                )
                 _expect(
                     provider.get("durability")
                     == {
@@ -638,6 +677,20 @@ def _pid_alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def _source_evidence(repository: Path, *, built_from_checkout: bool) -> dict[str, object]:
+    if not built_from_checkout:
+        return {
+            "revision": None,
+            "dirty": None,
+            "revision_binding": _REVISION_BINDING_UNVERIFIED,
+        }
+    return {
+        "revision": _source_revision(repository),
+        "dirty": _source_dirty(repository),
+        "revision_binding": _REVISION_BINDING_CHECKOUT,
+    }
 
 
 def _source_revision(repository: Path) -> str:
