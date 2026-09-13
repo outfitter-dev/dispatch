@@ -183,8 +183,15 @@ async def test_supervisor_withdraws_generation_when_client_closes_during_recover
         await task
 
 
-async def test_supervisor_prioritizes_simultaneous_reactor_fatal_over_close(
-    store: Registry, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "recovery_error",
+    [None, ClientError("provider recovery failed")],
+    ids=["blocked-recovery", "ordinary-recovery-error"],
+)
+async def test_supervisor_prioritizes_simultaneous_reactor_fatal(
+    store: Registry,
+    monkeypatch: pytest.MonkeyPatch,
+    recovery_error: Exception | None,
 ) -> None:
     router = ProviderRouter.unavailable_codex("Codex App Server is starting")
     ctx = make_ctx(store)
@@ -204,6 +211,8 @@ async def test_supervisor_prioritizes_simultaneous_reactor_fatal_over_close(
 
     async def blocked_recovery(_client: SupervisedClient) -> None:
         recovery_started.set()
+        if recovery_error is not None:
+            raise recovery_error
         await asyncio.Event().wait()
 
     supervisor = Supervisor(ctx, make_client, fail_reactor, backoff=0, manager=manager)

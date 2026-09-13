@@ -115,6 +115,7 @@ class Supervisor:
                 (recovery_task, reactor_task, closed_task),
                 return_when=asyncio.FIRST_COMPLETED,
             )
+            self._raise_completed_shared_core_failure(recovery_task, reactor_task, closed_task)
             if recovery_task.done():
                 await recovery_task
             if reactor_task.done():
@@ -131,6 +132,7 @@ class Supervisor:
             done, _ = await asyncio.wait(
                 (reactor_task, closed_task), return_when=asyncio.FIRST_COMPLETED
             )
+            self._raise_completed_shared_core_failure(reactor_task, closed_task)
             if reactor_task in done:
                 error = reactor_task.exception()
                 if error is not None:
@@ -144,6 +146,15 @@ class Supervisor:
             reactor_task.cancel()
             closed_task.cancel()
             await asyncio.gather(recovery_task, reactor_task, closed_task, return_exceptions=True)
+
+    @staticmethod
+    def _raise_completed_shared_core_failure(*tasks: asyncio.Task[None]) -> None:
+        """Give fatal shared-state failures priority over ordinary race outcomes."""
+        for task in tasks:
+            if task.done() and not task.cancelled():
+                error = task.exception()
+                if isinstance(error, SharedCoreFailure):
+                    raise error
 
     def _mark_connection_closed(self, generation: str) -> None:
         if self._is_stopped():
