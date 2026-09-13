@@ -18,6 +18,9 @@ from outfitter.dispatch.registry.models import (
     ServiceTierEntry,
     ServiceTierSource,
 )
+from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
+
+from .providers import ProviderAction, router_for
 
 _NEUTRAL_SERVICE_TIERS = {"auto", "default"}
 
@@ -60,8 +63,16 @@ async def refresh_model_catalog(ctx: Ctx, *, source: str = "app-server") -> Mode
 
 
 async def _read_model_catalog(ctx: Ctx, *, source: str) -> ModelCatalogSnapshot:
-    config = await ctx.client.config_read()
-    models = await ctx.client.model_list()
+    config_route = router_for(ctx).route_binding(
+        "codex", DEFAULT_CODEX_BINDING_ID, ProviderAction.CONFIG_READ
+    )
+    model_route = router_for(ctx).route_binding(
+        "codex", DEFAULT_CODEX_BINDING_ID, ProviderAction.MODEL_READ
+    )
+    config_route.recheck(ctx.provider_session_id or None)
+    config = await config_route.adapter.config_read()
+    model_route.recheck(ctx.provider_session_id or None)
+    models = await model_route.adapter.model_list()
     now = ctx.registry.now_iso()
     entries = [
         _catalog_entry(model, config=config, refreshed_at=now, source=source) for model in models
@@ -86,7 +97,11 @@ async def resolve_model_settings(
         and model_provider is None
         and not required_modalities
     ):
-        config = await ctx.client.config_read()
+        route = router_for(ctx).route_binding(
+            "codex", DEFAULT_CODEX_BINDING_ID, ProviderAction.CONFIG_READ
+        )
+        route.recheck(ctx.provider_session_id or None)
+        config = await route.adapter.config_read()
         configured_tier = config.service_tier
         return ResolvedModelSettings(
             model_provider=config.model_provider,

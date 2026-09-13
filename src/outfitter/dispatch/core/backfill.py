@@ -8,17 +8,19 @@ import json
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Protocol
 
 from outfitter.dispatch.client.errors import AppServerError, ProtocolError
 from outfitter.dispatch.client.models import (
+    ThreadInfo,
     ThreadItemsPage,
     ThreadResumeInitialTurnsPageParams,
+    ThreadResumeResult,
     ThreadTurn,
     ThreadTurnsPage,
+    TurnItemsView,
 )
 from outfitter.dispatch.config import CapturePolicy
-from outfitter.dispatch.contracts.context import LaneClient
 from outfitter.dispatch.contracts.errors import CapabilityUnavailableError
 from outfitter.dispatch.registry.models import Lane
 from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID, Registry
@@ -28,6 +30,47 @@ from .history_index import index_codex_items_page, index_codex_turns_page
 HistoryCapability = Literal["unknown", "supported", "turn-page-fallback", "unsupported"]
 SortDirection = Literal["asc", "desc"]
 MonotonicClock = Callable[[], float]
+
+
+class HistoryLaneClient(Protocol):
+    async def thread_resume(
+        self,
+        thread_id: str,
+        *,
+        permission_profile: str | None = None,
+        exclude_turns: bool | None = None,
+        initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None,
+    ) -> ThreadInfo: ...
+
+    async def thread_resume_full(
+        self,
+        thread_id: str,
+        *,
+        permission_profile: str | None = None,
+        exclude_turns: bool | None = None,
+        initial_turns_page: ThreadResumeInitialTurnsPageParams | None = None,
+    ) -> ThreadResumeResult: ...
+
+    async def thread_turns_list(
+        self,
+        thread_id: str,
+        *,
+        cursor: str | None = None,
+        limit: int | None = None,
+        sort_direction: SortDirection | None = None,
+        items_view: TurnItemsView | None = None,
+    ) -> ThreadTurnsPage: ...
+
+    async def thread_items_list(
+        self,
+        thread_id: str,
+        *,
+        cursor: str | None = None,
+        limit: int | None = None,
+        sort_direction: SortDirection | None = None,
+        turn_id: str | None = None,
+    ) -> ThreadItemsPage: ...
+
 
 _CAPABILITY_ERROR_CODES = {-32601, -32602}
 _SOURCE = "codex-app-server"
@@ -61,7 +104,7 @@ class HistoryBackfillResult:
 
 async def backfill_codex_history(
     *,
-    client: LaneClient,
+    client: HistoryLaneClient,
     registry: Registry,
     lane: Lane,
     cursor: str | None = None,
@@ -358,7 +401,7 @@ class _BackfillProgress:
 async def _hydrate_pending_turn(
     *,
     progress: _BackfillProgress,
-    client: LaneClient,
+    client: HistoryLaneClient,
     registry: Registry,
     lane: Lane,
     capture: CapturePolicy | None,
@@ -477,7 +520,7 @@ async def _advance_turn_page(
     progress: _BackfillProgress,
     initial_page: ThreadTurnsPage,
     turn_page: ThreadTurnsPage | None,
-    client: LaneClient,
+    client: HistoryLaneClient,
     registry: Registry,
     lane: Lane,
     capture: CapturePolicy | None,
@@ -571,7 +614,7 @@ async def _advance_turn_page(
 
 
 async def _turns_page(
-    client: LaneClient,
+    client: HistoryLaneClient,
     thread_id: str,
     *,
     cursor: str | None,
@@ -588,7 +631,7 @@ async def _turns_page(
 
 
 async def _items_page(
-    client: LaneClient,
+    client: HistoryLaneClient,
     thread_id: str,
     *,
     turn_id: str,

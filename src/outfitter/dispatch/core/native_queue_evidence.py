@@ -7,6 +7,8 @@ from outfitter.dispatch.client.errors import ClientError, ProtocolError
 from outfitter.dispatch.client.native_queue import QueuedSubmission
 from outfitter.dispatch.contracts.context import Ctx
 
+from .providers import ProviderAction, route_lane
+
 NATIVE_QUEUE_TIMEOUT = 4
 
 
@@ -17,6 +19,10 @@ class NativeQueueConflict(ProtocolError):
 async def find_queued_submission(
     ctx: Ctx, thread_id: str, receipt_id: str, text: str
 ) -> QueuedSubmission | None:
+    lane = await ctx.registry.find_lane(thread_id)
+    if lane is None:
+        return None
+    route = route_lane(ctx, lane, ProviderAction.QUEUE_EVIDENCE)
     cursor: str | None = None
     seen: set[str] = set()
     matches: list[QueuedSubmission] = []
@@ -24,7 +30,8 @@ async def find_queued_submission(
     try:
         async with asyncio.timeout(NATIVE_QUEUE_TIMEOUT):
             for _ in range(4):
-                page = await ctx.client.thread_queue_list(thread_id, cursor=cursor, limit=50)
+                route.recheck(ctx.provider_session_id or None)
+                page = await route.adapter.queue_list(route.target, cursor=cursor, limit=50)
                 total_bytes += len(json.dumps(page.model_dump(mode="json")).encode())
                 for entry in page.data:
                     if entry.client_user_message_id != receipt_id:

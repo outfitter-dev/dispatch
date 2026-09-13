@@ -9,9 +9,18 @@ import pytest
 
 from outfitter.dispatch.core import handlers
 from outfitter.dispatch.core.models import SendInput
+from outfitter.dispatch.core.providers import (
+    CodexLaneAdapter,
+    ProviderAction,
+    ProviderAvailability,
+    ProviderBindingFacts,
+    ProviderDurability,
+    ProviderRouter,
+)
 from outfitter.dispatch.registry.store import Registry
 from tests.core.delivery_fakes import AcceptedClient, LostAckClient
 from tests.fakes import make_ctx
+from tests.fixtures.registry.builders import thread_turn
 
 
 @pytest.mark.asyncio
@@ -94,6 +103,64 @@ async def test_execution_state_correlates_even_when_event_precedes_ack(
         assert receipt.status == ("accepted" if failed else "completed")
         assert receipt.execution_status == ("failed" if failed else "completed")
         assert receipt.turn_id == "turn-1"
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_execution_join_uses_provider_qualified_routed_identity() -> None:
+    store = await Registry.open()
+    try:
+
+        class SyntheticAdapter(CodexLaneAdapter):
+            def __init__(self, client: AcceptedClient) -> None:
+                super().__init__(client, binding_id="synthetic-binding")
+                self.facts = ProviderBindingFacts(
+                    provider="synthetic",
+                    binding_id="synthetic-binding",
+                    supported_actions=frozenset({ProviderAction.SEND}),
+                    availability=ProviderAvailability(ready=True),
+                    durability=ProviderDurability(),
+                )
+
+        await store.add_lane(
+            id="dsp_target",
+            handle="@target",
+            source="own",
+            status="idle",
+            provider="synthetic",
+            binding_id="synthetic-binding",
+            provider_thread_id="native-target",
+        )
+        client = AcceptedClient()
+        ctx = make_ctx(store, client)
+        ctx.providers = ProviderRouter((SyntheticAdapter(client),))
+
+        async def complete_before_ack() -> None:
+            turn = thread_turn(
+                lane="dsp_target",
+                binding_id="synthetic-binding",
+                provider_thread_id="native-target",
+                turn_id="turn-1",
+                status="completed",
+            ).model_copy(update={"provider": "synthetic"})
+            await store.upsert_thread_turn(turn)
+
+        client.on_accept = complete_before_ack
+
+        ack = await handlers.send_message(
+            SendInput(lane="dsp_target", text="hello", idempotency_key="one"), ctx
+        )
+
+        assert ack.delivery is not None
+        receipt = await store.get_delivery(ack.delivery.id)
+        assert receipt.status == "completed"
+        assert receipt.execution_status == "completed"
+        assert receipt.turn_id == "turn-1"
+        turn_calls = [call for call in client.calls if call[0] == "turn_start"]
+        args = turn_calls[0][1]["args"]
+        assert isinstance(args, tuple)
+        assert args[0] == "native-target"
     finally:
         await store.close()
 
