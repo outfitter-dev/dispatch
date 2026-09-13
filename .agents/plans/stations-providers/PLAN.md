@@ -20,7 +20,8 @@ Use the dedicated foundation worktree and preserve other worktree owners. One br
 | [DIS-82](https://linear.app/outfitter/issue/DIS-82) | Minimum shared observation/receipt seam on Codex | DIS-80 |
 | [DIS-83](https://linear.app/outfitter/issue/DIS-83) | Independent provider startup/recovery | DIS-80, DIS-82 |
 | [DIS-84](https://linear.app/outfitter/issue/DIS-84) | Native Hermes transport proof on the authorized default profile | Can start independently; findings inform the shared design |
-| [DIS-85](https://linear.app/outfitter/issue/DIS-85) | Hermes adapter and two coherent local turns | DIS-70, DIS-79, DIS-80, DIS-81, DIS-82, DIS-84 |
+| [DIS-94](https://linear.app/outfitter/issue/DIS-94) | Request-correlated native Hermes gateway execution contract | DIS-84 |
+| [DIS-85](https://linear.app/outfitter/issue/DIS-85) | Hermes adapter and two coherent local turns | DIS-70, DIS-79, DIS-80, DIS-81, DIS-82, DIS-84, DIS-94 |
 | [DIS-86](https://linear.app/outfitter/issue/DIS-86) | Hermes ambiguity/replay/attention recovery | DIS-85 |
 | [DIS-87](https://linear.app/outfitter/issue/DIS-87) | Desktop A → Dispatch B → Desktop C coexistence | DIS-86 |
 | [DIS-88](https://linear.app/outfitter/issue/DIS-88) | Hermes diagnostics, docs, skills and package proof | DIS-86; attached/Hermes-only claims also require DIS-87/DIS-83 |
@@ -61,7 +62,7 @@ Implement and review the binding migration before enabling provider routing. Ext
 
 In parallel with shared code, inspect the installed Hermes contract and use the authorized local default profile for synthetic live checks. Record version, profile, durable/runtime session identities, native run IDs where they exist, replay scope and canonical history evidence. The initial adapter owns dedicated sessions. Desktop/API warm alternation failed the native prerequisite check and remains unsupported; any future coexistence test must establish both idle state and coherent native context. An acceptance response or a closed event stream alone never proves execution.
 
-The native stdio proof passed two coherent turns, per-session terminal cwd and one clean gateway restart. It has no native keyed admission or durable request-indexed turn ID. Unknown outcomes never retransmit. Automatic ordinary resume remains disabled across generation changes until Hermes provides a supported non-executing recovery guarantee; lazy watch is an exact-segment diagnostic path, not an execution resume. Record that upstream limit in DIS-86 without blocking same-generation creation and continuation that satisfy the shared gates.
+The native stdio proof passed two coherent turns, per-session terminal cwd and one clean gateway restart. It has no native keyed admission or durable request-indexed turn ID. A source-pinned audit found that idle check/claim can race single-start heartbeat or bot turns, so sequence, streaming acknowledgment and `running:false` cannot correlate an arbitrary terminal to the submitted request. [DIS-94](https://linear.app/outfitter/issue/DIS-94) is actively preparing the additive `prompt_turn_correlation_v1` contract: atomic admission with an owner token plus a turn id echoed through start, terminal, error and retained evidence. Until that isolated upstream work is verified and adopted, stock Hermes is unavailable for durable send receipts; the two-turn probe remains continuity/cwd evidence only. Unknown outcomes never retransmit. Automatic ordinary resume remains disabled across generation changes until Hermes provides a supported non-executing recovery guarantee; lazy watch is an exact-segment diagnostic path, not an execution resume.
 
 After two coherent Dispatch turns, exercise replay/conflict, lost acknowledgment, unavailable runtime and attention boundaries, using isolated services for destructive fault simulations. Verify Desktop continuity and operator diagnostics, then run a fresh full-stack review. Continue through correctable findings; stop only at a concrete capability or authority boundary and preserve a precise pickup record.
 
@@ -73,7 +74,7 @@ Before marking DIS-85 ready to start, the coordinator records:
 
 1. Exact reviewed foundation base commit/PRs and whether the agent consumes merged main or an explicitly approved stack base.
 2. DIS-70 and DIS-79–82 verification, migration version/coverage and no unresolved correctness/review blockers.
-3. DIS-84's actual runtime/profile/API proof and unsupported cases.
+3. DIS-84's actual runtime/profile/API proof and unsupported cases, plus verified adoption of DIS-94's request-correlation contract.
 4. Known Codex startup dependency and provider capability limits.
 5. Worktree/branch ownership and the next concrete implementation step.
 
