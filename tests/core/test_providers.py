@@ -4,16 +4,25 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import Literal
 
 import pytest
 
 from outfitter.dispatch.client.models import ThreadInfo
+from outfitter.dispatch.config import RuntimePolicy
 from outfitter.dispatch.contracts.errors import CapabilityUnavailableError
 from outfitter.dispatch.core import handlers
 from outfitter.dispatch.core.models import (
+    DiscoverInput,
     ForkInput,
+    ImageUrlContent,
     LaneSyncInput,
     LaneTextInput,
+    NewInput,
+    RosterInput,
+    SearchInput,
+    SendInput,
     ShowInput,
     ThreadTargetInput,
 )
@@ -35,7 +44,7 @@ def _lane(**changes: object) -> Lane:
         "id": "native-codex",
         "provider": "codex",
         "binding_id": DEFAULT_CODEX_BINDING_ID,
-        "provider_session_id": "native-codex",
+        "provider_thread_id": "native-codex",
         "ref": "0abc",
         "ref_source": "0",
         "ref_payload": "abc",
@@ -77,14 +86,14 @@ def test_route_never_falls_back_for_missing_binding_or_native_identity() -> None
                 id="dsp_other",
                 provider="hermes",
                 binding_id="default",
-                provider_session_id="native-codex",
+                provider_thread_id="native-codex",
             ),
             ProviderAction.READ,
         )
-    with pytest.raises(CapabilityUnavailableError, match="no provider session identity"):
+    with pytest.raises(CapabilityUnavailableError, match="no provider thread identity"):
         router.route_lane(
             _lane(
-                id="dsp_reserved", provider="hermes", binding_id="default", provider_session_id=None
+                id="dsp_reserved", provider="hermes", binding_id="default", provider_thread_id=None
             ),
             ProviderAction.SEND,
         )
@@ -134,6 +143,171 @@ async def test_action_support_projects_capabilities_and_blocks_before_client_io(
         with pytest.raises(CapabilityUnavailableError, match="send is unsupported"):
             await handlers.send(LaneTextInput(lane=lane.ref, text="blocked"), ctx)
         assert not client.calls
+    finally:
+        await store.close()
+
+
+@pytest.mark.parametrize(
+    ("source", "supported_action"),
+    [
+        ("own", ProviderAction.QUEUE_NATIVE),
+        ("attached", ProviderAction.SEND),
+    ],
+)
+async def test_queue_capability_depends_on_lane_ownership(
+    source: Literal["own", "attached"], supported_action: ProviderAction
+) -> None:
+    store = await Registry.open()
+    try:
+        lane = await store.add_lane(id="native-codex", handle="@lane", source=source)
+        client = FakeLaneClient()
+        ctx = make_ctx(store, client, policy=RuntimePolicy(allow_attached_writes=True))
+        ctx.providers = ProviderRouter(
+            (CodexLaneAdapter(client, supported_actions=frozenset({supported_action})),)
+        )
+
+        view = await handlers.show(ShowInput(lane=lane.ref), ctx)
+
+        assert view.capabilities.queue is False
+    finally:
+        await store.close()
+
+
+@pytest.mark.parametrize(
+    "inp",
+    [
+        NewInput(name="send-preflight", text="hello"),
+        NewInput(name="goal-preflight", goal="ship it", send=False),
+    ],
+)
+async def test_new_preflights_required_followup_actions_before_launch(inp: NewInput) -> None:
+    store = await Registry.open()
+    try:
+        client = FakeLaneClient()
+        ctx = make_ctx(store, client)
+        ctx.providers = ProviderRouter(
+            (CodexLaneAdapter(client, supported_actions=frozenset({ProviderAction.LAUNCH})),)
+        )
+
+        with pytest.raises(CapabilityUnavailableError, match="unsupported"):
+            await handlers.new_lane(inp, ctx)
+
+        assert client.calls == []
+        assert await store.list_lanes() == []
+    finally:
+        await store.close()
+
+
+async def test_new_treats_unsupported_optional_rename_as_best_effort(tmp_path: Path) -> None:
+    store = await Registry.open()
+    try:
+        client = FakeLaneClient()
+        ctx = make_ctx(store, client)
+        ctx.providers = ProviderRouter(
+            (
+                CodexLaneAdapter(
+                    client,
+                    supported_actions=frozenset(
+                        {ProviderAction.LAUNCH, ProviderAction.CONFIG_READ}
+                    ),
+                ),
+            )
+        )
+
+        result = await handlers.new_lane(
+            NewInput(name="worker", send=False, cwd=str(tmp_path), workspace="none"), ctx
+        )
+
+        assert result.id == "lane-1"
+        assert [name for name, _ in client.calls] == ["config_read", "thread_start"]
+        assert (await store.get_lane("lane-1")).id == "lane-1"
+    finally:
+        await store.close()
+
+
+async def test_attached_write_preparation_reuses_operation_route() -> None:
+    store = await Registry.open()
+    try:
+
+        class SyntheticAdapter(CodexLaneAdapter):
+            def __init__(self, client: FakeLaneClient) -> None:
+                super().__init__(client, binding_id="synthetic-binding")
+                self.facts = ProviderBindingFacts(
+                    provider="synthetic",
+                    binding_id="synthetic-binding",
+                    supported_actions=frozenset({ProviderAction.INJECT_CONTEXT}),
+                    availability=ProviderAvailability(ready=True),
+                    durability=ProviderDurability(),
+                )
+
+        client = FakeLaneClient()
+        ctx = make_ctx(
+            store,
+            client,
+            policy=RuntimePolicy(allow_attached_writes=True),
+        )
+        ctx.providers = ProviderRouter((SyntheticAdapter(client),))
+        lane = await store.add_lane(
+            id="dsp_synthetic",
+            handle="@synthetic",
+            source="attached",
+            provider="synthetic",
+            binding_id="synthetic-binding",
+            provider_thread_id="native-session",
+        )
+
+        result = await handlers.brief(
+            LaneTextInput(lane=lane.ref, text="context"),
+            ctx,
+        )
+
+        assert result.op == "brief"
+        assert [name for name, _ in client.calls] == ["thread_resume", "inject_items"]
+        assert all(call[1]["thread_id"] == "native-session" for call in client.calls)
+    finally:
+        await store.close()
+
+
+async def test_nondefault_sync_is_not_advertised_and_fails_before_effects() -> None:
+    store = await Registry.open()
+    try:
+
+        class SyntheticAdapter(CodexLaneAdapter):
+            def __init__(self, client: FakeLaneClient) -> None:
+                super().__init__(client, binding_id="synthetic-binding")
+                self.facts = ProviderBindingFacts(
+                    provider="synthetic",
+                    binding_id="synthetic-binding",
+                    supported_actions=frozenset({ProviderAction.READ, ProviderAction.SYNC}),
+                    availability=ProviderAvailability(ready=True),
+                    durability=ProviderDurability(),
+                )
+
+        client = FakeLaneClient()
+        ctx = make_ctx(store, client)
+        ctx.providers = ProviderRouter((SyntheticAdapter(client),))
+        lane = await store.add_lane(
+            id="dsp_synthetic",
+            handle="@synthetic",
+            source="own",
+            provider="synthetic",
+            binding_id="synthetic-binding",
+            provider_thread_id="native-session",
+        )
+
+        assert (await handlers.show(ShowInput(lane=lane.ref), ctx)).capabilities.sync is False
+        with pytest.raises(CapabilityUnavailableError, match="default Codex"):
+            await handlers.sync_lane(LaneSyncInput(lane=lane.ref), ctx)
+
+        assert client.calls == []
+        assert (
+            await store.get_provider_thread(
+                "synthetic", "native-session", binding_id="synthetic-binding"
+            )
+            is None
+        )
+        assert await store.get_lane_sync(lane.id) is None
+        assert not any(action.op == "sync" for action in await store.recent_actions())
     finally:
         await store.close()
 
@@ -232,7 +406,7 @@ async def test_managed_lifecycle_writes_use_exact_nondefault_route_identity() ->
             source="own",
             provider="synthetic",
             binding_id="synthetic-binding",
-            provider_session_id="native-session",
+            provider_thread_id="native-session",
         )
 
         synced = await handlers._reconcile_archive_membership(lane, ctx)
@@ -256,6 +430,104 @@ async def test_managed_lifecycle_writes_use_exact_nondefault_route_identity() ->
         assert observed is not None and observed.lifecycle_state == "archived"
         assert await store.get_provider_thread("codex", "dsp_synthetic") is None
         assert await store.get_provider_thread("codex", "native-session") is None
+        lifecycle_actions = [
+            action for action in await store.recent_actions() if action.op in {"archive", "restore"}
+        ]
+        assert {(action.op, action.lane) for action in lifecycle_actions} == {
+            ("archive", "dsp_synthetic"),
+            ("restore", "dsp_synthetic"),
+        }
+    finally:
+        await store.close()
+
+
+async def test_lane_search_maps_qualified_native_identity_to_stable_lane() -> None:
+    store = await Registry.open()
+    try:
+
+        class SyntheticAdapter(CodexLaneAdapter):
+            def __init__(self, client: FakeLaneClient) -> None:
+                super().__init__(client, binding_id="synthetic-binding")
+                self.facts = ProviderBindingFacts(
+                    provider="synthetic",
+                    binding_id="synthetic-binding",
+                    supported_actions=frozenset({ProviderAction.SEARCH}),
+                    availability=ProviderAvailability(ready=True),
+                    durability=ProviderDurability(),
+                )
+
+        client = FakeLaneClient()
+        client.read_result = {
+            "thread": {
+                "id": "native-session",
+                "turns": [
+                    {
+                        "id": "turn-1",
+                        "items": [{"id": "item-1", "type": "agentMessage", "text": "needle"}],
+                    }
+                ],
+            }
+        }
+        ctx = make_ctx(store, client)
+        ctx.providers = ProviderRouter((SyntheticAdapter(client),))
+        lane = await store.add_lane(
+            id="dsp_synthetic",
+            handle="@synthetic",
+            source="own",
+            provider="synthetic",
+            binding_id="synthetic-binding",
+            provider_thread_id="native-session",
+        )
+
+        result = await handlers.search(SearchInput(query="needle", lane=lane.ref), ctx)
+
+        assert [match.id for match in result.matches] == ["dsp_synthetic"]
+        assert result.matches[0].ref == lane.ref
+        assert result.matches[0].handle == "@synthetic"
+        assert result.matches[0].managed is True
+        assert [name for name, _ in client.calls] == ["thread_read"]
+        assert client.calls[0][1]["thread_id"] == "native-session"
+    finally:
+        await store.close()
+
+
+async def test_nondefault_rich_send_rejects_images_before_provider_io() -> None:
+    store = await Registry.open()
+    try:
+
+        class SyntheticAdapter(CodexLaneAdapter):
+            def __init__(self, client: FakeLaneClient) -> None:
+                super().__init__(client, binding_id="synthetic-binding")
+                self.facts = ProviderBindingFacts(
+                    provider="synthetic",
+                    binding_id="synthetic-binding",
+                    supported_actions=frozenset({ProviderAction.SEND}),
+                    availability=ProviderAvailability(ready=True),
+                    durability=ProviderDurability(),
+                )
+
+        client = FakeLaneClient()
+        ctx = make_ctx(store, client)
+        ctx.providers = ProviderRouter((SyntheticAdapter(client),))
+        lane = await store.add_lane(
+            id="dsp_synthetic",
+            handle="@synthetic",
+            source="own",
+            provider="synthetic",
+            binding_id="synthetic-binding",
+            provider_thread_id="native-session",
+        )
+
+        with pytest.raises(CapabilityUnavailableError, match="default Codex binding"):
+            await handlers.send_message(
+                SendInput(
+                    lane=lane.ref,
+                    content=[ImageUrlContent(url="https://example.com/image.png")],
+                ),
+                ctx,
+            )
+
+        assert client.calls == []
     finally:
         await store.close()
 
@@ -286,7 +558,7 @@ async def test_managed_topology_observations_use_exact_nondefault_route_identity
             source="own",
             provider="synthetic",
             binding_id="synthetic-binding",
-            provider_session_id="native-root",
+            provider_thread_id="native-root",
         )
 
         detail = await handlers.show(ShowInput(lane=lane.ref, topology=True), ctx)
@@ -300,6 +572,97 @@ async def test_managed_topology_observations_use_exact_nondefault_route_identity
         )
         assert await store.get_provider_thread("codex", "native-root") is None
         assert await store.get_provider_thread("codex", "native-child") is None
+    finally:
+        await store.close()
+
+
+async def test_roster_uses_selected_binding_and_maps_native_ids_to_stable_lanes() -> None:
+    store = await Registry.open()
+    try:
+
+        class SyntheticAdapter(CodexLaneAdapter):
+            def __init__(self, client: FakeLaneClient) -> None:
+                super().__init__(client, binding_id="synthetic-binding")
+                self.facts = ProviderBindingFacts(
+                    provider="synthetic",
+                    binding_id="synthetic-binding",
+                    supported_actions=frozenset({ProviderAction.TOPOLOGY}),
+                    availability=ProviderAvailability(ready=True),
+                    durability=ProviderDurability(),
+                )
+
+        client = FakeLaneClient()
+        client.list_result = [ThreadInfo(id="native-child", parent_thread_id="native-root")]
+        ctx = make_ctx(store, client)
+        ctx.providers = ProviderRouter((SyntheticAdapter(client),))
+        root = await store.add_lane(
+            id="dsp_root",
+            handle="@root",
+            source="own",
+            provider="synthetic",
+            binding_id="synthetic-binding",
+            provider_thread_id="native-root",
+        )
+        await store.add_lane(
+            id="dsp_child",
+            handle="@child",
+            source="own",
+            provider="synthetic",
+            binding_id="synthetic-binding",
+            provider_thread_id="native-child",
+        )
+
+        result = await handlers.roster(RosterInput(root=root.ref), ctx)
+
+        assert {lane.id for lane in result.lanes} == {"dsp_root", "dsp_child"}
+        assert [name for name, _ in client.calls] == ["thread_list"]
+        _, call = client.calls[0]
+        assert call["ancestor_thread_id"] == "native-root"
+        assert await store.get_provider_thread(
+            "synthetic", "native-child", binding_id="synthetic-binding"
+        )
+        assert await store.get_provider_thread("codex", "native-child") is None
+    finally:
+        await store.close()
+
+
+async def test_filtered_discovery_rejects_nondefault_selector_before_effects() -> None:
+    store = await Registry.open()
+    try:
+
+        class SyntheticAdapter(CodexLaneAdapter):
+            def __init__(self, client: FakeLaneClient) -> None:
+                super().__init__(client, binding_id="synthetic-binding")
+                self.facts = ProviderBindingFacts(
+                    provider="synthetic",
+                    binding_id="synthetic-binding",
+                    supported_actions=frozenset({ProviderAction.DISCOVER}),
+                    availability=ProviderAvailability(ready=True),
+                    durability=ProviderDurability(),
+                )
+
+        client = FakeLaneClient()
+        ctx = make_ctx(store, client)
+        ctx.providers = ProviderRouter((SyntheticAdapter(client),))
+        lane = await store.add_lane(
+            id="dsp_root",
+            handle="@root",
+            source="own",
+            provider="synthetic",
+            binding_id="synthetic-binding",
+            provider_thread_id="native-root",
+        )
+
+        with pytest.raises(CapabilityUnavailableError, match="default Codex"):
+            await handlers.discover(DiscoverInput(root=lane.ref), ctx)
+
+        assert client.calls == []
+        assert (
+            await store.get_provider_thread(
+                "synthetic", "native-root", binding_id="synthetic-binding"
+            )
+            is None
+        )
     finally:
         await store.close()
 
@@ -328,7 +691,7 @@ async def test_nondefault_fork_is_unavailable_before_provider_or_registry_effect
             source="own",
             provider="synthetic",
             binding_id="synthetic-binding",
-            provider_session_id="native-root",
+            provider_thread_id="native-root",
         )
 
         detail = await handlers.show(ShowInput(lane=lane.ref), ctx)

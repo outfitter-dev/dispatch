@@ -198,8 +198,16 @@ async def observe_delivery_execution(lane: str, turn_id: str | None, ctx: Ctx) -
     """Join durable lifecycle facts after either side of the ACK/event race."""
     if turn_id is None:
         return
+    managed_lane = await ctx.registry.find_lane(lane)
+    if managed_lane is None or managed_lane.provider_thread_id is None:
+        return
     try:
-        turn = await ctx.registry.get_thread_turn("codex", lane, turn_id)
+        turn = await ctx.registry.get_thread_turn(
+            managed_lane.provider,
+            managed_lane.provider_thread_id,
+            turn_id,
+            binding_id=managed_lane.binding_id,
+        )
     except NotFoundError:
         return
     if turn.status not in ("completed", "failed", "interrupted"):

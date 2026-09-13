@@ -649,7 +649,7 @@ class ProviderRouter:
         native_id = lane.provider_thread_id
         if native_id is None:
             raise CapabilityUnavailableError(
-                f"lane {lane.id!r} has no provider session identity for {action.value}"
+                f"lane {lane.id!r} has no provider thread identity for {action.value}"
             )
         adapter = self._adapters.get((lane.provider, lane.binding_id))
         if adapter is None:
@@ -668,7 +668,7 @@ class ProviderRouter:
             and native_id != lane.id
         ):
             raise CapabilityUnavailableError(
-                "default-Codex provider session identity does not match the stable lane id"
+                "default-Codex provider thread identity does not match the stable lane id"
             )
         availability = adapter.facts.availability
         if not availability.ready:
