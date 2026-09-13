@@ -1,14 +1,14 @@
 ---
 name: dm
-description: Use when sending a short, synchronous dispatch-backed direct message to an owned Codex lane, asking a bounded question, identifying inter-lane sender/target handles, or teaching a target lane to reply in a lightweight chat style. Long name: dispatch message. Not for delegation, background work, heartbeats, or autonomous task ownership.
+description: Use when sending a short, synchronous dispatch-backed direct message to an owned Dispatch lane, asking a bounded question, identifying inter-lane sender/target handles, or teaching a target lane to reply in a lightweight chat style. Long name: dispatch message. Not for delegation, background work, heartbeats, or autonomous task ownership.
 metadata:
-  short-description: Dispatch message a Codex lane
+  short-description: Dispatch message a managed lane
 ---
 
 # DM
 
 Use `$dm` for a short, synchronous conversation with another dispatch-managed
-Codex lane. The long form is "dispatch message": the workflow is backed by
+lane. The long form is "dispatch message": the workflow is backed by
 `dispatch send`, not by a separate `dispatch message` CLI op in v0.
 
 Use a goal/delegation workflow instead when the target lane should own
@@ -28,6 +28,24 @@ uv run dispatch daemon status
 If the environment is new, run `uv run dispatch doctor` once before messaging.
 Fix PATH, Codex auth, stale daemon files, registry, or plugin asset warnings
 before assuming a DM failure is about the target lane.
+
+For an owned Hermes lane, `dispatch daemon status --json` must show the binding
+ready with `send` support. Durable Hermes messages require both
+`prompt_submit_if_idle_v1` and `prompt_turn_correlation_v1`; stock Hermes
+`939e45c`/`0.21.2` lacks the correlation capability, so Dispatch refuses the
+send. The supported runtime uses a local unpublished patch. Send plain text with
+an idempotency key, and inspect the returned local receipt:
+
+```bash
+uv run dispatch send <hermes-ref> '<message>' \
+  --idempotency-key dm:<stable-event-id> --json
+uv run dispatch delivery get <receipt-id> --json
+```
+
+An exact key and request replay the same local receipt. A changed request returns
+`delivery_conflict`; an unknown outcome stays held and must not be resent.
+Hermes DMs do not support images, steer, queue, interject, context injection, or
+native history recovery in this slice.
 
 The target should be an owned dispatch lane selected by dispatch ref when
 possible. Attached lanes are turn-write locked by default. Dispatch permits
@@ -79,7 +97,7 @@ When a bounded question needs visual evidence, attach it to the same send instea
 uv run dispatch send <target-ref> 'Does this match the expected state?' --image ./screen.png --intro
 ```
 
-Repeat `--image` or `--image-url` as needed; local images must be PNG, JPEG, GIF, or WebP and at most 20 MiB, while remote images must use HTTPS and resolve publicly. Use `--image-detail auto|low|high|original` only when detail matters. Images work for normal DM sends, steering, queueing, and interjection, but not silent context injection. A queued DM stores references and validation metadata, never image bytes, and revalidates files and remote content before delivery.
+Repeat `--image` or `--image-url` as needed for Codex lanes; local images must be PNG, JPEG, GIF, or WebP and at most 20 MiB, while remote images must use HTTPS and resolve publicly. Use `--image-detail auto|low|high|original` only when detail matters. Images work for normal Codex DM sends, steering, queueing, and interjection, but not silent context injection. A queued DM stores references and validation metadata, never image bytes, and revalidates files and remote content before delivery.
 
 Keep DMs conversational and bounded. Prefer one ask. Include only the context
 needed for the target lane to answer without reading the sender's full
@@ -99,12 +117,13 @@ uv run dispatch daemon log --limit 10
 ```
 
 Important v0 limitation: `dispatch get` is thread metadata unless the CLI
-surface requests transcript output. Use `dispatch tail <target-ref> --limit 50`
-for persisted history when the lane is non-ephemeral, or open the Codex thread
-link. `tail` and selector-scoped `history` read App Server transcript history
-and backfill Dispatch's local history index for that thread; bare `history` is
-only an indexed overview. Do not pretend a DM harvested text you did not actually
-read.
+surface requests transcript output. For Hermes, use `dispatch get <target-ref>
+--include-transcript`; the result is bounded, partial `live_observed` evidence.
+For Codex, use `dispatch tail <target-ref> --limit 50` for persisted history when
+the lane is non-ephemeral, or open the Codex thread link. `tail` and
+selector-scoped `history` read App Server transcript history and backfill
+Dispatch's local history index for that thread; bare `history` is only an
+indexed overview. Do not pretend a DM harvested text you did not actually read.
 
 ## Optional Contract Lines
 

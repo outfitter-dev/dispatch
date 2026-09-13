@@ -3,8 +3,11 @@
 This is the operator path for dispatch. It covers how to start the daemon, create
 lanes, send work, add triggers, and expose the same op registry through MCP.
 
-For implementation guidance, use [`AGENTS.md`](../../AGENTS.md). For design context, use
-[`docs/development/design.md`](../development/design.md) and [`docs/adrs/`](../adrs/).
+For implementation guidance, use
+[`AGENTS.md`](https://github.com/outfitter-dev/dispatch/blob/main/AGENTS.md). For design
+context, use
+[`docs/development/design.md`](https://github.com/outfitter-dev/dispatch/blob/main/docs/development/design.md)
+and [`docs/adrs/`](https://github.com/outfitter-dev/dispatch/tree/main/docs/adrs).
 
 ## Install And Run Locally
 
@@ -72,7 +75,8 @@ not installed or authenticated, fix that first and rerun the doctor. Use
 daemon, and registry state without starting a Codex App Server process.
 
 For development from this repo, follow the canonical checkout setup and scoped
-follow-on verification recipe in [`AGENTS.md`](../../AGENTS.md#checkout-setup).
+follow-on verification recipe in
+[`AGENTS.md`](https://github.com/outfitter-dev/dispatch/blob/main/AGENTS.md#checkout-setup).
 
 Start the singleton daemon:
 
@@ -159,7 +163,7 @@ this launch setup persistent until the one-launch topology is proven: Desktop ma
 back to a private stdio server when the daemon probe fails. Shared transport does not
 change lane authority; attached lanes remain write-locked by default, and concurrent
 Desktop/Dispatch writes are outside this experiment. See
-[`ADR-0027`](../adrs/0027-optional-shared-app-server-socket.md).
+[`ADR-0027`](https://github.com/outfitter-dev/dispatch/blob/main/docs/adrs/0027-optional-shared-app-server-socket.md).
 
 ## Shell Completions
 
@@ -194,6 +198,9 @@ Checks include:
 - packaged `dispatch`/`dm` skills and plugin MCP config.
 - low-risk App Server initialize smoke through owned stdio or the explicitly configured
   shared Unix socket.
+- static validation of a configured `[providers.hermes]` binding when present. The
+  live Hermes gateway capability and readiness result is reported by
+  `dispatch daemon status --json` after `dispatch up`.
 
 Common recovery paths:
 
@@ -312,11 +319,11 @@ uv run dispatch new --name docs-review --preset reviewer --no-send
 ```
 
 `new` chooses the execution provider with the canonical
-`--provider codex|claude` option; omitting it selects Codex. The CLI also
-projects one boolean shorthand per provider — `--codex` and `--claude` — that
-marshal to the same canonical `provider` input. The shorthands are CLI-only
-sugar: MCP, remote schemas, config, and presets expose only the canonical
-enum — set `provider = "codex"` (or `"claude"`) under `[defaults]` or
+`--provider codex|claude|hermes` option; omitting it selects Codex. The CLI also
+projects one boolean shorthand per provider — `--codex`, `--claude`, and
+`--hermes` — that marshal to the same canonical `provider` input. The shorthands
+are CLI-only sugar: MCP, remote schemas, config, and presets expose only the
+canonical enum — set `provider = "codex"`, `"claude"`, or `"hermes"` under `[defaults]` or
 `[presets.*]`, with the usual precedence (CLI flags win over presets, presets
 win over defaults). Provider selectors are mutually exclusive, and every
 multiple-selector form is rejected before any provider, worktree, or registry
@@ -324,7 +331,10 @@ work — including redundant pairs like `--claude --provider claude`. The
 execution provider is distinct from the Codex App Server `--model-provider`.
 The Claude execution provider is not launchable yet; resolving to it — from a
 flag, preset, or config default — fails with a validation error at launch (it
-never falls back to Codex) until the Claude provider vertical lands.
+never falls back to Codex) until the Claude provider vertical lands. Hermes is
+launchable only when its configured owned gateway is ready and advertises both
+`prompt_submit_if_idle_v1` and `prompt_turn_correlation_v1`; an unavailable or
+unsupported binding fails before lane work and never falls back to Codex or HTTP.
 
 ```bash
 uv run dispatch new --name docs-review --codex --no-send
@@ -373,6 +383,67 @@ effort = "low"
 [presets.safe-profile]
 permission_profile = ":read-only"
 ```
+
+### Hermes Owned Sessions
+
+Configure the optional Hermes binding in the global config. All three paths are
+required, absolute, and validated before the daemon starts the provider worker;
+`profile` is currently fixed to `default`:
+
+```toml
+[providers.hermes]
+hermes_home = "/Users/me/.hermes"
+source_root = "/Users/me/src/hermes-agent"
+interpreter = "/Users/me/src/hermes-agent/.venv/bin/python"
+profile = "default"
+```
+
+The worker launches the configured interpreter as `python -m tui_gateway.entry`
+with the configured source root and `HERMES_HOME`. It owns that gateway child and
+its stdio connection; it does not discover or stop an existing Hermes Desktop,
+serve, or Runs process. Keep secrets in Hermes's profile. Do not put credentials
+or mutable active-profile markers in Dispatch config.
+
+Hermes's first operator path is a dedicated session with an explicit existing
+directory and plain text:
+
+```bash
+uv run dispatch new --name hermes-review --provider hermes \
+  --cwd /path/to/project --text "Review the current changes." \
+  --idempotency-key hermes:review:1 --json
+uv run dispatch send <dispatch-ref> "Address the highest priority finding." \
+  --idempotency-key hermes:review:2 --json
+uv run dispatch delivery get <receipt-id> --json
+```
+
+When supplied, Hermes launch and send idempotency keys bind reservations locally.
+Repeating the exact key and input replays the same local record; changing the input raises
+`delivery_conflict`. Preserve an `unknown` or `ambiguous` result and inspect it
+with `delivery get` or `delivery reconcile`; Dispatch never creates a second
+native turn to repair a lost acknowledgment. A `completed` receipt requires a
+matching native `turn_id` and terminal evidence from the same gateway generation.
+
+The first Hermes launch supports `name`, explicit `cwd`, presets, prefix, and
+plain text when the gateway advertises both `prompt_submit_if_idle_v1` and
+`prompt_turn_correlation_v1`. Goals, images or other structured content, output schemas, custom
+instructions, staging, workspace/worktree setup, subscriptions, and Codex-only
+model or permission overrides are rejected before provider I/O. Hermes's native
+cwd is the selected session directory; no Dispatch workspace preparation is
+performed.
+
+Use `dispatch doctor` before a Hermes launch. It distinguishes a missing or
+invalid static binding; it does not start Hermes or negotiate capabilities.
+After `dispatch up`, `dispatch daemon status --json` shows the binding's
+readiness after required capability negotiation, supported actions, durability,
+generation and bounded failure reason. A gateway generation change fences existing
+Hermes lanes: exact local receipt replay remains available, while new
+submissions to the old session stop before reservation or provider I/O. Create a
+new dedicated session only after the replacement generation is ready.
+
+See the [native Hermes provider contract](../research/hermes-native-provider-contract.md)
+for the wire boundary and evidence limits, the [HTTP Runs alternative](../research/hermes-http-runs-contract.md)
+for the explicitly API-managed path, and [reserved text delivery](deliveries.md)
+for receipt states and bounded reconciliation.
 
 Preset order matters: global settings load first, repo settings override them,
 later presets win, and CLI flags win over presets. Omit permission-profile,
@@ -1115,8 +1186,8 @@ Attached lanes allow observation, sync, and explicit metadata/lifecycle actions 
 `rename`, `archive`, and `restore`. Dispatch does not write turns or mutate history on
 attached lanes by default because the desktop app uses a separate app-server process and
 there is no cross-process write interlock. ADR-0005 and ADR-0018 are the authoritative decisions:
-[`docs/adrs/0005-lane-authority-capability-ladder.md`](../adrs/0005-lane-authority-capability-ladder.md)
-and [`docs/adrs/0018-top-level-thread-actions-and-search.md`](../adrs/0018-top-level-thread-actions-and-search.md).
+[`docs/adrs/0005-lane-authority-capability-ladder.md`](https://github.com/outfitter-dev/dispatch/blob/main/docs/adrs/0005-lane-authority-capability-ladder.md)
+and [`docs/adrs/0018-top-level-thread-actions-and-search.md`](https://github.com/outfitter-dev/dispatch/blob/main/docs/adrs/0018-top-level-thread-actions-and-search.md).
 
 Local operators can explicitly opt in to attached-lane writes:
 
@@ -1377,7 +1448,8 @@ the stable `id` remains the full native Codex thread ID.
 
 The workspace Codex plugin at [`plugins/dispatch/`](../../plugins/dispatch/) exposes that
 MCP server through [`plugins/dispatch/.mcp.json`](../../plugins/dispatch/.mcp.json). The
-workspace marketplace entry is [`.agents/plugins/marketplace.json`](../../.agents/plugins/marketplace.json).
+workspace marketplace entry is
+[`.agents/plugins/marketplace.json`](https://github.com/outfitter-dev/dispatch/blob/main/.agents/plugins/marketplace.json).
 
 If Codex does not pick up the plugin immediately, restart Codex for this workspace.
 

@@ -46,6 +46,8 @@ class ProviderWorkerSnapshot:
     observed_at: str
     connection_generation: str | None
     owns_process: bool
+    supported_actions: tuple[str, ...]
+    durability: ProviderDurability
 
 
 class ProviderManager:
@@ -236,6 +238,8 @@ class ProviderManager:
             observed_at=self._now().isoformat(),
             connection_generation=generation,
             owns_process=worker.owns_process,
+            supported_actions=tuple(sorted(action.value for action in worker.supported_actions)),
+            durability=worker.durability,
         )
         if state != "ready":
             self._router.register_unavailable(

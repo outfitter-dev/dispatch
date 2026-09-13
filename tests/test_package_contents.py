@@ -14,6 +14,10 @@ RUNTIME_SDIST_FILES = {
     "plugins/dispatch/skills/dm/SKILL.md",
     "plugins/dispatch/README.md",
     "plugins/dispatch/.mcp.json",
+    "docs/usage/README.md",
+    "docs/usage/deliveries.md",
+    "docs/research/hermes-native-provider-contract.md",
+    "docs/research/hermes-http-runs-contract.md",
     "spikes/claude/assert_probe.py",
     "spikes/claude/sanitize_stream.jq",
     "spikes/claude/zmx_snapshot_probe.sh",
@@ -29,6 +33,10 @@ RUNTIME_WHEEL_FILES = {
     "outfitter/dispatch/assets/skills/dm/SKILL.md",
     "outfitter/dispatch/assets/plugins/dispatch/README.md",
     "outfitter/dispatch/assets/plugins/dispatch/.mcp.json",
+    "outfitter/dispatch/assets/docs/usage/README.md",
+    "outfitter/dispatch/assets/docs/usage/deliveries.md",
+    "outfitter/dispatch/assets/docs/research/hermes-native-provider-contract.md",
+    "outfitter/dispatch/assets/docs/research/hermes-http-runs-contract.md",
     "outfitter/dispatch/assets/protocol_manifest.json",
 }
 

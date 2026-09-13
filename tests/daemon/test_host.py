@@ -15,6 +15,8 @@ from structlog.testing import capture_logs
 
 from outfitter.dispatch.client.transport import StdioTransport, UnixSocketTransport
 from outfitter.dispatch.contracts.errors import SharedCoreFailure
+from outfitter.dispatch.core.hermes import HERMES_ACTIONS
+from outfitter.dispatch.core.providers import ALL_CODEX_ACTIONS
 from outfitter.dispatch.daemon import host
 from outfitter.dispatch.daemon.host import (
     _configured_transport,
@@ -178,6 +180,12 @@ async def test_control_and_cached_reads_start_while_codex_is_unavailable(
                 "observed_at": ANY,
                 "connection_generation": None,
                 "owns_process": True,
+                "supported_actions": sorted(action.value for action in ALL_CODEX_ACTIONS),
+                "durability": {
+                    "local_reservation": False,
+                    "provider_idempotency": False,
+                    "native_evidence": False,
+                },
             }
         ]
         fetched = await _call(socket_path, "delivery-get", {"receipt_id": receipt.id})
@@ -235,6 +243,12 @@ async def test_daemon_status_reports_invalid_router_only_hermes_binding(
                 "observed_at": ANY,
                 "connection_generation": None,
                 "owns_process": True,
+                "supported_actions": sorted(action.value for action in ALL_CODEX_ACTIONS),
+                "durability": {
+                    "local_reservation": False,
+                    "provider_idempotency": False,
+                    "native_evidence": False,
+                },
             },
             {
                 "provider": "hermes",
@@ -245,6 +259,12 @@ async def test_daemon_status_reports_invalid_router_only_hermes_binding(
                 "observed_at": ANY,
                 "connection_generation": None,
                 "owns_process": False,
+                "supported_actions": sorted(action.value for action in HERMES_ACTIONS),
+                "durability": {
+                    "local_reservation": True,
+                    "provider_idempotency": False,
+                    "native_evidence": True,
+                },
             },
         ]
     finally:

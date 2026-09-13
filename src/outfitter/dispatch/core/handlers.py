@@ -155,6 +155,7 @@ from .models import (
     PermissionProfilesInput,
     PermissionProfilesOutput,
     ProviderBindingStatusView,
+    ProviderDurabilityView,
     ProviderStateView,
     QueryInput,
     QueryMatch,
@@ -3929,6 +3930,12 @@ async def status(inp: StatusInput, ctx: Ctx) -> StatusOutput:
                 observed_at=snapshot.observed_at,
                 connection_generation=snapshot.connection_generation,
                 owns_process=snapshot.owns_process,
+                supported_actions=list(snapshot.supported_actions),
+                durability=ProviderDurabilityView(
+                    local_reservation=snapshot.durability.local_reservation,
+                    provider_idempotency=snapshot.durability.provider_idempotency,
+                    native_evidence=snapshot.durability.native_evidence,
+                ),
             )
             for snapshot in snapshots
         )
@@ -3947,6 +3954,12 @@ async def status(inp: StatusInput, ctx: Ctx) -> StatusOutput:
                     observed_at=ctx.registry.now_iso(),
                     connection_generation=availability.generation,
                     owns_process=False,
+                    supported_actions=sorted(action.value for action in facts.supported_actions),
+                    durability=ProviderDurabilityView(
+                        local_reservation=facts.durability.local_reservation,
+                        provider_idempotency=facts.durability.provider_idempotency,
+                        native_evidence=facts.durability.native_evidence,
+                    ),
                 )
             )
         providers.sort(key=lambda binding: (binding.provider, binding.binding_id))

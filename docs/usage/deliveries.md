@@ -96,13 +96,17 @@ key must carry the exact original launch input. Current provider defaults,
 configuration and readiness are deliberately consulted only for a new key.
 
 A Hermes `prompt.submit` acknowledgment with `status: "streaming"` and a
-nonempty native turn ID proves observed admission. It does not prove that native
-history persisted or that execution completed. Only later lifecycle evidence
-from the selected adapter, matching the frozen binding, runtime, stored session,
-generation and turn, can update execution state. Pre-ack events remain buffered
-until that acknowledgment binds them. Buffer overflow after a valid
-acknowledgment produces an accepted but partial receipt; overflow, EOF or a
-terminal-looking frame without a valid acknowledgment remains unknown.
+nonempty native turn ID proves observed admission only when the gateway has
+negotiated both `prompt_submit_if_idle_v1` and `prompt_turn_correlation_v1`.
+The stock Hermes `939e45c`/`0.21.2` gateway lacks the correlation contract, so
+Dispatch refuses durable Hermes sends there before provider I/O. On a supported
+gateway, the acknowledgment does not prove that native history persisted or that
+execution completed. Only later lifecycle evidence from the selected adapter,
+matching the frozen binding, runtime, stored session, generation and turn, can
+update execution state. Pre-ack events remain buffered until that acknowledgment
+binds them. Buffer overflow after a valid acknowledgment produces an accepted but
+partial receipt; overflow, EOF or a terminal-looking frame without a valid
+acknowledgment remains unknown.
 
 An unknown Hermes creation or delivery is never submitted again automatically.
 Its exact key returns the original local launch or receipt, and the unresolved
