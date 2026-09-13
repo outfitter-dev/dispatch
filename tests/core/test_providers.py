@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 import pytest
+from structlog.testing import capture_logs
 
 from outfitter.dispatch.client.models import ThreadInfo
 from outfitter.dispatch.config import RuntimePolicy
@@ -192,6 +193,33 @@ async def test_new_preflights_required_followup_actions_before_launch(inp: NewIn
 
         with pytest.raises(CapabilityUnavailableError, match="unsupported"):
             await handlers.new_lane(inp, ctx)
+
+        assert client.calls == []
+        assert await store.list_lanes() == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.parametrize(
+    "inp",
+    [
+        NewInput(name="send-preflight", text="hello"),
+        NewInput(name="goal-preflight", goal="ship it", send=False),
+    ],
+)
+async def test_new_dry_run_preflights_the_same_followup_actions_as_launch(
+    inp: NewInput,
+) -> None:
+    store = await Registry.open()
+    try:
+        client = FakeLaneClient()
+        ctx = make_ctx(store, client)
+        ctx.providers = ProviderRouter(
+            (CodexLaneAdapter(client, supported_actions=frozenset({ProviderAction.LAUNCH})),)
+        )
+
+        with pytest.raises(CapabilityUnavailableError, match="unsupported"):
+            await handlers.plan_new_lane(inp, ctx)
 
         assert client.calls == []
         assert await store.list_lanes() == []
@@ -699,6 +727,34 @@ async def test_filtered_discovery_rejects_nondefault_selector_before_effects() -
             )
             is None
         )
+    finally:
+        await store.close()
+
+
+async def test_fork_treats_unsupported_optional_rename_as_best_effort() -> None:
+    store = await Registry.open()
+    try:
+        client = FakeLaneClient()
+        ctx = make_ctx(store, client)
+        ctx.providers = ProviderRouter(
+            (
+                CodexLaneAdapter(
+                    client,
+                    supported_actions=frozenset({ProviderAction.FORK, ProviderAction.CONFIG_READ}),
+                ),
+            )
+        )
+        source = await store.add_lane(id="native-codex", handle="@root", source="own")
+
+        with capture_logs() as logs:
+            result = await handlers.fork(ForkInput(lane=source.ref, name="copy"), ctx)
+
+        assert result.id == "native-codex-fork"
+        assert (await store.get_lane("native-codex-fork")).handle == "@copy"
+        assert "thread_set_name" not in [name for name, _ in client.calls]
+        assert [entry["event"] for entry in logs if entry["log_level"] == "warning"] == [
+            "lane.name_set_failed"
+        ]
     finally:
         await store.close()
 

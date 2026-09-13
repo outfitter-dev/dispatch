@@ -182,7 +182,13 @@ from .models import (
     WatchOutput,
 )
 from .permission_profiles import refresh_permission_profiles, resolve_permission_profile
-from .providers import ProviderAction, ProviderRoute, route_lane, router_for
+from .providers import (
+    ProviderAction,
+    ProviderLaunchRoute,
+    ProviderRoute,
+    route_lane,
+    router_for,
+)
 from .rich_input import (
     RichInput,
     materialize_remote_images,
@@ -648,6 +654,24 @@ def _validate_launch(launch: ResolvedLaunch) -> None:
         raise ValidationError("native goals require non-ephemeral threads")
 
 
+def _preflight_launch_followups(
+    launch: ResolvedLaunch, launch_route: ProviderLaunchRoute, ctx: Ctx
+) -> None:
+    """Route the follow-up actions a launch will need (goal write, initial send)
+    against the selected binding before any thread is started, so both the
+    dry-run plan and the real launch reject the same input."""
+    if launch.goal is not None:
+        goal_preflight = router_for(ctx).route_binding(
+            launch_route.provider, launch_route.binding_id, ProviderAction.GOAL_WRITE
+        )
+        goal_preflight.recheck(ctx.provider_session_id or None)
+    if launch.would_send:
+        send_preflight = router_for(ctx).route_binding(
+            launch_route.provider, launch_route.binding_id, ProviderAction.SEND
+        )
+        send_preflight.recheck(ctx.provider_session_id or None)
+
+
 def _packet_str(launch: ResolvedLaunch) -> str | None:
     return str(launch.packet.path) if launch.packet is not None else None
 
@@ -673,6 +697,7 @@ async def plan_new_lane(inp: NewInput, ctx: Ctx) -> LaunchPlan:
         launch.resolved.settings.provider, ProviderAction.LAUNCH
     )
     launch_route.recheck(ctx.provider_session_id or None)
+    _preflight_launch_followups(launch, launch_route, ctx)
     rich = RichInput(text=launch.text or "", input_items=[], stored_content=[])
     if launch.text is not None or launch.content:
         rich = await normalize_rich_input_async(
@@ -767,19 +792,10 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
         launch.resolved.settings.provider, ProviderAction.LAUNCH
     )
     launch_route.recheck(ctx.provider_session_id or None)
+    _preflight_launch_followups(launch, launch_route, ctx)
     resolved = launch.resolved
     settings = resolved.settings
     goal = launch.goal
-    if goal is not None:
-        goal_preflight = router_for(ctx).route_binding(
-            launch_route.provider, launch_route.binding_id, ProviderAction.GOAL_WRITE
-        )
-        goal_preflight.recheck(ctx.provider_session_id or None)
-    if launch.would_send:
-        send_preflight = router_for(ctx).route_binding(
-            launch_route.provider, launch_route.binding_id, ProviderAction.SEND
-        )
-        send_preflight.recheck(ctx.provider_session_id or None)
     rich = (
         await normalize_rich_input_async(
             text=launch.text,
@@ -3053,7 +3069,7 @@ async def fork(inp: ForkInput, ctx: Ctx) -> LaneRef:
         )
         child_route.recheck(ctx.provider_session_id or None)
         await child_route.adapter.rename(child_route.target, handle.removeprefix("@"))
-    except ClientError as exc:
+    except (DispatchError, ClientError) as exc:
         ctx.log.warning("lane.name_set_failed", lane=lane.id, error=str(exc))
     return _ref(lane, ctx)
 
