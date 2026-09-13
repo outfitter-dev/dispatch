@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
+import structlog
 
 from outfitter.dispatch.client.errors import AppServerError, ClientError
 from outfitter.dispatch.client.models import (
@@ -15,11 +16,16 @@ from outfitter.dispatch.client.models import (
     ThreadResumeInitialTurnsPageParams,
 )
 from outfitter.dispatch.core import handlers
+from outfitter.dispatch.core.providers import ALL_CODEX_ACTIONS, ProviderDurability, ProviderRouter
 from outfitter.dispatch.core.turn_settings import runtime_settings_for_lane
-from outfitter.dispatch.daemon.provider_manager import SharedCoreFailure
+from outfitter.dispatch.daemon.provider_manager import (
+    ProviderManager,
+    ProviderWorker,
+    SharedCoreFailure,
+)
 from outfitter.dispatch.daemon.supervisor import SupervisedClient, Supervisor
 from outfitter.dispatch.registry.models import LaneSync
-from outfitter.dispatch.registry.store import Registry
+from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID, Registry
 from tests.fakes import FakeSupervisedClient, make_ctx
 
 
@@ -175,6 +181,55 @@ async def test_supervisor_withdraws_generation_when_client_closes_during_recover
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+async def test_supervisor_prioritizes_simultaneous_reactor_fatal_over_close(
+    store: Registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    router = ProviderRouter.unavailable_codex("Codex App Server is starting")
+    ctx = make_ctx(store)
+    ctx.providers = router
+    manager = ProviderManager(router, structlog.get_logger())
+    client = FakeSupervisedClient()
+    client.closed.set()
+    clients: list[FakeSupervisedClient] = []
+    recovery_started = asyncio.Event()
+
+    async def make_client() -> FakeSupervisedClient:
+        clients.append(client)
+        return client
+
+    async def fail_reactor() -> None:
+        raise SharedCoreFailure("registry failed during reactor")
+
+    async def blocked_recovery(_client: SupervisedClient) -> None:
+        recovery_started.set()
+        await asyncio.Event().wait()
+
+    supervisor = Supervisor(ctx, make_client, fail_reactor, backoff=0, manager=manager)
+    monkeypatch.setattr(supervisor, "_restore_shared_state", blocked_recovery)
+    manager.add(
+        ProviderWorker(
+            provider="codex",
+            binding_id=DEFAULT_CODEX_BINDING_ID,
+            supported_actions=ALL_CODEX_ACTIONS,
+            durability=ProviderDurability(),
+            owns_process=True,
+            run=supervisor.supervise,
+            close=supervisor.stop,
+        )
+    )
+    manager.start()
+
+    with pytest.raises(SharedCoreFailure, match="registry failed during reactor"):
+        await asyncio.wait_for(manager.wait_fatal(), timeout=1)
+
+    assert recovery_started.is_set()
+    assert len(clients) == 1
+    snapshot = manager.snapshot("codex", DEFAULT_CODEX_BINDING_ID)
+    assert snapshot.state == "unavailable"
+    assert snapshot.last_error == "registry failed during reactor"
+    await manager.stop()
 
 
 async def test_supervisor_skips_non_default_provider_bindings(store: Registry) -> None:

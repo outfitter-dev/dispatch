@@ -117,15 +117,16 @@ class Supervisor:
             )
             if recovery_task.done():
                 await recovery_task
-            if closed_task.done():
-                self._mark_connection_closed(generation)
-                await closed_task
-                return
             if reactor_task.done():
                 error = reactor_task.exception()
                 if error is not None:
                     raise error
-                raise ClientError("provider reactor exited unexpectedly")
+                if not closed_task.done():
+                    raise ClientError("provider reactor exited unexpectedly")
+            if closed_task.done():
+                self._mark_connection_closed(generation)
+                await closed_task
+                return
 
             done, _ = await asyncio.wait(
                 (reactor_task, closed_task), return_when=asyncio.FIRST_COMPLETED
