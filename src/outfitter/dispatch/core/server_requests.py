@@ -14,6 +14,7 @@ from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.contracts.errors import (
     CapabilityUnavailableError,
     NotFoundError,
+    SharedCoreFailure,
     ValidationError,
 )
 from outfitter.dispatch.registry.models import (
@@ -56,25 +57,13 @@ class ServerRequestManager:
             "codex", DEFAULT_CODEX_BINDING_ID, ProviderAction.SERVER_REQUEST_STREAM
         )
         route.recheck()
-        stale_open = await self._ctx.registry.list_open_server_requests_except_session(
-            self._ctx.connection_generation
-        )
-        recovered = await self._ctx.registry.fail_open_server_requests_except_session(
-            self._ctx.connection_generation
-        )
-        if recovered:
-            self._ctx.log.warning("server_request.recovered_stale", count=recovered)
-            lanes: set[str] = set()
-            for stale_request in stale_open:
-                if stale_request.id is None:
-                    continue
-                failed = await self._ctx.registry.get_server_request_by_id(stale_request.id)
-                if failed is not None:
-                    await _record_request_event(self._ctx, failed, "failed")
-                    if failed.lane is not None:
-                        lanes.add(failed.lane)
-            for lane_id in lanes:
-                await _clear_attention_if_resolved(self._ctx, lane_id)
+        try:
+            await self._recover_stale_requests()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Registry-only work: a failure here is shared-core, not provider-local.
+            raise SharedCoreFailure("shared registry stale server request recovery failed") from exc
         try:
             async for incoming in route.adapter.server_requests():
                 try:
@@ -87,6 +76,28 @@ class ServerRequestManager:
                     )
         finally:
             await self.close()
+
+    async def _recover_stale_requests(self) -> None:
+        stale_open = await self._ctx.registry.list_open_server_requests_except_session(
+            self._ctx.connection_generation
+        )
+        recovered = await self._ctx.registry.fail_open_server_requests_except_session(
+            self._ctx.connection_generation
+        )
+        if not recovered:
+            return
+        self._ctx.log.warning("server_request.recovered_stale", count=recovered)
+        lanes: set[str] = set()
+        for stale_request in stale_open:
+            if stale_request.id is None:
+                continue
+            failed = await self._ctx.registry.get_server_request_by_id(stale_request.id)
+            if failed is not None:
+                await _record_request_event(self._ctx, failed, "failed")
+                if failed.lane is not None:
+                    lanes.add(failed.lane)
+        for lane_id in lanes:
+            await _clear_attention_if_resolved(self._ctx, lane_id)
 
     async def close(self) -> None:
         for task in self._timeouts:

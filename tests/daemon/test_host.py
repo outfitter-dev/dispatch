@@ -14,6 +14,7 @@ from pytest import MonkeyPatch
 from structlog.testing import capture_logs
 
 from outfitter.dispatch.client.transport import StdioTransport, UnixSocketTransport
+from outfitter.dispatch.contracts.errors import SharedCoreFailure
 from outfitter.dispatch.daemon import host
 from outfitter.dispatch.daemon.host import (
     _configured_transport,
@@ -21,7 +22,6 @@ from outfitter.dispatch.daemon.host import (
     _warn_if_codex_below_floor,
     run_daemon,
 )
-from outfitter.dispatch.daemon.provider_manager import SharedCoreFailure
 from outfitter.dispatch.registry.store import Registry
 from tests.fakes import FakeSupervisedClient
 

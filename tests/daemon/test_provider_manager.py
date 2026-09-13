@@ -7,7 +7,7 @@ import asyncio
 import pytest
 import structlog
 
-from outfitter.dispatch.contracts.errors import CapabilityUnavailableError
+from outfitter.dispatch.contracts.errors import CapabilityUnavailableError, SharedCoreFailure
 from outfitter.dispatch.core.providers import (
     CodexLaneAdapter,
     ProviderAction,
@@ -19,7 +19,6 @@ from outfitter.dispatch.core.providers import (
 from outfitter.dispatch.daemon.provider_manager import (
     ProviderManager,
     ProviderWorker,
-    SharedCoreFailure,
 )
 from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
 from tests.fakes import FakeLaneClient

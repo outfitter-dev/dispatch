@@ -10,6 +10,7 @@ from typing import Literal
 
 import structlog
 
+from outfitter.dispatch.contracts.errors import SharedCoreFailure
 from outfitter.dispatch.core.providers import (
     CodexLaneAdapter,
     ProviderAction,
@@ -20,10 +21,6 @@ from outfitter.dispatch.core.providers import (
 ProviderWorkerState = Literal[
     "configured", "starting", "ready", "unavailable", "stopped", "quarantined"
 ]
-
-
-class SharedCoreFailure(RuntimeError):
-    """A registry/control failure that must terminate the daemon."""
 
 
 @dataclass(frozen=True)

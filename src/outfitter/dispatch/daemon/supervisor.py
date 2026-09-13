@@ -16,7 +16,11 @@ from uuid import uuid4
 
 from outfitter.dispatch.client.errors import AppServerError, ClientError
 from outfitter.dispatch.contracts.context import Ctx, LaneClient
-from outfitter.dispatch.contracts.errors import CapabilityUnavailableError, DispatchError
+from outfitter.dispatch.contracts.errors import (
+    CapabilityUnavailableError,
+    DispatchError,
+    SharedCoreFailure,
+)
 from outfitter.dispatch.core.permission_profiles import resolve_permission_profile
 from outfitter.dispatch.core.providers import (
     ALL_CODEX_ACTIONS,
@@ -29,7 +33,7 @@ from outfitter.dispatch.core.providers import (
 from outfitter.dispatch.core.queue import drain_idle_queues
 from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
 
-from .provider_manager import ProviderManager, SharedCoreFailure
+from .provider_manager import ProviderManager
 
 _T = TypeVar("_T")
 
@@ -83,22 +87,28 @@ class Supervisor:
                     availability=ProviderAvailability(ready=True, generation=generation),
                 )
             )
+            fatal: SharedCoreFailure | None = None
             try:
                 await self._run_generation(client, generation)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                if isinstance(exc, SharedCoreFailure):
-                    self._mark_unavailable(str(exc), generation=generation)
-                    raise
-                reason = str(exc) or type(exc).__name__
-                if not self._is_stopped():
-                    self._mark_unavailable(reason, generation=generation)
-                    self._ctx.log.exception(
-                        "app_server.connection_failed_restarting", backoff=self._backoff
-                    )
+                fatal = self._shared_core_failure(exc)
+                if fatal is not None:
+                    self._mark_unavailable(str(fatal), generation=generation)
+                else:
+                    reason = str(exc) or type(exc).__name__
+                    if not self._is_stopped():
+                        self._mark_unavailable(reason, generation=generation)
+                        self._ctx.log.exception(
+                            "app_server.connection_failed_restarting", backoff=self._backoff
+                        )
             finally:
                 await self._close_generation(client, generation)
+            if fatal is not None:
+                # Raised outside the except so a leaf unwrapped from a task group
+                # keeps its own cause chain instead of pointing back at the group.
+                raise fatal
             if self._is_stopped():
                 break
             if self._backoff:
@@ -147,14 +157,32 @@ class Supervisor:
             closed_task.cancel()
             await asyncio.gather(recovery_task, reactor_task, closed_task, return_exceptions=True)
 
-    @staticmethod
-    def _raise_completed_shared_core_failure(*tasks: asyncio.Task[None]) -> None:
+    @classmethod
+    def _raise_completed_shared_core_failure(cls, *tasks: asyncio.Task[None]) -> None:
         """Give fatal shared-state failures priority over ordinary race outcomes."""
         for task in tasks:
             if task.done() and not task.cancelled():
                 error = task.exception()
-                if isinstance(error, SharedCoreFailure):
-                    raise error
+                fatal = cls._shared_core_failure(error) if error is not None else None
+                if fatal is not None:
+                    raise fatal
+
+    @classmethod
+    def _shared_core_failure(cls, error: BaseException) -> SharedCoreFailure | None:
+        """Find a fatal shared-state failure, including one nested in a task group.
+
+        The reactor runs its readers in an ``asyncio.TaskGroup``, so a registry
+        failure there surfaces as an ``ExceptionGroup``; it must still terminate
+        the daemon rather than respawn the provider.
+        """
+        if isinstance(error, SharedCoreFailure):
+            return error
+        if isinstance(error, BaseExceptionGroup):
+            for member in error.exceptions:
+                fatal = cls._shared_core_failure(member)
+                if fatal is not None:
+                    return fatal
+        return None
 
     def _mark_connection_closed(self, generation: str) -> None:
         if self._is_stopped():

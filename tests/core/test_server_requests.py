@@ -9,7 +9,11 @@ import pytest_asyncio
 from outfitter.dispatch.client.events import ServerRequestReceived, classify_server_request
 from outfitter.dispatch.client.models import JsonRpcError, JsonRpcId
 from outfitter.dispatch.config import RuntimePolicy
-from outfitter.dispatch.contracts.errors import CapabilityUnavailableError, ValidationError
+from outfitter.dispatch.contracts.errors import (
+    CapabilityUnavailableError,
+    SharedCoreFailure,
+    ValidationError,
+)
 from outfitter.dispatch.core.server_request_policy import (
     automatic_response,
     expected_response,
@@ -366,6 +370,22 @@ async def test_reconnect_fails_stale_request_and_clears_attention(store: Registr
     runtime = await store.get_lane_runtime_state("L1")
     assert runtime is not None
     assert runtime.needs_attention is False
+
+
+async def test_run_escalates_stale_recovery_registry_failure_to_shared_core(
+    store: Registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fail_listing(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(store, "list_open_server_requests_except_session", fail_listing)
+    ctx = make_ctx(store, FakeLaneClient())
+    ctx.connection_generation = "session-1"
+
+    with pytest.raises(SharedCoreFailure, match="stale server request recovery") as info:
+        await ServerRequestManager(ctx).run()
+
+    assert isinstance(info.value.__cause__, RuntimeError)
 
 
 async def test_response_send_failure_is_audited_and_clears_attention(store: Registry) -> None:

@@ -131,3 +131,10 @@ def project_error(exc: BaseException) -> ErrorProjection:
             AppServerError.code, str(exc), AppServerError.exit_code, AppServerError.rpc_code
         )
     return ErrorProjection("internal", str(exc) or exc.__class__.__name__, 1, 1000)
+
+
+# Daemon-fatal infrastructure error: raised for registry/control failures that
+# must terminate the daemon. Deliberately a RuntimeError, not a DispatchError —
+# it is never projected to a surface.
+class SharedCoreFailure(RuntimeError):
+    """A registry/control failure that must terminate the daemon."""
