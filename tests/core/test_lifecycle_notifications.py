@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from outfitter.dispatch.client.events import project_notification
 from outfitter.dispatch.core.handlers import send_message
 from outfitter.dispatch.core.history_index import index_codex_thread_read
@@ -124,3 +126,96 @@ async def test_nonterminal_nested_status_is_not_a_successful_completion() -> Non
         )
         == []
     )
+
+
+async def test_old_terminal_settles_its_receipt_without_ending_newer_turn() -> None:
+    store = await Registry.open()
+    try:
+        client = FakeLaneClient()
+        ctx = make_ctx(store, client)
+        await store.add_lane(id="target", handle="@target", source="own", status="busy")
+        receipt, _ = await store.reserve_delivery(
+            delivery_id="receipt-old",
+            key=None,
+            lane="target",
+            mode="send",
+            payload='{"text":"old"}',
+            text="old",
+            correlation_id="receipt-old",
+        )
+        await store.update_delivery(receipt.id, status="accepted", turn_id="turn-old")
+        await store.record_turn_started("target", "turn-new")
+        queued = await store.enqueue_message(lane="target", text="later")
+        reactor = Reactor(ctx, TriggerRunner(ctx, lambda: datetime.now(UTC)))
+
+        for event in project_notification(
+            "turn/completed",
+            {"threadId": "target", "turn": {"id": "turn-old", "status": "completed"}},
+        ):
+            await reactor.handle(event)
+
+        lane = await store.get_lane("target")
+        settled = await store.get_delivery(receipt.id)
+        assert settled.status == "completed"
+        assert lane.status == "busy"
+        assert lane.active_turn_id == "turn-new"
+        assert (await store.get_queued_message(queued.id)).status == "pending"
+    finally:
+        await store.close()
+
+
+@pytest.mark.parametrize(
+    ("terminal_status", "error", "receipt_status"),
+    [
+        ("completed", None, "completed"),
+        ("failed", "old failure", "accepted"),
+    ],
+)
+async def test_old_terminal_does_not_end_busy_submission_before_started_event(
+    terminal_status: str,
+    error: str | None,
+    receipt_status: str,
+) -> None:
+    store = await Registry.open()
+    try:
+        client = FakeLaneClient()
+        ctx = make_ctx(store, client)
+        await store.add_lane(id="target", handle="@target", source="own", status="busy")
+        receipt, _ = await store.reserve_delivery(
+            delivery_id="receipt-old",
+            key=None,
+            lane="target",
+            mode="send",
+            payload='{"text":"old"}',
+            text="old",
+            correlation_id="receipt-old",
+        )
+        await store.update_delivery(receipt.id, status="accepted", turn_id="turn-old")
+        queued = await store.enqueue_message(lane="target", text="later")
+        reactor = Reactor(ctx, TriggerRunner(ctx, lambda: datetime.now(UTC)))
+
+        for event in project_notification(
+            "turn/completed",
+            {
+                "threadId": "target",
+                "turn": {
+                    "id": "turn-old",
+                    "status": terminal_status,
+                    "error": {"message": error} if error is not None else None,
+                },
+            },
+        ):
+            await reactor.handle(event)
+
+        lane = await store.get_lane("target")
+        settled = await store.get_delivery(receipt.id)
+        assert settled.status == receipt_status
+        assert settled.execution_status == terminal_status
+        assert lane.status == "busy"
+        assert lane.active_turn_id is None
+        assert lane.latest_turn_id is None
+        assert await store.get_lane_runtime_state("target") is None
+        assert (await store.get_queued_message(queued.id)).status == "pending"
+        assert not any(name == "turn_start" for name, _ in client.calls)
+    finally:
+        await store.close()

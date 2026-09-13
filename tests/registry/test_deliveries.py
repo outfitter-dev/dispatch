@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -13,6 +14,11 @@ import pytest_asyncio
 
 from outfitter.dispatch.contracts.errors import DeliveryConflictError
 from outfitter.dispatch.registry.delivery import DeliveryExecutionStatus, DeliveryReceipt
+from outfitter.dispatch.registry.observations import (
+    ObservationKind,
+    ProviderCorrelation,
+    ProviderObservation,
+)
 from outfitter.dispatch.registry.store import SCHEMA_VERSION, Registry
 
 
@@ -198,6 +204,373 @@ async def test_terminal_updates_preserve_turn_and_drive_queue_status(store: Regi
     assert queued.error == "rejected"
 
 
+async def test_receipt_observation_requires_exact_frozen_correlation(store: Registry) -> None:
+    receipt, _ = await store.reserve_delivery(
+        delivery_id="receipt-1",
+        key=None,
+        lane="lane-1",
+        mode="send",
+        payload='{"text":"one"}',
+        text="one",
+        provider="codex",
+        binding_id="codex-default",
+        native_session_id="lane-1",
+        correlation_id="receipt-1",
+    )
+    base = ProviderObservation(
+        provider="codex",
+        binding_id="codex-default",
+        native_session_id="lane-1",
+        kind="accepted",
+        correlation=ProviderCorrelation(
+            delivery_id=receipt.id,
+            correlation_id=receipt.id,
+            native_run_id="turn-1",
+        ),
+        generation="generation-1",
+        source="submit_result",
+        received_at=_clock(),
+    )
+
+    missing = await store.apply_receipt_observation(
+        base.model_copy(update={"correlation": ProviderCorrelation(delivery_id=receipt.id)})
+    )
+    mismatched = await store.apply_receipt_observation(
+        base.model_copy(update={"binding_id": "other"})
+    )
+    missing_terminal = await store.apply_receipt_observation(
+        base.model_copy(
+            update={
+                "kind": "completed",
+                "correlation": base.correlation.model_copy(update={"native_run_id": None}),
+            }
+        )
+    )
+    missing_acceptance = await store.apply_receipt_observation(
+        base.model_copy(
+            update={
+                "correlation": base.correlation.model_copy(update={"native_run_id": None}),
+            }
+        )
+    )
+    accepted = await store.apply_receipt_observation(base)
+    conflicting_run = await store.apply_receipt_observation(
+        base.model_copy(
+            update={
+                "kind": "completed",
+                "correlation": base.correlation.model_copy(update={"native_run_id": "turn-2"}),
+                "source": "history",
+            }
+        )
+    )
+
+    assert not missing.matched and missing.reason == "missing receipt correlation"
+    assert not mismatched.matched and mismatched.reason == "provider binding mismatch"
+    assert not missing_terminal.matched and missing_terminal.reason == "missing native run evidence"
+    assert not missing_acceptance.matched
+    assert missing_acceptance.reason == "missing positive provider evidence"
+    assert accepted.matched and accepted.changed
+    assert accepted.receipt is not None
+    assert accepted.receipt.status == "accepted"
+    assert accepted.receipt.turn_id == "turn-1"
+    assert accepted.receipt.evidence_source == "submit_result"
+    assert not conflicting_run.matched and conflicting_run.reason == "native run mismatch"
+    assert (await store.get_delivery(receipt.id)).status == "accepted"
+
+
+async def test_terminal_receipt_state_and_provenance_are_absorbing(store: Registry) -> None:
+    receipt, _ = await store.reserve_delivery(
+        delivery_id="receipt-terminal",
+        key=None,
+        lane="lane-1",
+        mode="send",
+        payload='{"text":"one"}',
+        text="one",
+    )
+
+    def observation(kind: str, source: str, *, partial: bool) -> ProviderObservation:
+        return ProviderObservation.model_validate(
+            {
+                "provider": "codex",
+                "binding_id": "codex-default",
+                "native_session_id": "lane-1",
+                "kind": kind,
+                "correlation": {
+                    "delivery_id": receipt.id,
+                    "correlation_id": receipt.id,
+                    "native_run_id": "turn-1",
+                },
+                "source": source,
+                "received_at": _clock(),
+                "partial": partial,
+                "reason": "late failure" if kind == "failed" else None,
+            }
+        )
+
+    completed = await store.apply_receipt_observation(
+        observation("completed", "live", partial=False)
+    )
+    late_failed = await store.apply_receipt_observation(
+        observation("failed", "history", partial=True)
+    )
+    stale_started = await store.apply_receipt_observation(
+        observation("started", "history", partial=True)
+    )
+
+    assert completed.receipt is not None
+    assert completed.receipt.status == "completed"
+    assert completed.receipt.execution_status == "completed"
+    assert completed.receipt.evidence_source == "live"
+    assert completed.receipt.evidence_partial is False
+    assert late_failed.matched and not late_failed.changed
+    assert stale_started.matched and not stale_started.changed
+    assert late_failed.receipt == completed.receipt
+    assert stale_started.receipt == completed.receipt
+
+    legacy, _ = await store.reserve_delivery(
+        delivery_id="receipt-legacy-completed",
+        key=None,
+        lane="lane-1",
+        mode="send",
+        payload='{"text":"legacy"}',
+        text="legacy",
+    )
+    legacy_completed = await store.update_delivery(legacy.id, status="completed")
+    legacy_failed = await store.apply_receipt_observation(
+        ProviderObservation.model_validate(
+            {
+                "provider": "codex",
+                "binding_id": "codex-default",
+                "native_session_id": "lane-1",
+                "kind": "failed",
+                "correlation": {
+                    "delivery_id": legacy.id,
+                    "correlation_id": legacy.id,
+                    "native_run_id": "turn-legacy",
+                },
+                "source": "history",
+                "received_at": _clock(),
+                "partial": True,
+                "reason": "late failure",
+            }
+        )
+    )
+
+    assert legacy_completed.execution_status is None
+    assert legacy_failed.matched and not legacy_failed.changed
+    assert legacy_failed.receipt == legacy_completed
+
+
+async def test_terminal_receipt_is_absorbing_across_registry_instances(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "shared-registry.db"
+    stale = await Registry.open(db, now=_clock)
+    winner = await Registry.open(db, now=_clock)
+    release_stale = asyncio.Event()
+    stale_waiting = asyncio.Event()
+    stale_task: asyncio.Task[object] | None = None
+    try:
+        await stale.add_lane(id="lane-1", handle="@one", source="own")
+        receipt, _ = await stale.reserve_delivery(
+            delivery_id="receipt-terminal-race",
+            key=None,
+            lane="lane-1",
+            mode="send",
+            payload='{"text":"one"}',
+            text="one",
+        )
+
+        def observation(kind: str, source: str) -> ProviderObservation:
+            return ProviderObservation.model_validate(
+                {
+                    "provider": "codex",
+                    "binding_id": "codex-default",
+                    "native_session_id": "lane-1",
+                    "kind": kind,
+                    "correlation": {
+                        "delivery_id": receipt.id,
+                        "correlation_id": receipt.id,
+                        "native_run_id": "turn-1",
+                    },
+                    "source": source,
+                    "received_at": _clock(),
+                    "partial": source == "history",
+                }
+            )
+
+        original_transaction = stale._transaction
+
+        @asynccontextmanager
+        async def delayed_transaction(*, immediate: bool = False) -> AsyncIterator[None]:
+            stale_waiting.set()
+            await release_stale.wait()
+            async with original_transaction(immediate=immediate):
+                yield
+
+        monkeypatch.setattr(stale, "_transaction", delayed_transaction)
+        stale_task = asyncio.create_task(
+            stale.apply_receipt_observation(observation("started", "history"))
+        )
+        await stale_waiting.wait()
+        completed = await winner.apply_receipt_observation(observation("completed", "live"))
+        release_stale.set()
+        stale_result = await stale_task
+
+        assert completed.receipt is not None
+        assert completed.receipt.status == "completed"
+        assert completed.receipt.execution_status == "completed"
+        assert completed.receipt.evidence_source == "live"
+        assert stale_result.matched and not stale_result.changed
+        assert stale_result.reason == "terminal receipt already settled"
+        assert stale_result.receipt == completed.receipt
+        assert await winner.get_delivery(receipt.id) == completed.receipt
+    finally:
+        release_stale.set()
+        if stale_task is not None and not stale_task.done():
+            await stale_task
+        await stale.close()
+        await winner.close()
+
+
+@pytest.mark.parametrize("stale_kind", ["uncertain", "accepted"])
+async def test_started_receipt_rejects_stale_nonterminal_observation_across_registries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stale_kind: ObservationKind,
+) -> None:
+    db = tmp_path / f"shared-{stale_kind}.db"
+    stale = await Registry.open(db, now=_clock)
+    winner = await Registry.open(db, now=_clock)
+    release_stale = asyncio.Event()
+    stale_waiting = asyncio.Event()
+    stale_task: asyncio.Task[object] | None = None
+    try:
+        await stale.add_lane(id="lane-1", handle="@one", source="own")
+        receipt, _ = await stale.reserve_delivery(
+            delivery_id=f"receipt-{stale_kind}-race",
+            key=None,
+            lane="lane-1",
+            mode="send",
+            payload='{"text":"one"}',
+            text="one",
+        )
+
+        started = ProviderObservation(
+            provider="codex",
+            binding_id="codex-default",
+            native_session_id="lane-1",
+            kind="started",
+            correlation=ProviderCorrelation(
+                delivery_id=receipt.id,
+                correlation_id=receipt.id,
+                native_run_id="turn-1",
+            ),
+            generation="generation-1",
+            source="live",
+            received_at=_clock(),
+        )
+        stale_observation = ProviderObservation(
+            provider="codex",
+            binding_id="codex-default",
+            native_session_id="lane-1",
+            kind=stale_kind,
+            correlation=ProviderCorrelation(
+                delivery_id=receipt.id,
+                correlation_id=receipt.id,
+                native_submission_id=("submission-stale" if stale_kind == "accepted" else None),
+            ),
+            generation="generation-0",
+            source="submit_result",
+            received_at=_clock(),
+            partial=True,
+            reason="stale observation",
+        )
+
+        original_transaction = stale._transaction
+
+        @asynccontextmanager
+        async def delayed_transaction(*, immediate: bool = False) -> AsyncIterator[None]:
+            stale_waiting.set()
+            await release_stale.wait()
+            async with original_transaction(immediate=immediate):
+                yield
+
+        monkeypatch.setattr(stale, "_transaction", delayed_transaction)
+        stale_task = asyncio.create_task(stale.apply_receipt_observation(stale_observation))
+        await stale_waiting.wait()
+        stronger = await winner.apply_receipt_observation(started)
+        release_stale.set()
+        stale_result = await stale_task
+
+        assert stronger.receipt is not None
+        assert stronger.receipt.status == "accepted"
+        assert stronger.receipt.execution_status == "inProgress"
+        assert stronger.receipt.turn_id == "turn-1"
+        assert stronger.receipt.submission_id is None
+        assert stronger.receipt.evidence_source == "live"
+        assert stale_result.changed is False
+        assert stale_result.receipt == stronger.receipt
+        assert await winner.get_delivery(receipt.id) == stronger.receipt
+    finally:
+        release_stale.set()
+        if stale_task is not None and not stale_task.done():
+            await stale_task
+        await stale.close()
+        await winner.close()
+
+
+async def test_cancelled_immediate_transaction_does_not_acquire_writer_later(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "cancelled-begin.db"
+    holder = await Registry.open(db, now=_clock)
+    cancelled = await Registry.open(db, now=_clock)
+    holder_acquired = asyncio.Event()
+    release_holder = asyncio.Event()
+
+    async def hold_writer() -> None:
+        async with holder._transaction(immediate=True):
+            holder_acquired.set()
+            await release_holder.wait()
+
+    async def wait_for_writer() -> None:
+        async with cancelled._transaction(immediate=True):
+            pytest.fail("cancelled transaction must not enter its body")
+
+    holder_task = asyncio.create_task(hold_writer())
+    cancelled_task: asyncio.Task[None] | None = None
+    try:
+        await holder_acquired.wait()
+        cancelled_task = asyncio.create_task(wait_for_writer())
+        # The contender first enters _transaction, then its shielded begin task
+        # queues on aiosqlite's worker behind the held SQLite writer.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        cancelled_task.cancel()
+        await asyncio.sleep(0)
+        assert not cancelled_task.done()
+
+        release_holder.set()
+        await holder_task
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled_task
+
+        assert cancelled._conn.in_transaction is False
+        await cancelled.add_lane(id="after-cancel", handle="@after", source="own")
+        assert await holder.find_lane("after-cancel") is not None
+    finally:
+        release_holder.set()
+        if not holder_task.done():
+            await holder_task
+        if cancelled_task is not None and not cancelled_task.done():
+            cancelled_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await cancelled_task
+        await holder.close()
+        await cancelled.close()
+
+
 @pytest.mark.parametrize("terminal", ["failed", "interrupted"])
 async def test_execution_failure_remains_provider_accepted(
     store: Registry,
@@ -341,7 +714,7 @@ async def test_v21_migration_adds_delivery_ledger(tmp_path: Path) -> None:
         assert receipt.key == "after:migration"
         async with migrated._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-            assert row is not None and int(row[0]) == SCHEMA_VERSION
+        assert row is not None and int(row[0]) == SCHEMA_VERSION
     finally:
         await migrated.close()
 
@@ -450,6 +823,58 @@ async def test_v25_migration_adds_nullable_submitted_intent(tmp_path: Path) -> N
         async with migrated._conn.execute("PRAGMA table_info(deliveries)") as cur:
             columns = {str(row["name"]) for row in await cur.fetchall()}
         assert "submitted_payload" in columns
+        async with migrated._conn.execute("PRAGMA user_version") as cur:
+            row = await cur.fetchone()
+        assert row is not None and int(row[0]) == SCHEMA_VERSION
+    finally:
+        await migrated.close()
+
+
+async def test_v26_migration_adds_receipt_observation_identity_and_evidence(tmp_path: Path) -> None:
+    db = tmp_path / "registry-v26.db"
+    seeded = await Registry.open(db, now=_clock)
+    await seeded.add_lane(id="lane-1", handle="@one", source="own")
+    receipt, _ = await seeded.reserve_delivery(
+        delivery_id="legacy-receipt",
+        key=None,
+        lane="lane-1",
+        mode="send",
+        payload=(
+            '{"request":{"correlation_id":"legacy-receipt","target":'
+            '{"binding_id":"local","native_session_id":"conversation-1",'
+            '"provider":"hermes"}},"text":"legacy","version":1}'
+        ),
+        text="legacy",
+    )
+    await seeded.close()
+
+    conn = await aiosqlite.connect(db)
+    await conn.execute("DROP INDEX idx_deliveries_provider_run")
+    for column in (
+        "provider",
+        "binding_id",
+        "native_session_id",
+        "correlation_id",
+        "evidence_source",
+        "evidence_provider_time",
+        "evidence_received_at",
+        "evidence_partial",
+        "evidence_generation",
+    ):
+        await conn.execute(f"ALTER TABLE deliveries DROP COLUMN {column}")
+    await conn.execute("PRAGMA user_version = 26")
+    await conn.commit()
+    await conn.close()
+
+    migrated = await Registry.open(db, now=_clock)
+    try:
+        restored = await migrated.get_delivery(receipt.id)
+        assert restored.provider == "hermes"
+        assert restored.binding_id == "local"
+        assert restored.native_session_id == "conversation-1"
+        assert restored.correlation_id == receipt.id
+        assert restored.evidence_source is None
+        assert restored.evidence_partial is False
         async with migrated._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
         assert row is not None and int(row[0]) == SCHEMA_VERSION

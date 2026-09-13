@@ -28,6 +28,10 @@ class DeliveryReceipt(BaseModel):
     lane: str
     mode: DeliveryMode
     transport: DeliveryTransport = "turn"
+    provider: str = "codex"
+    binding_id: str = "codex-default"
+    native_session_id: str | None = None
+    correlation_id: str | None = None
     submission_id: str | None = None
     submitted_payload: str | None = None
     payload: str
@@ -37,5 +41,10 @@ class DeliveryReceipt(BaseModel):
     queue_id: int | None = None
     error: str | None = None
     reconciliation_attempts: int = 0
+    evidence_source: str | None = None
+    evidence_provider_time: datetime | None = None
+    evidence_received_at: datetime | None = None
+    evidence_partial: bool = False
+    evidence_generation: str | None = None
     created_at: datetime
     updated_at: datetime

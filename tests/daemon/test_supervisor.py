@@ -15,6 +15,7 @@ from outfitter.dispatch.client.models import (
     ThreadInfo,
     ThreadResumeInitialTurnsPageParams,
 )
+from outfitter.dispatch.core import handlers
 from outfitter.dispatch.core.reactor import Reactor
 from outfitter.dispatch.core.triggers import TriggerRunner
 from outfitter.dispatch.core.turn_settings import runtime_settings_for_lane
@@ -96,6 +97,38 @@ async def test_supervisor_restarts_and_restores_lanes_on_crash(store: Registry) 
 
     await supervisor.stop()
     await asyncio.wait_for(task, timeout=1)
+
+
+async def test_supervisor_marks_provider_unavailable_during_respawn(store: Registry) -> None:
+    lane = await store.add_lane(id="O1", handle="@own", source="own", status="idle")
+    ctx = make_ctx(store)
+    respawn_started = asyncio.Event()
+    hold_respawn = asyncio.Event()
+
+    async def make_client() -> FakeSupervisedClient:
+        respawn_started.set()
+        await hold_respawn.wait()
+        return FakeSupervisedClient()
+
+    async def run_reactor() -> None:
+        await asyncio.Event().wait()
+
+    supervisor = Supervisor(ctx, make_client, run_reactor, backoff=0)
+    first = FakeSupervisedClient()
+    task = asyncio.create_task(supervisor.supervise(first))
+    await asyncio.sleep(0)
+    first.closed.set()
+    await asyncio.wait_for(respawn_started.wait(), timeout=1)
+
+    state = handlers._ref(lane, ctx).provider_state
+    assert state.readiness == "unavailable"
+    assert state.readiness_reason == "App Server connection unavailable"
+    assert state.generation is not None
+    assert ctx.provider_session_id == ""
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 async def test_supervisor_skips_non_default_provider_bindings(store: Registry) -> None:

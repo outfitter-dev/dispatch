@@ -18,7 +18,13 @@ from outfitter.dispatch.client.errors import AppServerError, ClientError
 from outfitter.dispatch.contracts.context import Ctx, LaneClient
 from outfitter.dispatch.contracts.errors import CapabilityUnavailableError, DispatchError
 from outfitter.dispatch.core.permission_profiles import resolve_permission_profile
-from outfitter.dispatch.core.providers import ProviderAction, ProviderRouter, route_lane
+from outfitter.dispatch.core.providers import (
+    CodexLaneAdapter,
+    ProviderAction,
+    ProviderAvailability,
+    ProviderRouter,
+    route_lane,
+)
 from outfitter.dispatch.core.queue import drain_idle_queues
 
 
@@ -63,6 +69,20 @@ class Supervisor:
             await asyncio.sleep(0)
             await self._restore_lanes(client)
             await client.wait_closed()  # blocks until app-server dies or we stop
+            disconnected_generation = self._ctx.provider_session_id or None
+            self._ctx.provider_session_id = ""
+            self._ctx.providers = ProviderRouter(
+                (
+                    CodexLaneAdapter(
+                        client,
+                        availability=ProviderAvailability(
+                            ready=False,
+                            reason="App Server connection unavailable",
+                            generation=disconnected_generation,
+                        ),
+                    ),
+                )
+            )
             reactor_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await reactor_task
