@@ -39,6 +39,7 @@ from outfitter.dispatch.core.hermes import (
     quarantine_stale_hermes_lanes,
 )
 from outfitter.dispatch.core.models import (
+    AttachInput,
     NewInput,
     RosterInput,
     SendInput,
@@ -1340,6 +1341,30 @@ async def test_quarantined_hermes_transcript_projects_runtime_hold(
     assert transcript.writable is False
     assert transcript.capabilities.send is False
     assert transcript.write_locked_reason == "owned Hermes gateway generation changed"
+
+
+async def test_idempotent_attach_projects_quarantined_hermes_runtime_hold(
+    store: Registry, tmp_path: Path
+) -> None:
+    adapter = FakeHermesAdapter()
+    ctx = _hermes_ctx(store, adapter)
+    created = await handlers.new_lane(
+        NewInput(name="worker", cwd=str(tmp_path), provider="hermes", send=False), ctx
+    )
+    # Quarantine without swapping the router: provider facts still report the lane as
+    # current, so only the persisted runtime hold can lock the idempotent re-attach.
+    await quarantine_stale_hermes_lanes(
+        store,
+        binding_id="hermes-default",
+        current_generation="generation-2",
+    )
+
+    attached = await handlers.attach_lane(AttachInput(thread=created.id, sync=False), ctx)
+
+    assert attached.id == created.id
+    assert attached.writable is False
+    assert attached.capabilities.send is False
+    assert attached.write_locked_reason == "owned Hermes gateway generation changed"
 
 
 async def test_exact_keyed_send_replay_projects_quarantined_runtime_hold(

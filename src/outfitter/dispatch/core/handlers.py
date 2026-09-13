@@ -403,6 +403,12 @@ def _write_locked_reason(
 
 
 def _ref(lane: Lane, ctx: Ctx, runtime: LaneRuntimeState | None = None) -> LaneRef:
+    """Project a lane reference from already-loaded state.
+
+    ``runtime`` drives ``writable``/``capabilities``/``write_locked_reason`` for Hermes
+    lanes; omitting it is treated as "no hold". Handlers that have not loaded runtime
+    state must go through ``_lane_ref`` instead of calling this directly.
+    """
     facts = router_for(ctx).facts_for_lane(lane)
     provider_state = ProviderStateView(
         ownership=lane.source,
@@ -455,10 +461,19 @@ def _action_ref(
     )
 
 
+async def _hermes_runtime(lane: Lane, ctx: Ctx) -> LaneRuntimeState | None:
+    if lane.provider != "hermes":
+        return None
+    return await ctx.registry.get_lane_runtime_state(lane.id)
+
+
+async def _lane_ref(lane: Lane, ctx: Ctx) -> LaneRef:
+    """Project a lane reference, loading the Hermes runtime hold when applicable."""
+    return _ref(lane, ctx, await _hermes_runtime(lane, ctx))
+
+
 async def _managed_identity(lane: Lane, ctx: Ctx) -> _ManagedIdentityPayload:
-    runtime = (
-        await ctx.registry.get_lane_runtime_state(lane.id) if lane.provider == "hermes" else None
-    )
+    runtime = await _hermes_runtime(lane, ctx)
     return {
         "lane": lane.id,
         "ref": lane.ref,
@@ -728,7 +743,7 @@ async def open_lane(inp: OpenInput, ctx: Ctx) -> LaneRef:
     )
     await ctx.registry.log_action("open", lane=lane.id, detail=handle)
     ctx.log.info("lane.open", lane=lane.id, handle=handle)
-    return _ref(lane, ctx)
+    return await _lane_ref(lane, ctx)
 
 
 def _require_launchable_provider(provider: ExecutionProvider | None) -> None:
@@ -1202,7 +1217,7 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
             ctx,
         )
     ctx.log.info("lane.new", lane=lane.id, handle=lane.handle, message_accepted=message_accepted)
-    ref = _ref(lane, ctx)
+    ref = await _lane_ref(lane, ctx)
     return NewLane(
         **ref.model_dump(),
         message_accepted=message_accepted,
@@ -1226,7 +1241,7 @@ async def attach_lane(inp: AttachInput, ctx: Ctx) -> LaneRef:
                     "binding has a defined history contract"
                 )
             await _sync_lane(existing, ctx, full=False)
-        return _ref(existing, ctx)  # idempotent re-attach
+        return await _lane_ref(existing, ctx)  # idempotent re-attach
     try:
         thread = await asyncio.wait_for(
             _read_thread_metadata(ctx, inp.thread), _ATTACH_METADATA_TIMEOUT_S
@@ -1239,7 +1254,7 @@ async def attach_lane(inp: AttachInput, ctx: Ctx) -> LaneRef:
         ) from exc
     lane = await _register_attached_thread(thread, ctx, sync=inp.sync, audit_op="attach")
     ctx.log.info("lane.attach", lane=lane.id, handle=lane.handle)
-    return _ref(lane, ctx)
+    return await _lane_ref(lane, ctx)
 
 
 async def _register_attached_thread(
@@ -3357,7 +3372,7 @@ async def fork(inp: ForkInput, ctx: Ctx) -> LaneRef:
         await child_route.adapter.rename(child_route.target, handle.removeprefix("@"))
     except (DispatchError, ClientError) as exc:
         ctx.log.warning("lane.name_set_failed", lane=lane.id, error=str(exc))
-    return _ref(lane, ctx)
+    return await _lane_ref(lane, ctx)
 
 
 async def rollback(inp: RollbackInput, ctx: Ctx) -> LaneRef:
@@ -3369,7 +3384,7 @@ async def rollback(inp: RollbackInput, ctx: Ctx) -> LaneRef:
     await ctx.registry.set_active_turn(lane.id, None)
     await ctx.registry.update_lane_status(lane.id, "idle")
     await ctx.registry.log_action("rollback", lane=lane.id, detail=f"{inp.turns} turn(s)")
-    return _ref(await ctx.registry.get_lane(lane.id), ctx)
+    return await _lane_ref(await ctx.registry.get_lane(lane.id), ctx)
 
 
 async def compact(inp: CompactInput, ctx: Ctx) -> ActionAck:
