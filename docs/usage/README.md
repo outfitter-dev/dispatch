@@ -3,8 +3,11 @@
 This is the operator path for dispatch. It covers how to start the daemon, create
 lanes, send work, add triggers, and expose the same op registry through MCP.
 
-For implementation guidance, use [`AGENTS.md`](../../AGENTS.md). For design context, use
-[`docs/development/design.md`](../development/design.md) and [`docs/adrs/`](../adrs/).
+For implementation guidance, use
+[`AGENTS.md`](https://github.com/outfitter-dev/dispatch/blob/main/AGENTS.md). For design
+context, use
+[`docs/development/design.md`](https://github.com/outfitter-dev/dispatch/blob/main/docs/development/design.md)
+and [`docs/adrs/`](https://github.com/outfitter-dev/dispatch/tree/main/docs/adrs).
 
 ## Install And Run Locally
 
@@ -72,7 +75,8 @@ not installed or authenticated, fix that first and rerun the doctor. Use
 daemon, and registry state without starting a Codex App Server process.
 
 For development from this repo, follow the canonical checkout setup and scoped
-follow-on verification recipe in [`AGENTS.md`](../../AGENTS.md#checkout-setup).
+follow-on verification recipe in
+[`AGENTS.md`](https://github.com/outfitter-dev/dispatch/blob/main/AGENTS.md#checkout-setup).
 
 Start the singleton daemon:
 
@@ -159,7 +163,7 @@ this launch setup persistent until the one-launch topology is proven: Desktop ma
 back to a private stdio server when the daemon probe fails. Shared transport does not
 change lane authority; attached lanes remain write-locked by default, and concurrent
 Desktop/Dispatch writes are outside this experiment. See
-[`ADR-0027`](../adrs/0027-optional-shared-app-server-socket.md).
+[`ADR-0027`](https://github.com/outfitter-dev/dispatch/blob/main/docs/adrs/0027-optional-shared-app-server-socket.md).
 
 ## Shell Completions
 
@@ -379,6 +383,8 @@ effort = "low"
 [presets.safe-profile]
 permission_profile = ":read-only"
 ```
+
+### Hermes Owned Sessions
 
 Configure the optional Hermes binding in the global config. All three paths are
 required, absolute, and validated before the daemon starts the provider worker;
@@ -1180,8 +1186,8 @@ Attached lanes allow observation, sync, and explicit metadata/lifecycle actions 
 `rename`, `archive`, and `restore`. Dispatch does not write turns or mutate history on
 attached lanes by default because the desktop app uses a separate app-server process and
 there is no cross-process write interlock. ADR-0005 and ADR-0018 are the authoritative decisions:
-[`docs/adrs/0005-lane-authority-capability-ladder.md`](../adrs/0005-lane-authority-capability-ladder.md)
-and [`docs/adrs/0018-top-level-thread-actions-and-search.md`](../adrs/0018-top-level-thread-actions-and-search.md).
+[`docs/adrs/0005-lane-authority-capability-ladder.md`](https://github.com/outfitter-dev/dispatch/blob/main/docs/adrs/0005-lane-authority-capability-ladder.md)
+and [`docs/adrs/0018-top-level-thread-actions-and-search.md`](https://github.com/outfitter-dev/dispatch/blob/main/docs/adrs/0018-top-level-thread-actions-and-search.md).
 
 Local operators can explicitly opt in to attached-lane writes:
 
@@ -1442,7 +1448,8 @@ the stable `id` remains the full native Codex thread ID.
 
 The workspace Codex plugin at [`plugins/dispatch/`](../../plugins/dispatch/) exposes that
 MCP server through [`plugins/dispatch/.mcp.json`](../../plugins/dispatch/.mcp.json). The
-workspace marketplace entry is [`.agents/plugins/marketplace.json`](../../.agents/plugins/marketplace.json).
+workspace marketplace entry is
+[`.agents/plugins/marketplace.json`](https://github.com/outfitter-dev/dispatch/blob/main/.agents/plugins/marketplace.json).
 
 If Codex does not pick up the plugin immediately, restart Codex for this workspace.
 

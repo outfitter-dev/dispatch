@@ -24,6 +24,14 @@ _OUTPUT_LIMIT = 4_000
 _FIRST_MARKER = "DIS88-SYNTHETIC-FIRST-MARKER"
 _SECOND_PROMPT = "Recall the marker from the earlier turn."
 _REQUIRED_CAPABILITIES = ["prompt_submit_if_idle_v1", "prompt_turn_correlation_v1"]
+_GIT_REPOSITORY_SELECTORS = {
+    "GIT_COMMON_DIR",
+    "GIT_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_WORK_TREE",
+}
+_TREE_DIGEST_CACHE_DIRS = {".mypy_cache", ".pytest_cache", ".ruff_cache", "__pycache__"}
+_TREE_DIGEST_BYTECODE_SUFFIXES = {".pyc", ".pyo"}
 _INSTALLED_DOCS = [
     "docs/usage/README.md",
     "docs/usage/deliveries.md",
@@ -60,6 +68,7 @@ anyio.run(main)
 _ASSET_PROBE = r"""from __future__ import annotations
 import json
 import outfitter.dispatch as dispatch_package
+import re
 from importlib.metadata import metadata, version
 from importlib.resources import files
 from pathlib import Path
@@ -101,12 +110,25 @@ for link in links:
         raise SystemExit(f"plugin README omitted operational link {link}")
     if not (plugin_root / link).resolve().is_file():
         raise SystemExit(f"installed operational link does not resolve: {link}")
+relative_links = []
+for item in required:
+    if not item.endswith(".md"):
+        continue
+    document = root / item
+    for link in re.findall(r"\]\(([^)]+)\)", document.read_text()):
+        target = link.partition("#")[0]
+        if not target or "://" in target:
+            continue
+        relative_links.append((item, link))
+        if not (document.parent / target).resolve().exists():
+            raise SystemExit(f"installed link does not resolve: {item} -> {link}")
 print(json.dumps({
     "assets": required,
     "mcp_requirement": next(item for item in requirements if item.startswith("mcp")),
     "mcp_version": version("mcp"),
     "operational_links": links,
     "package_file": str(package_file),
+    "relative_links_validated": len(relative_links),
 }, sort_keys=True))
 """
 
@@ -243,7 +265,9 @@ def main(argv: list[str] | None = None) -> int:
             raise SmokeFailure(f"MCP send omitted structured content: {second}")
         second_delivery = _delivery(second_structured)
         second_receipt = _wait_for_delivery(installed["dispatch"], env, str(second_delivery["id"]))
-        _expect(second_receipt.get("turn_id") == "synthetic-turn-2", second_receipt)
+        second_turn_id = second_receipt.get("turn_id")
+        _expect(second_turn_id == "synthetic-turn-2", second_receipt)
+        assert isinstance(second_turn_id, str)
         _expect(_submission_count(paths["gateway_state"]) == 2, "second submission count")
 
         detail = _command_json(
@@ -252,8 +276,11 @@ def main(argv: list[str] | None = None) -> int:
         transcript = detail.get("transcript")
         if not isinstance(transcript, list):
             raise SmokeFailure(f"thread detail omitted transcript: {detail}")
-        texts = [item.get("text") for item in transcript if isinstance(item, dict)]
-        _expect(any(isinstance(text, str) and _FIRST_MARKER in text for text in texts), texts)
+        second_agent_texts = _agent_message_texts_for_turn(transcript, second_turn_id)
+        _expect(
+            any(_FIRST_MARKER in text for text in second_agent_texts),
+            {"turn_id": second_turn_id, "agent_messages": second_agent_texts},
+        )
         sync = detail.get("sync")
         _expect(
             isinstance(sync, dict)
@@ -298,6 +325,7 @@ def main(argv: list[str] | None = None) -> int:
                     "mcp_requirement": assets["mcp_requirement"],
                     "mcp_version": assets["mcp_version"],
                     "operational_links": assets["operational_links"],
+                    "relative_links_validated": assets["relative_links_validated"],
                 },
                 "provider": {
                     "state": _provider(status, "hermes")["state"],
@@ -529,6 +557,17 @@ def _delivery(value: dict[str, Any]) -> dict[str, Any]:
     return delivery
 
 
+def _agent_message_texts_for_turn(transcript: list[object], turn_id: str) -> list[str]:
+    return [
+        text
+        for item in transcript
+        if isinstance(item, dict)
+        and item.get("turn_id") == turn_id
+        and item.get("type") == "agentMessage"
+        and isinstance((text := item.get("text")), str)
+    ]
+
+
 def _provider(status: dict[str, Any], name: str) -> dict[str, Any]:
     providers = status.get("providers")
     if not isinstance(providers, list):
@@ -605,7 +644,7 @@ def _source_revision(repository: Path) -> str:
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=repository,
-        env=dict(os.environ),
+        env=_source_git_env(),
         text=True,
         capture_output=True,
         check=False,
@@ -619,11 +658,21 @@ def _source_dirty(repository: Path) -> bool:
     result = subprocess.run(
         ["git", "status", "--porcelain"],
         cwd=repository,
+        env=_source_git_env(),
         text=True,
         capture_output=True,
         check=False,
     )
+    if result.returncode != 0:
+        raise SmokeFailure(f"git status failed: {_bounded(result.stderr)!r}")
     return bool(result.stdout.strip())
+
+
+def _source_git_env() -> dict[str, str]:
+    env = dict(os.environ)
+    for name in _GIT_REPOSITORY_SELECTORS:
+        env.pop(name, None)
+    return env
 
 
 def _sha256(path: Path) -> str:
@@ -636,12 +685,21 @@ def _sha256(path: Path) -> str:
 
 def _tree_sha256(root: Path) -> str:
     digest = hashlib.sha256()
-    for path in sorted(item for item in root.rglob("*") if item.is_file()):
+    for path in sorted(
+        item for item in root.rglob("*") if item.is_file() and _include_in_tree_digest(item, root)
+    ):
         digest.update(path.relative_to(root).as_posix().encode())
         digest.update(b"\0")
         digest.update(path.read_bytes())
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def _include_in_tree_digest(path: Path, root: Path) -> bool:
+    relative = path.relative_to(root)
+    return not any(part in _TREE_DIGEST_CACHE_DIRS for part in relative.parts) and (
+        path.suffix not in _TREE_DIGEST_BYTECODE_SUFFIXES
+    )
 
 
 def _bounded(value: str) -> str:

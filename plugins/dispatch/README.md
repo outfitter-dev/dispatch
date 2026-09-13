@@ -54,6 +54,6 @@ and standalone skill docs cannot drift.
 PyPI installs include read-only packaged copies of the skills and plugin under
 `outfitter.dispatch.assets`; edit the repo-root assets, not the installed copies.
 
-Codex discovers the plugin through
-[`../../.agents/plugins/marketplace.json`](../../.agents/plugins/marketplace.json).
+Codex discovers the plugin through the
+[workspace marketplace entry](https://github.com/outfitter-dev/dispatch/blob/main/.agents/plugins/marketplace.json).
 Restart Codex if the plugin does not appear immediately.
