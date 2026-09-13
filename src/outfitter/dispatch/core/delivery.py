@@ -252,31 +252,41 @@ async def submit_reserved(delivery_id: str, ctx: Ctx) -> bool:
     if lane is None:
         raise NotFoundError(f"no managed thread {receipt.lane!r}")
     request = decode_prepared_request(receipt)
+    expected_action = (
+        ProviderAction.QUEUE_NATIVE if receipt.transport == "native_queue" else ProviderAction.SEND
+    )
+    request_matches = (
+        request.target.lane_id == receipt.lane
+        and request.action == expected_action
+        and request.transport == receipt.transport
+        and request.correlation_id == receipt.id
+    )
+    lane_matches = (
+        lane.provider,
+        lane.binding_id,
+        lane.provider_thread_id,
+    ) == (
+        request.target.provider,
+        request.target.binding_id,
+        request.target.native_session_id,
+    )
+    if request_matches and lane_matches and request.target.provider == "hermes":
+        try:
+            recovery_route = router_for(ctx).route_submission_target(
+                request.target, expected_action
+            )
+            recovery_route.recheck()
+            if request.target.generation is not None:
+                recovery_route.recheck_generation(request.target.generation)
+        except CapabilityUnavailableError:
+            return False
     if not await ctx.registry.claim_delivery(delivery_id):
         return False
     provider_call_entered = False
     try:
-        expected_action = (
-            ProviderAction.QUEUE_NATIVE
-            if receipt.transport == "native_queue"
-            else ProviderAction.SEND
-        )
-        if (
-            request.target.lane_id != receipt.lane
-            or request.action != expected_action
-            or request.transport != receipt.transport
-            or request.correlation_id != receipt.id
-        ):
+        if not request_matches:
             raise ValidationError("reserved provider request does not match its delivery receipt")
-        if (
-            lane.provider,
-            lane.binding_id,
-            lane.provider_thread_id,
-        ) != (
-            request.target.provider,
-            request.target.binding_id,
-            request.target.native_session_id,
-        ):
+        if not lane_matches:
             raise CapabilityUnavailableError(
                 "reserved provider target no longer matches the current thread binding"
             )

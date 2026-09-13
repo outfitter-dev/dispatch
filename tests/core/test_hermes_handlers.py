@@ -25,6 +25,8 @@ from outfitter.dispatch.contracts.errors import (
     ValidationError,
 )
 from outfitter.dispatch.core import handlers
+from outfitter.dispatch.core.delivery import encode_prepared_request, submit_reserved
+from outfitter.dispatch.core.delivery_reconciliation import reconcile_pending
 from outfitter.dispatch.core.hermes import (
     HERMES_ACTIONS,
     HermesAttentionObservation,
@@ -34,8 +36,10 @@ from outfitter.dispatch.core.hermes import (
     apply_hermes_attention_observation,
     apply_hermes_delivery_observation,
     apply_hermes_transcript_observation,
+    quarantine_stale_hermes_lanes,
 )
 from outfitter.dispatch.core.models import (
+    AttachInput,
     NewInput,
     RosterInput,
     SendInput,
@@ -45,6 +49,7 @@ from outfitter.dispatch.core.models import (
 )
 from outfitter.dispatch.core.providers import (
     PreparedProviderRequest,
+    ProviderAction,
     ProviderAvailability,
     ProviderBindingFacts,
     ProviderDurability,
@@ -52,7 +57,10 @@ from outfitter.dispatch.core.providers import (
     ProviderSubmissionAccepted,
     ProviderSubmissionRejected,
     ProviderSubmissionResult,
+    ProviderSubmissionUnknown,
+    ProviderTarget,
 )
+from outfitter.dispatch.registry.delivery import DeliveryReceipt
 from outfitter.dispatch.registry.models import LaneRuntimeState
 from outfitter.dispatch.registry.observations import ProviderCorrelation, ProviderObservation
 from outfitter.dispatch.registry.store import Registry
@@ -126,6 +134,41 @@ def _hermes_ctx(store: Registry, adapter: FakeHermesAdapter) -> Ctx:
 def _router(ctx: Ctx) -> ProviderRouter:
     assert ctx.providers is not None
     return ctx.providers
+
+
+async def _reserve_old_hermes_delivery(
+    store: Registry, *, lane_id: str, delivery_id: str
+) -> DeliveryReceipt:
+    request = PreparedProviderRequest(
+        target=ProviderTarget(
+            lane_id=lane_id,
+            provider="hermes",
+            binding_id="hermes-default",
+            native_session_id="stored-1",
+            runtime_session_id="runtime-1",
+            generation="generation-1",
+        ),
+        action=ProviderAction.SEND,
+        transport="turn",
+        correlation_id=delivery_id,
+        text="queued before restart",
+    )
+    receipt, created = await store.reserve_delivery(
+        delivery_id=delivery_id,
+        key="old-delivery",
+        lane=lane_id,
+        mode="send",
+        text=request.text,
+        payload=encode_prepared_request(request),
+        transport=request.transport,
+        provider=request.target.provider,
+        binding_id=request.target.binding_id,
+        native_session_id=request.target.native_session_id,
+        correlation_id=request.correlation_id,
+        exclusive_lane=True,
+    )
+    assert created is True
+    return receipt
 
 
 async def test_hermes_plan_uses_cached_facts_without_provider_calls(
@@ -798,6 +841,50 @@ async def test_exact_replay_of_definite_rejection_never_submits_again(
     assert len(adapter.submissions) == 1
 
 
+async def test_lost_ack_stays_held_after_terminal_looking_session_activity(
+    store: Registry, tmp_path: Path
+) -> None:
+    adapter = FakeHermesAdapter(
+        submission=ProviderSubmissionUnknown(error="gateway closed before prompt ACK")
+    )
+    ctx = _hermes_ctx(store, adapter)
+    request = NewInput(
+        name="worker",
+        cwd=str(tmp_path),
+        provider="hermes",
+        text="first",
+        idempotency_key="launch-key",
+    )
+
+    first = await handlers.new_lane(request, ctx)
+    assert first.delivery is not None
+    assert first.delivery.status == "ambiguous"
+    for kind in ("started", "terminal"):
+        await apply_hermes_activity_observation(
+            store,
+            _router(ctx),
+            HermesSessionActivityObservation(
+                lane_id=first.id,
+                stored_session_id="stored-1",
+                runtime_session_id="runtime-1",
+                generation="generation-1",
+                turn_id="terminal-looking",
+                kind=kind,
+                observed_at=datetime.now(UTC),
+            ),
+        )
+
+    replay = await handlers.new_lane(request, ctx)
+    assert replay.delivery == first.delivery
+    assert len(adapter.submissions) == 1
+    with pytest.raises(CapabilityUnavailableError, match="unresolved delivery"):
+        await handlers.send_message(
+            SendInput(lane=first.ref, text="later", idempotency_key="later"), ctx
+        )
+    assert await store.get_delivery_by_key("later") is None
+    assert len(adapter.submissions) == 1
+
+
 async def test_current_known_attention_holds_only_its_hermes_lane(
     store: Registry, tmp_path: Path
 ) -> None:
@@ -1174,3 +1261,344 @@ async def test_generation_change_fences_existing_hermes_lane_before_provider_cal
     assert replacement.submissions == []
     receipt = await store.get_delivery_by_key("turn-two")
     assert receipt is None
+
+
+async def test_restart_reconciliation_waits_for_hermes_quarantine(
+    store: Registry, tmp_path: Path
+) -> None:
+    adapter = FakeHermesAdapter()
+    ctx = _hermes_ctx(store, adapter)
+    created = await handlers.new_lane(
+        NewInput(name="worker", cwd=str(tmp_path), provider="hermes", send=False), ctx
+    )
+    receipt = await _reserve_old_hermes_delivery(
+        store, lane_id=created.id, delivery_id="old-delivery"
+    )
+    starting = ProviderRouter(())
+    starting.register_unavailable(
+        provider="hermes",
+        binding_id="hermes-default",
+        supported_actions=adapter.facts.supported_actions,
+        reason="provider connection is starting",
+        durability=adapter.facts.durability,
+    )
+    ctx.providers = starting
+
+    await reconcile_pending(ctx)
+
+    assert await store.get_delivery(receipt.id) == receipt
+    assert adapter.submissions == []
+
+
+async def test_quarantine_atomically_blocks_an_inflight_hermes_recovery_claim(
+    store: Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = FakeHermesAdapter()
+    ctx = _hermes_ctx(store, adapter)
+    created = await handlers.new_lane(
+        NewInput(name="worker", cwd=str(tmp_path), provider="hermes", send=False), ctx
+    )
+    receipt = await _reserve_old_hermes_delivery(
+        store, lane_id=created.id, delivery_id="old-delivery"
+    )
+    replacement = FakeHermesAdapter(generation="generation-2")
+    claim_delivery = store.claim_delivery
+
+    async def quarantine_before_claim(delivery_id: str) -> bool:
+        await quarantine_stale_hermes_lanes(
+            store,
+            binding_id="hermes-default",
+            current_generation="generation-2",
+        )
+        ctx.providers = ProviderRouter((replacement,))
+        return await claim_delivery(delivery_id)
+
+    monkeypatch.setattr(store, "claim_delivery", quarantine_before_claim)
+
+    assert await submit_reserved(receipt.id, ctx) is False
+    assert await store.get_delivery(receipt.id) == receipt
+    assert adapter.submissions == []
+    assert replacement.submissions == []
+
+
+async def test_quarantined_hermes_transcript_projects_runtime_hold(
+    store: Registry, tmp_path: Path
+) -> None:
+    adapter = FakeHermesAdapter()
+    ctx = _hermes_ctx(store, adapter)
+    created = await handlers.new_lane(
+        NewInput(name="worker", cwd=str(tmp_path), provider="hermes", send=False), ctx
+    )
+    await quarantine_stale_hermes_lanes(
+        store,
+        binding_id="hermes-default",
+        current_generation="generation-2",
+    )
+    ctx.providers = ProviderRouter((FakeHermesAdapter(generation="generation-2"),))
+
+    transcript = await handlers.transcript(TranscriptInput(lane=created.ref), ctx)
+
+    assert transcript.writable is False
+    assert transcript.capabilities.send is False
+    assert transcript.write_locked_reason == "owned Hermes gateway generation changed"
+
+
+async def test_idempotent_attach_projects_quarantined_hermes_runtime_hold(
+    store: Registry, tmp_path: Path
+) -> None:
+    adapter = FakeHermesAdapter()
+    ctx = _hermes_ctx(store, adapter)
+    created = await handlers.new_lane(
+        NewInput(name="worker", cwd=str(tmp_path), provider="hermes", send=False), ctx
+    )
+    # Quarantine without swapping the router: provider facts still report the lane as
+    # current, so only the persisted runtime hold can lock the idempotent re-attach.
+    await quarantine_stale_hermes_lanes(
+        store,
+        binding_id="hermes-default",
+        current_generation="generation-2",
+    )
+
+    attached = await handlers.attach_lane(AttachInput(thread=created.id, sync=False), ctx)
+
+    assert attached.id == created.id
+    assert attached.writable is False
+    assert attached.capabilities.send is False
+    assert attached.write_locked_reason == "owned Hermes gateway generation changed"
+
+
+async def test_exact_keyed_send_replay_projects_quarantined_runtime_hold(
+    store: Registry, tmp_path: Path
+) -> None:
+    adapter = FakeHermesAdapter()
+    ctx = _hermes_ctx(store, adapter)
+    created = await handlers.new_lane(
+        NewInput(name="worker", cwd=str(tmp_path), provider="hermes", send=False), ctx
+    )
+    request = SendInput(lane=created.ref, text="first", idempotency_key="turn-one")
+    first = await handlers.send_message(request, ctx)
+    await quarantine_stale_hermes_lanes(
+        store,
+        binding_id="hermes-default",
+        current_generation="generation-2",
+    )
+    replacement = FakeHermesAdapter(generation="generation-2")
+    ctx.providers = ProviderRouter((replacement,))
+
+    replay = await handlers.send_message(request, ctx)
+
+    assert replay.delivery == first.delivery
+    assert replay.writable is False
+    assert replay.capabilities.send is False
+    assert replay.write_locked_reason == "owned Hermes gateway generation changed"
+    assert len(adapter.submissions) == 1
+    assert replacement.submissions == []
+
+
+async def test_replacement_generation_quarantines_old_lanes_but_allows_new_ones(
+    store: Registry, tmp_path: Path
+) -> None:
+    first_adapter = FakeHermesAdapter()
+    ctx = _hermes_ctx(store, first_adapter)
+    original_request = NewInput(
+        name="old",
+        cwd=str(tmp_path),
+        provider="hermes",
+        text="first",
+        idempotency_key="old-launch",
+    )
+    original = await handlers.new_lane(original_request, ctx)
+
+    replacement = FakeHermesAdapter(
+        generation="generation-2",
+        creation=HermesSessionCreated(
+            runtime_session_id="runtime-2",
+            stored_session_id="stored-2",
+            effective_cwd=str(tmp_path),
+        ),
+    )
+    await quarantine_stale_hermes_lanes(
+        store,
+        binding_id="hermes-default",
+        current_generation="generation-2",
+    )
+    ctx.providers = ProviderRouter((replacement,))
+
+    state = await store.get_lane_runtime_state(original.id)
+    assert state is not None
+    assert state.status == "waiting_tool"
+    assert state.needs_attention is True
+    assert state.attention_kind == "native_client_capability_unavailable"
+    assert json.loads(state.attention_detail or "{}") == {
+        "members": [],
+        "quarantine": {
+            "current_generation": "generation-2",
+            "frozen_generation": "generation-1",
+            "reason": "owned Hermes gateway generation changed",
+            "source": "provider_generation",
+        },
+    }
+
+    roster = await handlers.roster(RosterInput(), ctx)
+    item = next(item for item in roster.lanes if item.id == original.id)
+    assert item.provider_state.readiness == "ready"
+    assert item.writable is False
+    assert item.capabilities.send is False
+    assert item.write_locked_reason == "owned Hermes gateway generation changed"
+
+    detail = await handlers.show(ShowInput(lane=original.ref), ctx)
+    assert detail.writable is False
+    assert detail.capabilities.send is False
+    assert detail.attention.held is True
+    assert detail.attention.kind == "native_client_capability_unavailable"
+    assert detail.attention.reason == "owned Hermes gateway generation changed"
+    assert "attention_detail" not in detail.model_dump()
+
+    replay = await handlers.new_lane(original_request, ctx)
+    assert replay.launch == original.launch
+    assert replay.delivery == original.delivery
+    assert replay.writable is False
+    assert replay.capabilities.send is False
+    assert replay.write_locked_reason == "owned Hermes gateway generation changed"
+    assert replacement.create_calls == []
+    assert replacement.submissions == []
+
+    with pytest.raises(CapabilityUnavailableError, match="attention hold"):
+        await handlers.send_message(
+            SendInput(lane=original.ref, text="blocked", idempotency_key="blocked"), ctx
+        )
+    assert await store.get_delivery_by_key("blocked") is None
+
+    fresh = await handlers.new_lane(
+        NewInput(name="fresh", cwd=str(tmp_path), provider="hermes", send=False), ctx
+    )
+    assert fresh.provider_thread_id == "stored-2"
+    assert fresh.status == "idle"
+    fresh_item = next(
+        item for item in (await handlers.roster(RosterInput(), ctx)).lanes if item.id == fresh.id
+    )
+    assert fresh_item.provider_state.readiness == "ready"
+    assert fresh_item.writable is True
+    assert fresh_item.capabilities.send is True
+
+
+async def test_generation_quarantine_survives_reopen_and_preserves_existing_attention(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "registry.sqlite3"
+    store = await Registry.open(db_path)
+    original_request = NewInput(
+        name="old",
+        cwd=str(tmp_path),
+        provider="hermes",
+        idempotency_key="old-launch",
+        text="first",
+    )
+    try:
+        first_adapter = FakeHermesAdapter()
+        ctx = _hermes_ctx(store, first_adapter)
+        original = await handlers.new_lane(original_request, ctx)
+        await apply_hermes_attention_observation(
+            store,
+            _router(ctx),
+            HermesAttentionObservation(
+                lane_id=original.id,
+                stored_session_id="stored-1",
+                runtime_session_id="runtime-1",
+                generation="generation-1",
+                kind="secret.request",
+                family="secret",
+                request_id="secret-1",
+                category="human_or_sensitive_input",
+                expired=False,
+                observed_at=datetime.now(UTC),
+            ),
+        )
+        missing = await store.add_lane(
+            id="dsp_missing_launch",
+            handle="@missing",
+            source="own",
+            status="idle",
+            provider="hermes",
+            binding_id="hermes-default",
+            provider_thread_id="stored-missing",
+        )
+        frozen_launch = await store.get_lane_launch(original.id)
+
+        quarantined = await quarantine_stale_hermes_lanes(
+            store,
+            binding_id="hermes-default",
+            current_generation="generation-2",
+        )
+        assert set(quarantined) == {original.id, missing.id}
+    finally:
+        await store.close()
+
+    reopened = await Registry.open(db_path)
+    try:
+        replacement = FakeHermesAdapter(generation="generation-2")
+        ctx = _hermes_ctx(reopened, replacement)
+        assert await reopened.get_lane_launch(original.id) == frozen_launch
+
+        state = await reopened.get_lane_runtime_state(original.id)
+        assert state is not None
+        assert state.status == "waiting_input"
+        assert state.attention_kind == "human_or_sensitive_input"
+        detail = json.loads(state.attention_detail or "{}")
+        assert detail["members"][0]["request_id"] == "secret-1"
+        assert detail["quarantine"]["frozen_generation"] == "generation-1"
+
+        missing_state = await reopened.get_lane_runtime_state(missing.id)
+        assert missing_state is not None
+        assert missing_state.status == "waiting_tool"
+        assert missing_state.needs_attention is True
+        missing_detail = json.loads(missing_state.attention_detail or "{}")
+        assert missing_detail["quarantine"]["frozen_generation"] is None
+        assert missing_detail["quarantine"]["reason"] == (
+            "Hermes launch mapping is missing or invalid"
+        )
+        missing_view = await handlers.show(ShowInput(lane=missing.ref), ctx)
+        assert missing_view.writable is False
+        assert missing_view.capabilities.send is False
+        assert missing_view.attention.held is True
+        assert missing_view.attention.kind == "native_client_capability_unavailable"
+        assert missing_view.attention.reason == "Hermes launch mapping is missing or invalid"
+        assert missing_view.write_locked_reason == missing_view.attention.reason
+
+        replay = await handlers.new_lane(original_request, ctx)
+        assert replay.id == original.id
+        assert replay.delivery == original.delivery
+        assert replacement.create_calls == []
+        assert replacement.submissions == []
+    finally:
+        await reopened.close()
+
+
+async def test_generation_quarantine_treats_malformed_launch_as_unprovable(
+    store: Registry, tmp_path: Path
+) -> None:
+    adapter = FakeHermesAdapter()
+    ctx = _hermes_ctx(store, adapter)
+    lane = await handlers.new_lane(
+        NewInput(name="malformed", cwd=str(tmp_path), provider="hermes", send=False), ctx
+    )
+    await store._conn.execute(
+        "UPDATE lane_launches SET created_at = 'malformed' WHERE lane = ?", (lane.id,)
+    )
+    await store._conn.commit()
+
+    quarantined = await quarantine_stale_hermes_lanes(
+        store,
+        binding_id="hermes-default",
+        current_generation="generation-2",
+    )
+
+    assert quarantined == (lane.id,)
+    state = await store.get_lane_runtime_state(lane.id)
+    assert state is not None
+    assert state.status == "waiting_tool"
+    assert state.needs_attention is True
+    assert state.attention_kind == "native_client_capability_unavailable"
+    detail = json.loads(state.attention_detail or "{}")
+    assert detail["quarantine"]["frozen_generation"] is None
+    assert detail["quarantine"]["reason"] == "Hermes launch mapping is missing or invalid"

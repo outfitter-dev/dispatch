@@ -50,6 +50,7 @@ from outfitter.dispatch.registry.models import (
     InboxMessage,
     Lane,
     LaneModelSettings,
+    LaneRuntimeState,
     LaneSource,
     LaneStatus,
     LaneSync,
@@ -72,6 +73,10 @@ from . import queue
 from .backfill import backfill_codex_history
 from .capacity import refresh_codex_capacity
 from .claude_capacity import refresh_claude_capacity
+from .hermes import (
+    HERMES_GENERATION_QUARANTINE_REASON,
+    HERMES_LAUNCH_MAPPING_QUARANTINE_REASON,
+)
 from .hermes_launch import (
     HermesLaunchOutcome,
     create_hermes_lane,
@@ -119,6 +124,7 @@ from .models import (
     InboxListInput,
     InboxMessageView,
     InboxReadInput,
+    LaneAttentionView,
     LaneCapabilities,
     LaneDetail,
     LaneInput,
@@ -297,12 +303,57 @@ def _has_write_authority(lane: Lane, ctx: Ctx) -> bool:
     return lane.source == "own" or ctx.policy.allow_attached_writes
 
 
-def _can_write(lane: Lane, ctx: Ctx) -> bool:
-    return _provider_supports(lane, ctx, ProviderAction.SEND) and _has_write_authority(lane, ctx)
+def _has_runtime_write_hold(lane: Lane, runtime: LaneRuntimeState | None) -> bool:
+    return lane.provider == "hermes" and runtime is not None and runtime.needs_attention
 
 
-def _capabilities(lane: Lane, ctx: Ctx) -> LaneCapabilities:
-    writable = _has_write_authority(lane, ctx)
+def _runtime_attention_reason(lane: Lane, runtime: LaneRuntimeState | None) -> str | None:
+    if runtime is None or not runtime.needs_attention:
+        return None
+    if lane.provider != "hermes":
+        return "thread has an unresolved attention hold"
+    try:
+        detail: object = json.loads(runtime.attention_detail or "null")
+    except json.JSONDecodeError:
+        detail = None
+    if isinstance(detail, dict):
+        quarantine = detail.get("quarantine")
+        if isinstance(quarantine, dict):
+            reason = quarantine.get("reason")
+            if reason in {
+                HERMES_GENERATION_QUARANTINE_REASON,
+                HERMES_LAUNCH_MAPPING_QUARANTINE_REASON,
+            }:
+                return str(reason)
+    if runtime.attention_kind == "human_or_sensitive_input":
+        return "Hermes thread requires human or sensitive native input"
+    if runtime.attention_kind == "native_client_capability_unavailable":
+        return "Hermes native client capability is unavailable"
+    return "Hermes thread has an unresolved native attention hold"
+
+
+def _attention_view(lane: Lane, runtime: LaneRuntimeState | None) -> LaneAttentionView:
+    if runtime is None or not runtime.needs_attention:
+        return LaneAttentionView()
+    return LaneAttentionView(
+        held=True,
+        kind=runtime.attention_kind,
+        reason=_runtime_attention_reason(lane, runtime),
+    )
+
+
+def _can_write(lane: Lane, ctx: Ctx, runtime: LaneRuntimeState | None = None) -> bool:
+    return (
+        not _has_runtime_write_hold(lane, runtime)
+        and _provider_supports(lane, ctx, ProviderAction.SEND)
+        and _has_write_authority(lane, ctx)
+    )
+
+
+def _capabilities(
+    lane: Lane, ctx: Ctx, runtime: LaneRuntimeState | None = None
+) -> LaneCapabilities:
+    writable = _has_write_authority(lane, ctx) and not _has_runtime_write_hold(lane, runtime)
 
     def effective(action: ProviderAction) -> bool:
         return writable and _provider_supports(lane, ctx, action)
@@ -329,9 +380,13 @@ def _capabilities(lane: Lane, ctx: Ctx) -> LaneCapabilities:
     )
 
 
-def _write_locked_reason(lane: Lane, ctx: Ctx) -> str | None:
-    if _can_write(lane, ctx):
+def _write_locked_reason(
+    lane: Lane, ctx: Ctx, runtime: LaneRuntimeState | None = None
+) -> str | None:
+    if _can_write(lane, ctx, runtime):
         return None
+    if _has_runtime_write_hold(lane, runtime):
+        return _runtime_attention_reason(lane, runtime)
     if not _provider_supports(lane, ctx, ProviderAction.SEND):
         facts = router_for(ctx).facts_for_lane(lane)
         if (
@@ -347,7 +402,13 @@ def _write_locked_reason(lane: Lane, ctx: Ctx) -> str | None:
     return "thread is not writable"
 
 
-def _ref(lane: Lane, ctx: Ctx) -> LaneRef:
+def _ref(lane: Lane, ctx: Ctx, runtime: LaneRuntimeState | None = None) -> LaneRef:
+    """Project a lane reference from already-loaded state.
+
+    ``runtime`` drives ``writable``/``capabilities``/``write_locked_reason`` for Hermes
+    lanes; omitting it is treated as "no hold". Handlers that have not loaded runtime
+    state must go through ``_lane_ref`` instead of calling this directly.
+    """
     facts = router_for(ctx).facts_for_lane(lane)
     provider_state = ProviderStateView(
         ownership=lane.source,
@@ -374,10 +435,10 @@ def _ref(lane: Lane, ctx: Ctx) -> LaneRef:
         source=lane.source,
         status=lane.status,
         cwd=lane.cwd,
-        writable=_can_write(lane, ctx),
-        capabilities=_capabilities(lane, ctx),
+        writable=_can_write(lane, ctx, runtime),
+        capabilities=_capabilities(lane, ctx, runtime),
         provider_state=provider_state,
-        write_locked_reason=_write_locked_reason(lane, ctx),
+        write_locked_reason=_write_locked_reason(lane, ctx, runtime),
     )
 
 
@@ -400,7 +461,19 @@ def _action_ref(
     )
 
 
-def _managed_identity(lane: Lane, ctx: Ctx) -> _ManagedIdentityPayload:
+async def _hermes_runtime(lane: Lane, ctx: Ctx) -> LaneRuntimeState | None:
+    if lane.provider != "hermes":
+        return None
+    return await ctx.registry.get_lane_runtime_state(lane.id)
+
+
+async def _lane_ref(lane: Lane, ctx: Ctx) -> LaneRef:
+    """Project a lane reference, loading the Hermes runtime hold when applicable."""
+    return _ref(lane, ctx, await _hermes_runtime(lane, ctx))
+
+
+async def _managed_identity(lane: Lane, ctx: Ctx) -> _ManagedIdentityPayload:
+    runtime = await _hermes_runtime(lane, ctx)
     return {
         "lane": lane.id,
         "ref": lane.ref,
@@ -414,9 +487,9 @@ def _managed_identity(lane: Lane, ctx: Ctx) -> _ManagedIdentityPayload:
         "source": lane.source,
         "status": lane.status,
         "cwd": lane.cwd,
-        "writable": _can_write(lane, ctx),
-        "capabilities": _capabilities(lane, ctx),
-        "write_locked_reason": _write_locked_reason(lane, ctx),
+        "writable": _can_write(lane, ctx, runtime),
+        "capabilities": _capabilities(lane, ctx, runtime),
+        "write_locked_reason": _write_locked_reason(lane, ctx, runtime),
     }
 
 
@@ -547,10 +620,11 @@ def _list_item(
     sync: LaneSync | None,
     model: LaneModelSettings | None,
     ctx: Ctx,
+    runtime: LaneRuntimeState | None = None,
     topology: ThreadTopologyView | None = None,
 ) -> LaneListItem:
     return LaneListItem(
-        **_ref(lane, ctx).model_dump(),
+        **_ref(lane, ctx, runtime).model_dump(),
         sync=_sync_view(sync),
         latest_turn=_latest_turn_view(lane),
         model=_model_view(model, sync),
@@ -669,7 +743,7 @@ async def open_lane(inp: OpenInput, ctx: Ctx) -> LaneRef:
     )
     await ctx.registry.log_action("open", lane=lane.id, detail=handle)
     ctx.log.info("lane.open", lane=lane.id, handle=handle)
-    return _ref(lane, ctx)
+    return await _lane_ref(lane, ctx)
 
 
 def _require_launchable_provider(provider: ExecutionProvider | None) -> None:
@@ -749,11 +823,12 @@ def _hermes_workspace(cwd: str, *, existing: bool) -> WorkspaceView:
     )
 
 
-def _new_hermes_output(outcome: HermesLaunchOutcome, ctx: Ctx) -> NewLane:
+async def _new_hermes_output(outcome: HermesLaunchOutcome, ctx: Ctx) -> NewLane:
     lane = outcome.lane
     delivery = _delivery_view(outcome)
+    runtime = await ctx.registry.get_lane_runtime_state(lane.id)
     return NewLane(
-        **_ref(lane, ctx).model_dump(),
+        **_ref(lane, ctx, runtime).model_dump(),
         message_accepted=(delivery is not None and delivery.status in {"accepted", "completed"}),
         goal_set=False,
         staged=StageView(),
@@ -925,7 +1000,7 @@ def _launch_image_views(rich: RichInput) -> list[LaunchImageView]:
 async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
     replay = await find_launch_replay(inp, ctx)
     if replay is not None:
-        return _new_hermes_output(replay, ctx)
+        return await _new_hermes_output(replay, ctx)
     launch = resolve_launch(inp)
     _require_launchable_provider(launch.resolved.settings.provider)
     _validate_launch(launch)
@@ -941,7 +1016,7 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
             detail=launch.resolved.display_name,
             outcome=outcome.launch.status,
         )
-        return _new_hermes_output(outcome, ctx)
+        return await _new_hermes_output(outcome, ctx)
     launch_route = router_for(ctx).route_launch(
         launch.resolved.settings.provider, ProviderAction.LAUNCH
     )
@@ -1142,7 +1217,7 @@ async def new_lane(inp: NewInput, ctx: Ctx) -> NewLane:
             ctx,
         )
     ctx.log.info("lane.new", lane=lane.id, handle=lane.handle, message_accepted=message_accepted)
-    ref = _ref(lane, ctx)
+    ref = await _lane_ref(lane, ctx)
     return NewLane(
         **ref.model_dump(),
         message_accepted=message_accepted,
@@ -1166,7 +1241,7 @@ async def attach_lane(inp: AttachInput, ctx: Ctx) -> LaneRef:
                     "binding has a defined history contract"
                 )
             await _sync_lane(existing, ctx, full=False)
-        return _ref(existing, ctx)  # idempotent re-attach
+        return await _lane_ref(existing, ctx)  # idempotent re-attach
     try:
         thread = await asyncio.wait_for(
             _read_thread_metadata(ctx, inp.thread), _ATTACH_METADATA_TIMEOUT_S
@@ -1179,7 +1254,7 @@ async def attach_lane(inp: AttachInput, ctx: Ctx) -> LaneRef:
         ) from exc
     lane = await _register_attached_thread(thread, ctx, sync=inp.sync, audit_op="attach")
     ctx.log.info("lane.attach", lane=lane.id, handle=lane.handle)
-    return _ref(lane, ctx)
+    return await _lane_ref(lane, ctx)
 
 
 async def _register_attached_thread(
@@ -1682,7 +1757,7 @@ async def send(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
         raise
     await _record_direct_send_receipt(ctx, lane, status="sent")
     await ctx.registry.log_action("send", lane=lane.id, detail=inp.text[:120])
-    return ActionAck(**_managed_identity(lane, ctx), op="send")
+    return ActionAck(**(await _managed_identity(lane, ctx)), op="send")
 
 
 async def send_message(inp: SendInput, ctx: Ctx) -> SendAck:
@@ -1698,7 +1773,7 @@ async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
         if replay is not None:
             receipt, lane = replay
             return SendAck(
-                **_managed_identity(lane, ctx),
+                **(await _managed_identity(lane, ctx)),
                 op=receipt.mode,
                 delivery=receipt,
                 detail=f"delivery {receipt.id}: {receipt.status}",
@@ -1721,7 +1796,7 @@ async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
         receipt = await send_reserved(inp, lane, text, ctx)
         lane = await ctx.registry.get_lane(lane.id)
         return SendAck(
-            **_managed_identity(lane, ctx),
+            **(await _managed_identity(lane, ctx)),
             op="send",
             delivery=receipt,
             detail=f"delivery {receipt.id}: {receipt.status}",
@@ -1751,7 +1826,7 @@ async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
         if reserved_lane is not None:
             lane = reserved_lane
         return SendAck(
-            **_managed_identity(lane, ctx),
+            **(await _managed_identity(lane, ctx)),
             op=inp.mode,
             delivery=receipt,
             detail=f"delivery {receipt.id}: {receipt.status}",
@@ -1793,7 +1868,7 @@ async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
             await ctx.registry.log_action(
                 "steer", lane=lane.id, detail=message_audit_detail(wire, ctx.capture)
             )
-            return ActionAck(**_managed_identity(lane, ctx), op="steer")
+            return ActionAck(**(await _managed_identity(lane, ctx)), op="steer")
         case "context":
             await _prepare_attached_write(lane, route, ctx)
             parts = []
@@ -1812,7 +1887,7 @@ async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
             await ctx.registry.log_action(
                 "brief", lane=lane.id, detail=message_audit_detail(rich, ctx.capture)
             )
-            return ActionAck(**_managed_identity(lane, ctx), op="brief")
+            return ActionAck(**(await _managed_identity(lane, ctx)), op="brief")
         case "interject":
             turn_id = _require_active_turn(lane, "interject")
             await _prepare_attached_write(lane, route, ctx)
@@ -1838,7 +1913,7 @@ async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
                     )
             pending = await ctx.registry.pending_message_count(lane.id)
             return ActionAck(
-                **_managed_identity(lane, ctx),
+                **(await _managed_identity(lane, ctx)),
                 op="queue",
                 detail=f"queued message {message.id}; pending={pending}",
             )
@@ -1892,7 +1967,7 @@ async def _send_rich(
     await ctx.registry.log_action(
         "send", lane=lane.id, detail=message_audit_detail(wire, ctx.capture)
     )
-    return ActionAck(**_managed_identity(lane, ctx), op=op)
+    return ActionAck(**(await _managed_identity(lane, ctx)), op=op)
 
 
 async def steer(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
@@ -1903,7 +1978,7 @@ async def steer(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
     route.recheck()
     await route.adapter.steer(route.target, turn_id, inp.text)
     await ctx.registry.log_action("steer", lane=lane.id, detail=inp.text[:120])
-    return ActionAck(**_managed_identity(lane, ctx), op="steer")
+    return ActionAck(**(await _managed_identity(lane, ctx)), op="steer")
 
 
 async def brief(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
@@ -1918,7 +1993,7 @@ async def brief(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
     route.recheck()
     await route.adapter.inject(route.target, [item])
     await ctx.registry.log_action("brief", lane=lane.id, detail=inp.text[:120])
-    return ActionAck(**_managed_identity(lane, ctx), op="brief")
+    return ActionAck(**(await _managed_identity(lane, ctx)), op="brief")
 
 
 async def interrupt(inp: LaneInput, ctx: Ctx) -> ActionAck:
@@ -1929,7 +2004,7 @@ async def interrupt(inp: LaneInput, ctx: Ctx) -> ActionAck:
     route.recheck()
     await route.adapter.interrupt(route.target, turn_id)
     await ctx.registry.log_action("interrupt", lane=lane.id)
-    return ActionAck(**_managed_identity(lane, ctx), op="interrupt")
+    return ActionAck(**(await _managed_identity(lane, ctx)), op="interrupt")
 
 
 async def stop(inp: LaneInput, ctx: Ctx) -> ActionAck:
@@ -1940,7 +2015,7 @@ async def stop(inp: LaneInput, ctx: Ctx) -> ActionAck:
     route.recheck()
     await route.adapter.interrupt(route.target, turn_id)
     await ctx.registry.log_action("stop", lane=lane.id)
-    return ActionAck(**_managed_identity(lane, ctx), op="stop")
+    return ActionAck(**(await _managed_identity(lane, ctx)), op="stop")
 
 
 async def _inbox_message_view(message: InboxMessage, ctx: Ctx) -> InboxMessageView:
@@ -2254,6 +2329,7 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
     lane = resolved.lane
     sync = await ctx.registry.get_lane_sync(lane.id)
     model_settings = await ctx.registry.get_lane_model_settings(lane.id)
+    runtime = await ctx.registry.get_lane_runtime_state(lane.id)
     transcript: list[TranscriptItem] = []
     if inp.topology:
         topology_route = route_lane(ctx, lane, ProviderAction.TOPOLOGY)
@@ -2304,8 +2380,9 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
             transcript = _transcript_from_thread(result, limit=inp.max_items)
     topology = await lane_topology_views(ctx.registry, [lane], max_nodes=inp.topology_limit)
     return LaneDetail(
-        **_ref(lane, ctx).model_dump(),
+        **_ref(lane, ctx, runtime).model_dump(),
         active_turn_id=lane.active_turn_id,
+        attention=_attention_view(lane, runtime),
         latest_turn=_latest_turn_view(lane),
         sync=_sync_view(sync),
         model=_model_view(model_settings, sync),
@@ -2354,7 +2431,7 @@ async def sync_lane(inp: LaneSyncInput, ctx: Ctx) -> LaneSyncResult:
         "sync", lane=lane.id, detail=f"state={sync.state}; full={inp.full}"
     )
     return LaneSyncResult(
-        **_managed_identity(lane, ctx),
+        **(await _managed_identity(lane, ctx)),
         sync=_sync_view(sync),
         model=_model_view(model_settings, sync),
     )
@@ -2429,7 +2506,7 @@ async def watch(inp: WatchInput, ctx: Ctx) -> WatchOutput:
     lane = resolved.lane
     route = route_lane(ctx, lane, ProviderAction.TAIL)
     if inp.timeout == 0:
-        return WatchOutput(**_managed_identity(lane, ctx), events=[], timed_out=True)
+        return WatchOutput(**(await _managed_identity(lane, ctx)), events=[], timed_out=True)
     route.recheck()
     stream = route.adapter.raw_events(route.target)
     events: list[WatchEvent] = []
@@ -2456,7 +2533,7 @@ async def watch(inp: WatchInput, ctx: Ctx) -> WatchOutput:
         aclose = getattr(stream, "aclose", None)
         if aclose is not None:
             await aclose()
-    return WatchOutput(**_managed_identity(lane, ctx), events=events, timed_out=timed_out)
+    return WatchOutput(**(await _managed_identity(lane, ctx)), events=events, timed_out=timed_out)
 
 
 async def transcript(inp: TranscriptInput, ctx: Ctx) -> TranscriptOutput:
@@ -2466,7 +2543,7 @@ async def transcript(inp: TranscriptInput, ctx: Ctx) -> TranscriptOutput:
     lane = resolved.lane
     if lane.provider == "hermes" and _provider_supports(lane, ctx, ProviderAction.TRANSCRIPT):
         return TranscriptOutput(
-            **_managed_identity(lane, ctx),
+            **(await _managed_identity(lane, ctx)),
             items=await _observed_transcript(ctx, lane, limit=inp.limit),
             transcript_source="live_observed",
             partial=True,
@@ -2476,7 +2553,7 @@ async def transcript(inp: TranscriptInput, ctx: Ctx) -> TranscriptOutput:
     result = await route.adapter.read(route.target, include_turns=True)
     await index_codex_thread_read(ctx.registry, lane, result, ctx.capture)
     return TranscriptOutput(
-        **_managed_identity(lane, ctx),
+        **(await _managed_identity(lane, ctx)),
         items=_transcript_from_thread(result, limit=inp.limit),
     )
 
@@ -3184,7 +3261,10 @@ async def goal_get(inp: GoalGetInput, ctx: Ctx) -> GoalView:
     route = route_lane(ctx, lane, ProviderAction.GOAL_READ)
     route.recheck()
     goal = await route.adapter.goal_get(route.target)
-    return GoalView(**_managed_identity(lane, ctx), goal=_goal(goal) if goal is not None else None)
+    return GoalView(
+        **(await _managed_identity(lane, ctx)),
+        goal=_goal(goal) if goal is not None else None,
+    )
 
 
 async def goal_set(inp: GoalSetInput, ctx: Ctx) -> GoalView:
@@ -3207,7 +3287,7 @@ async def goal_set(inp: GoalSetInput, ctx: Ctx) -> GoalView:
         token_budget=inp.token_budget,
     )
     await ctx.registry.log_action("goal-set", lane=lane.id, detail=inp.objective)
-    return GoalView(**_managed_identity(lane, ctx), goal=_goal(goal))
+    return GoalView(**(await _managed_identity(lane, ctx)), goal=_goal(goal))
 
 
 async def goal_clear(inp: GoalClearInput, ctx: Ctx) -> GoalView:
@@ -3217,7 +3297,7 @@ async def goal_clear(inp: GoalClearInput, ctx: Ctx) -> GoalView:
     route.recheck()
     await route.adapter.goal_clear(route.target)
     await ctx.registry.log_action("goal-clear", lane=lane.id)
-    return GoalView(**_managed_identity(lane, ctx), goal=None)
+    return GoalView(**(await _managed_identity(lane, ctx)), goal=None)
 
 
 async def fork(inp: ForkInput, ctx: Ctx) -> LaneRef:
@@ -3292,7 +3372,7 @@ async def fork(inp: ForkInput, ctx: Ctx) -> LaneRef:
         await child_route.adapter.rename(child_route.target, handle.removeprefix("@"))
     except (DispatchError, ClientError) as exc:
         ctx.log.warning("lane.name_set_failed", lane=lane.id, error=str(exc))
-    return _ref(lane, ctx)
+    return await _lane_ref(lane, ctx)
 
 
 async def rollback(inp: RollbackInput, ctx: Ctx) -> LaneRef:
@@ -3304,7 +3384,7 @@ async def rollback(inp: RollbackInput, ctx: Ctx) -> LaneRef:
     await ctx.registry.set_active_turn(lane.id, None)
     await ctx.registry.update_lane_status(lane.id, "idle")
     await ctx.registry.log_action("rollback", lane=lane.id, detail=f"{inp.turns} turn(s)")
-    return _ref(await ctx.registry.get_lane(lane.id), ctx)
+    return await _lane_ref(await ctx.registry.get_lane(lane.id), ctx)
 
 
 async def compact(inp: CompactInput, ctx: Ctx) -> ActionAck:
@@ -3314,7 +3394,7 @@ async def compact(inp: CompactInput, ctx: Ctx) -> ActionAck:
     route.recheck()
     await route.adapter.compact(route.target)
     await ctx.registry.log_action("compact", lane=lane.id)
-    return ActionAck(**_managed_identity(lane, ctx), op="compact")
+    return ActionAck(**(await _managed_identity(lane, ctx)), op="compact")
 
 
 async def roster(inp: RosterInput, ctx: Ctx) -> Roster:
@@ -3391,6 +3471,16 @@ async def roster(inp: RosterInput, ctx: Ctx) -> Roster:
         ]
     syncs = await ctx.registry.get_lane_sync_many([lane.id for lane in lanes])
     models = await ctx.registry.get_lane_model_settings_many([lane.id for lane in lanes])
+    hermes_lanes = [lane for lane in lanes if lane.provider == "hermes"]
+    runtimes = dict(
+        zip(
+            (lane.id for lane in hermes_lanes),
+            await asyncio.gather(
+                *(ctx.registry.get_lane_runtime_state(lane.id) for lane in hermes_lanes)
+            ),
+            strict=True,
+        )
+    )
     topology = await lane_topology_views(ctx.registry, lanes, max_nodes=inp.topology_limit)
     return Roster(
         lanes=[
@@ -3399,6 +3489,7 @@ async def roster(inp: RosterInput, ctx: Ctx) -> Roster:
                 syncs.get(lane.id),
                 models.get(lane.id),
                 ctx,
+                runtimes.get(lane.id),
                 topology.get(lane.id),
             )
             for lane in lanes

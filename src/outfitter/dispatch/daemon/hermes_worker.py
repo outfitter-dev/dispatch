@@ -12,7 +12,7 @@ import contextlib
 import json
 import os
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Protocol, cast
 from uuid import uuid4
@@ -85,7 +85,7 @@ class WorkerHermesAdapter(ProviderBindingAdapter, Protocol):
 type HermesAdapterFactory = Callable[
     [HermesClient, str, HermesGatewayCapabilities], WorkerHermesAdapter
 ]
-type HermesReadyCallback = Callable[[ProviderBindingAdapter], None]
+type HermesReadyCallback = Callable[[ProviderBindingAdapter], Awaitable[None]]
 type HermesTransportFactory = Callable[[HermesBinding], OwnedHermesTransport]
 type HermesClientFactory = Callable[[HermesTransport], WorkerHermesClient]
 
@@ -310,7 +310,7 @@ class HermesWorkerSupervisor:
             if self._stopping.is_set():
                 return
             adapter = self._adapter_factory(cast(HermesClient, client), generation, capabilities)
-            self._mark_ready(adapter)
+            await self._mark_ready(adapter)
             await self._wait_until_closed_or_observer_failed(client, adapter)
             if not self._stopping.is_set():
                 raise HermesTransportError(
@@ -391,5 +391,4 @@ class HermesWorkerSupervisor:
             owns_process=True,
             run=self.run,
             close=self.close,
-            quarantine_on_generation_change=True,
         )
