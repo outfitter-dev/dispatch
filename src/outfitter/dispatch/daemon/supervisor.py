@@ -84,7 +84,7 @@ class Supervisor:
                 )
             )
             try:
-                await self._run_generation(client)
+                await self._run_generation(client, generation)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -97,13 +97,6 @@ class Supervisor:
                     self._ctx.log.exception(
                         "app_server.connection_failed_restarting", backoff=self._backoff
                     )
-            else:
-                if not self._is_stopped():
-                    self._mark_unavailable(
-                        "Codex App Server connection closed; reconnecting",
-                        generation=generation,
-                    )
-                    self._ctx.log.warning("app_server.died_restarting", backoff=self._backoff)
             finally:
                 await self._close_generation(client, generation)
             if self._is_stopped():
@@ -112,12 +105,28 @@ class Supervisor:
                 await asyncio.sleep(self._backoff)
             client = None
 
-    async def _run_generation(self, client: SupervisedClient) -> None:
-        """Run recovery and observe both the connection and its reader tasks."""
+    async def _run_generation(self, client: SupervisedClient, generation: str) -> None:
+        """Race recovery against connection and reader failure for this generation."""
         reactor_task = asyncio.create_task(self._run_reactor())
         closed_task = asyncio.create_task(client.wait_closed())
+        recovery_task = asyncio.create_task(self._restore_shared_state(client))
         try:
-            await self._restore_shared_state(client)
+            await asyncio.wait(
+                (recovery_task, reactor_task, closed_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if recovery_task.done():
+                await recovery_task
+            if closed_task.done():
+                self._mark_connection_closed(generation)
+                await closed_task
+                return
+            if reactor_task.done():
+                error = reactor_task.exception()
+                if error is not None:
+                    raise error
+                raise ClientError("provider reactor exited unexpectedly")
+
             done, _ = await asyncio.wait(
                 (reactor_task, closed_task), return_when=asyncio.FIRST_COMPLETED
             )
@@ -127,11 +136,22 @@ class Supervisor:
                     raise error
                 if closed_task not in done:
                     raise ClientError("provider reactor exited unexpectedly")
+            self._mark_connection_closed(generation)
             await closed_task
         finally:
+            recovery_task.cancel()
             reactor_task.cancel()
             closed_task.cancel()
-            await asyncio.gather(reactor_task, closed_task, return_exceptions=True)
+            await asyncio.gather(recovery_task, reactor_task, closed_task, return_exceptions=True)
+
+    def _mark_connection_closed(self, generation: str) -> None:
+        if self._is_stopped():
+            return
+        self._mark_unavailable(
+            "Codex App Server connection closed; reconnecting",
+            generation=generation,
+        )
+        self._ctx.log.warning("app_server.died_restarting", backoff=self._backoff)
 
     async def _close_generation(self, client: SupervisedClient, generation: str) -> None:
         """Close only the connection still registered for this exact generation."""

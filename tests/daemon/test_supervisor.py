@@ -127,6 +127,56 @@ async def test_supervisor_marks_provider_unavailable_during_respawn(store: Regis
         await task
 
 
+async def test_supervisor_withdraws_generation_when_client_closes_during_recovery(
+    store: Registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lane = await store.add_lane(id="O1", handle="@own", source="own", status="idle")
+    ctx = make_ctx(store)
+    recovery_started = asyncio.Event()
+    hold_recovery = asyncio.Event()
+    recovery_cleanup_started = asyncio.Event()
+    release_recovery_cleanup = asyncio.Event()
+    respawn_started = asyncio.Event()
+    hold_respawn = asyncio.Event()
+
+    async def blocked_recovery(_client: SupervisedClient) -> None:
+        recovery_started.set()
+        try:
+            await hold_recovery.wait()
+        except asyncio.CancelledError:
+            recovery_cleanup_started.set()
+            await release_recovery_cleanup.wait()
+            raise
+
+    async def make_client() -> FakeSupervisedClient:
+        respawn_started.set()
+        await hold_respawn.wait()
+        return FakeSupervisedClient()
+
+    supervisor = Supervisor(ctx, make_client, _wait_forever, backoff=0)
+    monkeypatch.setattr(supervisor, "_restore_shared_state", blocked_recovery)
+    first = FakeSupervisedClient()
+    task = asyncio.create_task(supervisor.supervise(first))
+    await asyncio.wait_for(recovery_started.wait(), timeout=1)
+    generation = ctx.connection_generation
+
+    first.closed.set()
+    await asyncio.wait_for(recovery_cleanup_started.wait(), timeout=1)
+
+    state = handlers._ref(lane, ctx).provider_state
+    assert state.readiness == "unavailable"
+    assert state.readiness_reason == "Codex App Server connection closed; reconnecting"
+    assert state.generation == generation
+
+    release_recovery_cleanup.set()
+    await asyncio.wait_for(respawn_started.wait(), timeout=1)
+    assert ctx.client is None
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
 async def test_supervisor_skips_non_default_provider_bindings(store: Registry) -> None:
     await store.add_lane(
         id="dsp_other",
