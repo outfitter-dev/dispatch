@@ -16,10 +16,11 @@ unset VIRTUAL_ENV UV_PROJECT_ENVIRONMENT UV_WORKING_DIR UV_WORKING_DIRECTORY
 unset UV_PROJECT UV_PYTHON UV_FROZEN PYTHONHOME PYTHONPATH
 unset UV_NO_DEV UV_NO_GROUP UV_NO_EDITABLE
 unset UV_NO_INSTALL_PROJECT UV_NO_INSTALL_WORKSPACE UV_NO_INSTALL_LOCAL UV_NO_INSTALL_PACKAGE
-if ! command -v uv >/dev/null 2>&1; then
+if ! uv_executable=$(command -v uv 2>/dev/null); then
     printf '%s\n' 'uv is required on PATH; install it explicitly, then rerun bootstrap.' >&2
     exit 127
 fi
+uv_executable=$(cd -P "$(dirname "$uv_executable")" && printf '%s/%s\n' "$PWD" "$(basename "$uv_executable")")
 
 repo_root=$(cd -P "$(dirname "$0")/.." && pwd)
 cd "$repo_root"
@@ -34,4 +35,4 @@ if [ -L .venv ]; then
     exit 1
 fi
 export UV_PROJECT_ENVIRONMENT="$repo_root/.venv"
-exec uv sync --locked --group dev --directory "$repo_root" --project "$repo_root"
+exec "$uv_executable" sync --locked --group dev --directory "$repo_root" --project "$repo_root"

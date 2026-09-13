@@ -234,6 +234,23 @@ def test_bootstrap_syncs_its_own_checkout_from_another_cwd(
     assert not list(caller.iterdir())
 
 
+def test_bootstrap_preserves_uv_found_through_a_caller_relative_path(
+    bootstrap_checkout: tuple[Path, Path, dict[str, str]],
+) -> None:
+    checkout, caller, env = bootstrap_checkout
+    caller_bin = caller / "bin"
+    caller_bin.mkdir()
+    fixture_uv = Path(env["PATH"].split(os.pathsep, maxsplit=1)[0]) / "uv"
+    shutil.copy2(fixture_uv, caller_bin / "uv")
+    env["PATH"] = "bin:/usr/bin:/bin"
+
+    result = _run_bootstrap(checkout, caller, env)
+
+    assert result.returncode == 0, result.stderr
+    invocation = json.loads(result.stdout)
+    assert Path(invocation["cwd"]) == checkout.resolve()
+
+
 def test_bootstrap_normalizes_ambient_checkout_and_install_selectors(
     bootstrap_checkout: tuple[Path, Path, dict[str, str]],
 ) -> None:
