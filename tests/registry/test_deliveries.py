@@ -12,7 +12,7 @@ import aiosqlite
 import pytest
 import pytest_asyncio
 
-from outfitter.dispatch.contracts.errors import DeliveryConflictError
+from outfitter.dispatch.contracts.errors import CapabilityUnavailableError, DeliveryConflictError
 from outfitter.dispatch.registry.delivery import DeliveryExecutionStatus, DeliveryReceipt
 from outfitter.dispatch.registry.observations import (
     ObservationKind,
@@ -795,6 +795,123 @@ async def test_two_connections_reserve_key_and_claim_lane_once(tmp_path: Path) -
         )
         claims = await asyncio.gather(first.claim_delivery(one.id), second.claim_delivery(two.id))
         assert sorted(claims) == [False, True]
+    finally:
+        await first.close()
+        await second.close()
+
+
+async def test_two_connections_reserve_only_one_exclusive_lane_delivery(tmp_path: Path) -> None:
+    db = tmp_path / "exclusive-deliveries.db"
+    first = await Registry.open(db, now=_clock)
+    await first.add_lane(id="lane-1", handle="@one", source="own")
+    second = await Registry.open(db, now=_clock)
+    try:
+        results = await asyncio.gather(
+            first.reserve_delivery(
+                key="first",
+                lane="lane-1",
+                mode="send",
+                submitted_payload='{"text":"one"}',
+                payload='{"prepared":"one"}',
+                text="one",
+                exclusive_lane=True,
+            ),
+            second.reserve_delivery(
+                key="second",
+                lane="lane-1",
+                mode="send",
+                submitted_payload='{"text":"two"}',
+                payload='{"prepared":"two"}',
+                text="two",
+                exclusive_lane=True,
+            ),
+            return_exceptions=True,
+        )
+
+        successes = [result for result in results if isinstance(result, tuple)]
+        failures = [result for result in results if isinstance(result, BaseException)]
+        assert len(successes) == 1
+        assert len(failures) == 1
+        assert isinstance(failures[0], CapabilityUnavailableError)
+        async with first._conn.execute(
+            "SELECT COUNT(*) AS count FROM deliveries WHERE lane = 'lane-1'"
+        ) as cur:
+            row = await cur.fetchone()
+        assert row is not None and int(row["count"]) == 1
+    finally:
+        await first.close()
+        await second.close()
+
+
+async def test_exclusive_lane_reservation_preserves_exact_key_replay(store: Registry) -> None:
+    first, created = await store.reserve_delivery(
+        key="same",
+        lane="lane-1",
+        mode="send",
+        submitted_payload='{"text":"same"}',
+        payload='{"prepared":"same"}',
+        text="same",
+        exclusive_lane=True,
+    )
+
+    replay, replay_created = await store.reserve_delivery(
+        key="same",
+        lane="lane-1",
+        mode="send",
+        submitted_payload='{"text":"same"}',
+        payload='{"prepared":"same"}',
+        text="same",
+        exclusive_lane=True,
+    )
+
+    assert created is True
+    assert replay_created is False
+    assert replay == first
+
+
+async def test_cross_connection_claim_preserves_partial_accepted_hold(tmp_path: Path) -> None:
+    db = tmp_path / "partial-hold.db"
+    first = await Registry.open(db, now=_clock)
+    await first.add_lane(id="lane-1", handle="@one", source="own")
+    second = await Registry.open(db, now=_clock)
+    try:
+        held, _ = await first.reserve_delivery(
+            key="held",
+            lane="lane-1",
+            mode="send",
+            payload='{"prepared":"held"}',
+            text="held",
+        )
+        assert await first.claim_delivery(held.id)
+        await first.apply_receipt_observation(
+            ProviderObservation(
+                provider="codex",
+                binding_id="codex-default",
+                native_session_id="lane-1",
+                kind="accepted",
+                correlation=ProviderCorrelation(
+                    delivery_id=held.id,
+                    correlation_id=held.id,
+                    native_run_id="turn-1",
+                ),
+                generation="generation-1",
+                source="submit_result",
+                received_at=_clock(),
+                partial=True,
+                reason="bounded event loss",
+            )
+        )
+        waiting, _ = await second.reserve_delivery(
+            key="waiting",
+            lane="lane-1",
+            mode="send",
+            payload='{"prepared":"waiting"}',
+            text="waiting",
+        )
+
+        assert await second.claim_delivery(waiting.id) is False
+        assert (await first.get_delivery(held.id)).evidence_partial is True
+        assert (await second.get_delivery(waiting.id)).status == "queued"
     finally:
         await first.close()
         await second.close()

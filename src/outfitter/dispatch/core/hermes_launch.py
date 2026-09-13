@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from uuid import uuid4
 
 from outfitter.dispatch.client.hermes import HermesSessionCreated
@@ -12,6 +13,7 @@ from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.contracts.errors import (
     AppServerError,
     DeliveryConflictError,
+    DispatchError,
     ValidationError,
 )
 from outfitter.dispatch.registry.delivery import DeliveryReceipt
@@ -151,7 +153,15 @@ async def create_hermes_lane(
     if not await ctx.registry.claim_lane_launch(lane.id, generation=generation):
         raise AppServerError(f"Hermes creation reservation for {lane.ref} is held")
 
-    route.recheck()
+    try:
+        route.recheck()
+    except DispatchError as exc:
+        await ctx.registry.fail_lane_launch(
+            lane.id,
+            generation=generation,
+            error=str(exc)[:2000],
+        )
+        raise
     result = await route.adapter.create_session(
         lane_id=lane.id,
         cwd=str(launch.resolved.cwd),
@@ -167,7 +177,27 @@ async def create_hermes_lane(
             f"Hermes session creation outcome is unknown for {lane.ref}: {launch_record.error}"
         )
 
-    route.recheck()
+    try:
+        requested_cwd = launch.resolved.cwd.expanduser().resolve(strict=True)
+        effective_cwd = Path(result.effective_cwd).expanduser().resolve(strict=True)
+    except OSError as exc:
+        await ctx.registry.mark_lane_launch_ambiguous(
+            lane.id,
+            generation=generation,
+            error=f"Hermes effective cwd could not be verified: {exc}"[:2000],
+        )
+        raise AppServerError(f"Hermes effective cwd could not be verified for {lane.ref}") from exc
+    if not requested_cwd.is_dir() or not effective_cwd.is_dir() or effective_cwd != requested_cwd:
+        await ctx.registry.mark_lane_launch_ambiguous(
+            lane.id,
+            generation=generation,
+            error=(
+                f"Hermes effective cwd {result.effective_cwd!r} did not match "
+                f"requested cwd {str(launch.resolved.cwd)!r}"
+            )[:2000],
+        )
+        raise AppServerError(f"Hermes effective cwd did not match requested cwd for {lane.ref}")
+
     launch_record = await ctx.registry.record_lane_launch_mapping(
         lane.id,
         generation=generation,
@@ -204,6 +234,7 @@ async def create_hermes_lane(
             text=launch.text,
             delivery_id=delivery_id,
         )
+        route.recheck()
         await submit_reserved(delivery.id, ctx)
         delivery = await ctx.registry.get_delivery(delivery.id)
     lane = await ctx.registry.get_lane(lane.id)

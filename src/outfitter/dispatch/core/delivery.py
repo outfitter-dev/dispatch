@@ -168,10 +168,6 @@ async def send_reserved(inp: SendInput, lane: Lane, text: str, ctx: Ctx) -> Deli
             raise CapabilityUnavailableError(
                 "Hermes thread has an unresolved native attention hold; no submission was attempted"
             )
-        if await ctx.registry.lane_delivery_held(lane.id):
-            raise CapabilityUnavailableError(
-                "Hermes thread has an unresolved delivery; no submission was attempted"
-            )
         launch = await ctx.registry.get_lane_launch(lane.id)
         if (
             launch.status != "created"
@@ -232,6 +228,7 @@ async def send_reserved(inp: SendInput, lane: Lane, text: str, ctx: Ctx) -> Deli
         binding_id=request.target.binding_id,
         native_session_id=request.target.native_session_id,
         correlation_id=request.correlation_id,
+        exclusive_lane=lane.provider == "hermes",
     )
     if created:
         await ctx.registry.log_action(

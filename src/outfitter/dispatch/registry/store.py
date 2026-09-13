@@ -23,6 +23,7 @@ import aiosqlite
 
 from outfitter.dispatch.client.models import ConfigInfo
 from outfitter.dispatch.contracts.errors import (
+    CapabilityUnavailableError,
     DeliveryConflictError,
     NotFoundError,
     ValidationError,
@@ -2023,15 +2024,6 @@ class Registry:
 
         if not generation:
             raise ValidationError("lane launch generation cannot be empty")
-        if key is not None:
-            existing = await self.get_lane_launch_by_key(key)
-            if existing is not None:
-                if existing.submitted_payload != submitted_payload:
-                    raise DeliveryConflictError(f"lane launch key {key!r} is already bound")
-                return existing, await self.get_lane(existing.lane), False
-            if await self.get_delivery_by_key(key) is not None:
-                raise DeliveryConflictError(f"lane launch key {key!r} is already bound")
-
         lane_id = f"dsp_{uuid4().hex}"
         now = self._now()
         native_id = _initial_provider_thread_id(lane_id, provider, binding_id, None)
@@ -2070,7 +2062,16 @@ class Registry:
             created_at=now,
             updated_at=now,
         )
-        async with self._transaction():
+        async with self._transaction(immediate=key is not None):
+            if key is not None:
+                existing = await self.get_caller_key_binding(key)
+                if existing is not None:
+                    if existing[0] == "delivery":
+                        raise DeliveryConflictError(f"lane launch key {key!r} is already bound")
+                    launch = existing[1]
+                    if launch.submitted_payload != submitted_payload:
+                        raise DeliveryConflictError(f"lane launch key {key!r} is already bound")
+                    return launch, await self.get_lane(launch.lane), False
             await self._insert_lane(lane)
             await self._insert_lane_launch(launch)
         return launch, lane, True
@@ -2324,16 +2325,37 @@ class Registry:
         binding_id: str = DEFAULT_CODEX_BINDING_ID,
         native_session_id: str | None = None,
         correlation_id: str | None = None,
+        exclusive_lane: bool = False,
     ) -> tuple[DeliveryReceipt, bool]:
         """Reserve an idempotent delivery and its optional legacy queue row."""
 
         receipt_id = delivery_id or str(uuid4())
         now = self._now().isoformat()
-        if key is not None and await self.get_lane_launch_by_key(key) is not None:
-            raise DeliveryConflictError(f"delivery key {key!r} is already bound")
+
+        def exact_replay(existing: DeliveryReceipt) -> bool:
+            return (
+                existing.submitted_payload is not None
+                and submitted_payload is not None
+                and existing.submitted_payload == submitted_payload
+            ) or (
+                existing.submitted_payload is None
+                and submitted_payload is None
+                and (existing.lane, existing.mode, existing.payload, existing.transport)
+                == (lane, mode, payload, transport)
+            )
+
         try:
-            async with self._transaction():
-                await self._insert_delivery_reservation(
+            async with self._transaction(immediate=key is not None):
+                if key is not None:
+                    binding = await self.get_caller_key_binding(key)
+                    if binding is not None:
+                        if binding[0] == "launch":
+                            raise DeliveryConflictError(f"delivery key {key!r} is already bound")
+                        receipt = binding[1]
+                        if not exact_replay(receipt):
+                            raise DeliveryConflictError(f"delivery key {key!r} is already bound")
+                        return receipt, False
+                inserted = await self._insert_delivery_reservation(
                     receipt_id=receipt_id,
                     key=key,
                     lane=lane,
@@ -2347,25 +2369,22 @@ class Registry:
                     native_session_id=native_session_id or lane,
                     correlation_id=correlation_id or receipt_id,
                     now=now,
+                    exclusive_lane=exclusive_lane,
                 )
         except aiosqlite.IntegrityError:
-            existing = await self.get_delivery_by_key(key) if key is not None else None
-            if existing is not None:
-                exact_submitted_replay = (
-                    existing.submitted_payload is not None
-                    and submitted_payload is not None
-                    and existing.submitted_payload == submitted_payload
-                )
-                legacy_effective_replay = (
-                    existing.submitted_payload is None
-                    and submitted_payload is None
-                    and (existing.lane, existing.mode, existing.payload, existing.transport)
-                    == (lane, mode, payload, transport)
-                )
-                if not exact_submitted_replay and not legacy_effective_replay:
+            existing_receipt = await self.get_delivery_by_key(key) if key is not None else None
+            if existing_receipt is not None:
+                if not exact_replay(existing_receipt):
                     raise DeliveryConflictError(f"delivery key {key!r} is already bound") from None
-                return existing, False
+                return existing_receipt, False
             raise
+        if not inserted:
+            existing_receipt = await self.get_delivery_by_key(key) if key is not None else None
+            if existing_receipt is not None and exact_replay(existing_receipt):
+                return existing_receipt, False
+            raise CapabilityUnavailableError(
+                "thread has an unresolved delivery; no submission was attempted"
+            )
         return await self.get_delivery(receipt_id), True
 
     async def _insert_delivery_reservation(
@@ -2384,30 +2403,45 @@ class Registry:
         native_session_id: str,
         correlation_id: str,
         now: str,
-    ) -> None:
+        exclusive_lane: bool = False,
+    ) -> bool:
         """Insert one delivery reservation inside the caller's transaction."""
 
-        await self._conn.execute(
+        statement = (
             "INSERT INTO deliveries "
             "(id, key, lane, mode, submitted_payload, payload, transport, provider, "
             "binding_id, native_session_id, correlation_id, status, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
-            (
-                receipt_id,
-                key,
-                lane,
-                mode,
-                submitted_payload,
-                payload,
-                transport,
-                provider,
-                binding_id,
-                native_session_id,
-                correlation_id,
-                now,
-                now,
-            ),
+            "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?"
         )
+        if exclusive_lane:
+            statement += (
+                " WHERE NOT EXISTS (SELECT 1 FROM deliveries held WHERE held.lane = ? AND "
+                "(held.status IN ('queued', 'submitting', 'ambiguous') OR "
+                "(held.status = 'accepted' AND held.execution_status IS NULL)))"
+            )
+        params: tuple[object, ...] = (
+            receipt_id,
+            key,
+            lane,
+            mode,
+            submitted_payload,
+            payload,
+            transport,
+            provider,
+            binding_id,
+            native_session_id,
+            correlation_id,
+            now,
+            now,
+        )
+        if exclusive_lane:
+            params += (lane,)
+        inserted = await self._conn.execute(
+            statement,
+            params,
+        )
+        if inserted.rowcount != 1:
+            return False
         if mode == "queue" and transport == "turn":
             cur = await self._conn.execute(
                 "INSERT INTO queued_messages "
@@ -2422,6 +2456,7 @@ class Registry:
                 "UPDATE deliveries SET queue_id = ? WHERE id = ?",
                 (queue_id, receipt_id),
             )
+        return True
 
     @_serialized_access
     async def get_delivery(self, delivery_id: str) -> DeliveryReceipt:
@@ -2459,7 +2494,9 @@ class Registry:
                 "AND NOT EXISTS ("
                 "SELECT 1 FROM deliveries held "
                 "WHERE held.lane = deliveries.lane AND held.id != deliveries.id "
-                "AND held.status IN ('submitting', 'ambiguous')"
+                "AND (held.status IN ('submitting', 'ambiguous') OR "
+                "(held.status = 'accepted' AND held.execution_status IS NULL "
+                "AND held.evidence_partial = 1))"
                 ") AND (transport != 'native_queue' OR NOT EXISTS ("
                 "SELECT 1 FROM deliveries earlier "
                 "WHERE earlier.lane = deliveries.lane AND earlier.transport = 'native_queue' "

@@ -30,6 +30,7 @@ from outfitter.dispatch.daemon.hermes_worker import (
     OwnedHermesTransport,
     WorkerHermesClient,
 )
+from outfitter.dispatch.daemon.provider_manager import SharedCoreFailure
 
 
 @dataclass(frozen=True)
@@ -244,6 +245,7 @@ class _FakeClient:
 class _Adapter:
     def __init__(self, generation: str) -> None:
         self.observers_closed = asyncio.Event()
+        self.observer_failed = asyncio.Event()
         self.facts = ProviderBindingFacts(
             provider="hermes",
             binding_id="hermes-default",
@@ -254,6 +256,10 @@ class _Adapter:
 
     async def close_observers(self) -> None:
         self.observers_closed.set()
+
+    async def wait_observer_failure(self) -> None:
+        await self.observer_failed.wait()
+        raise RuntimeError("registry unavailable")
 
 
 async def test_worker_negotiates_before_ready_and_projects_provider_worker(tmp_path: Path) -> None:
@@ -308,6 +314,31 @@ async def test_worker_negotiates_before_ready_and_projects_provider_worker(tmp_p
     assert client.closed.is_set() is False
     await supervisor.close("generation-1")
     await run
+    assert adapter.observers_closed.is_set()
+
+
+async def test_worker_promotes_observer_failure_to_shared_core_failure(tmp_path: Path) -> None:
+    transport = _FakeOwnedTransport(object())
+    client = _FakeClient(object())
+    ready: list[ProviderBindingAdapter] = []
+    adapter = _Adapter("generation-1")
+    supervisor = HermesWorkerSupervisor(
+        _binding(tmp_path),
+        adapter_factory=lambda *_args: adapter,
+        mark_ready=ready.append,
+        transport_factory=cast(Any, lambda _binding: transport),
+        client_factory=cast(Any, lambda _transport: client),
+    )
+
+    run = asyncio.create_task(supervisor.run())
+    async with asyncio.timeout(1):
+        while not ready:
+            await asyncio.sleep(0)
+    adapter.observer_failed.set()
+
+    with pytest.raises(SharedCoreFailure, match="Hermes observation failed"):
+        await run
+    assert client.closed.is_set()
     assert adapter.observers_closed.is_set()
 
 

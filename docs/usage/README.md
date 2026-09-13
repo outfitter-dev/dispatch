@@ -840,6 +840,10 @@ fails unless attached writes are enabled. `self` is derived from `CODEX_THREAD_I
 so the current Codex thread must already be managed by Dispatch. Use explicit
 `--to <ref>` when one lane is subscribing on behalf of another.
 
+Hermes lanes cannot be subscription targets yet because their native activity is
+not projected into the shared lane-event stream. They can receive durable
+`delivery:inbox` updates as subscribers; `delivery:turn` remains unavailable.
+
 ```bash
 uv run dispatch subscribe @worker
 uv run dispatch subscribe @worker when:done,delivery:inbox

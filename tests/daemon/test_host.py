@@ -193,6 +193,68 @@ async def test_control_and_cached_reads_start_while_codex_is_unavailable(
         pytest.fail(f"daemon exited during provider outage: {daemon.exception()!r}")
 
 
+async def test_daemon_status_reports_invalid_router_only_hermes_binding(
+    monkeypatch: MonkeyPatch, socket_dir: Path, tmp_path: Path
+) -> None:
+    socket_path = socket_dir / "dispatchd.sock"
+    attempts = 0
+
+    async def unavailable_client() -> object:
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError("Codex executable unavailable")
+
+    async def skip_warning(_log: structlog.stdlib.BoundLogger) -> None:
+        return None
+
+    def invalid_hermes_binding() -> None:
+        raise ValueError("profile is malformed")
+
+    monkeypatch.setattr(host, "_spawn_client", unavailable_client)
+    monkeypatch.setattr(host, "_warn_if_codex_below_floor", skip_warning)
+    monkeypatch.setattr(host, "hermes_binding_config", invalid_hermes_binding)
+
+    daemon = asyncio.create_task(run_daemon(socket_path, tmp_path / "registry.db"))
+    try:
+        async with asyncio.timeout(1):
+            while not socket_path.exists():
+                await asyncio.sleep(0.01)
+        async with asyncio.timeout(1):
+            while attempts == 0:
+                await asyncio.sleep(0.01)
+
+        status = await _call(socket_path, "status", {})
+        assert isinstance(status["result"], dict)
+        assert status["result"]["providers"] == [
+            {
+                "provider": "codex",
+                "binding_id": "codex-default",
+                "state": "unavailable",
+                "reason": "Codex executable unavailable",
+                "last_error": "Codex executable unavailable",
+                "observed_at": ANY,
+                "connection_generation": None,
+                "owns_process": True,
+            },
+            {
+                "provider": "hermes",
+                "binding_id": "hermes-default",
+                "state": "unavailable",
+                "reason": "invalid Hermes binding configuration: profile is malformed",
+                "last_error": "invalid Hermes binding configuration: profile is malformed",
+                "observed_at": ANY,
+                "connection_generation": None,
+                "owns_process": False,
+            },
+        ]
+    finally:
+        daemon.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await daemon
+
+    assert not socket_path.exists()
+
+
 async def test_shared_registry_recovery_failure_terminates_daemon(
     monkeypatch: MonkeyPatch, socket_dir: Path, tmp_path: Path
 ) -> None:

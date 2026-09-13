@@ -49,6 +49,9 @@ ObservationSink = Callable[[ProviderObservation], Awaitable[object]]
 HERMES_ACTIONS = frozenset({ProviderAction.LAUNCH, ProviderAction.SEND})
 HERMES_OBSERVED_TEXT_CHARS = 32_000
 HERMES_ATTENTION_MEMBER_LIMIT = 64
+HERMES_NATIVE_CAPABILITY_ATTENTION_FAMILIES = frozenset(
+    {"terminal.read", "preview.read", "preview.act", "window.read", "tour"}
+)
 
 
 @dataclass(frozen=True)
@@ -119,6 +122,9 @@ class HermesLaneAdapter:
         self._observe_transcript = observe_transcript
         self._observe_activity = observe_activity
         self._tasks: set[asyncio.Task[None]] = set()
+        self._observer_failure = asyncio.Event()
+        self._observer_error: BaseException | None = None
+        self._observer_error_observed = False
         self._sessions: dict[str, tuple[str, str]] = {}
         self.facts = ProviderBindingFacts(
             provider="hermes",
@@ -179,8 +185,7 @@ class HermesLaneAdapter:
                 self._observe_turn(request, result),
                 name=f"hermes-turn:{target.runtime_session_id}:{result.turn_id}",
             )
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
+            self._track_observer(task)
         return ProviderSubmissionAccepted(
             turn_id=result.turn_id,
             evidence_partial=result.partial,
@@ -192,6 +197,30 @@ class HermesLaneAdapter:
 
         if self._tasks:
             await asyncio.gather(*tuple(self._tasks), return_exceptions=True)
+        if self._observer_error is not None and not self._observer_error_observed:
+            self._observer_error_observed = True
+            raise self._observer_error
+
+    async def wait_observer_failure(self) -> None:
+        """Raise the first retained observer failure to the owning worker."""
+
+        await self._observer_failure.wait()
+        assert self._observer_error is not None
+        self._observer_error_observed = True
+        raise self._observer_error
+
+    def _track_observer(self, task: asyncio.Task[None]) -> None:
+        self._tasks.add(task)
+        task.add_done_callback(self._observer_done)
+
+    def _observer_done(self, task: asyncio.Task[None]) -> None:
+        self._tasks.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None and self._observer_error is None:
+            self._observer_error = error
+            self._observer_failure.set()
 
     def _receive_attention(self, event: HermesAttentionEvent) -> None:
         if self._observe_attention is None:
@@ -208,16 +237,19 @@ class HermesLaneAdapter:
             kind=event.type,
             family=event.family,
             request_id=event.request_id,
-            category=event.category,
-            expired=event.expired,
+            category=(
+                "native_client_capability_unavailable"
+                if event.family in HERMES_NATIVE_CAPABILITY_ATTENTION_FAMILIES
+                else "human_or_sensitive_input"
+            ),
+            expired=event.phase == "expire",
             observed_at=datetime.now(UTC),
         )
         task = asyncio.create_task(
             self._forward_attention(observation),
             name=f"hermes-attention:{event.runtime_session_id}:{event.family}",
         )
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        self._track_observer(task)
 
     async def _forward_attention(self, observation: HermesAttentionObservation) -> None:
         assert self._observe_attention is not None
@@ -243,8 +275,7 @@ class HermesLaneAdapter:
             self._forward_activity(observation),
             name=f"hermes-activity:{event.runtime_session_id}:{event.turn_id}",
         )
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        self._track_observer(task)
 
     async def _forward_activity(self, observation: HermesSessionActivityObservation) -> None:
         assert self._observe_activity is not None

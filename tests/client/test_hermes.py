@@ -409,12 +409,12 @@ async def test_known_blocking_requests_reach_attention_without_turn_attribution(
             "vault.code",
         ]
         assert all(event.runtime_session_id == "runtime-1" for event in observed)
-        assert all(event.expired is False for event in observed)
+        assert all(event.phase == "request" for event in observed)
     finally:
         await client.close()
 
 
-async def test_attention_parser_fences_telemetry_and_only_forwards_proven_expiry() -> None:
+async def test_attention_parser_forwards_raw_request_and_expiry_primitives() -> None:
     transport = FakeTransport()
     observed: list[HermesAttentionEvent] = []
     client = await _negotiated_client(transport)
@@ -428,9 +428,13 @@ async def test_attention_parser_fences_telemetry_and_only_forwards_proven_expiry
         transport.feed(_attention_event("clarify.expire", "runtime-1", "request-1"))
         await asyncio.sleep(0)
 
-        assert [(event.type, event.request_id) for event in observed] == [
-            ("clarify.request", None),
-            ("clarify.expire", "request-1"),
+        assert [(event.type, event.request_id, event.phase) for event in observed] == [
+            ("unknown.request", "request-1", "request"),
+            ("approval.expire", "request-1", "expire"),
+            ("clarify.expire", None, "expire"),
+            ("clarify.request", None, "request"),
+            ("clarify.expire", "request-1", "expire"),
         ]
+        assert observed[0].payload == {"request_id": "request-1"}
     finally:
         await client.close()

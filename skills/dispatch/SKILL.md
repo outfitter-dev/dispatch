@@ -579,6 +579,10 @@ enabled. `self` is derived from `CODEX_THREAD_ID`, so the calling thread must
 already be managed by dispatch. Use explicit `--to <ref>` when one managed lane
 is subscribing on behalf of another.
 
+Hermes lanes cannot be subscription targets yet because their native activity is
+not projected into the shared lane-event stream. They can receive durable
+`delivery:inbox` updates as subscribers; `delivery:turn` remains unavailable.
+
 Useful `when` buckets:
 
 - `done`: completed or failed turns.

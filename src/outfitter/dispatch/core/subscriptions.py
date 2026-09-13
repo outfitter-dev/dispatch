@@ -16,6 +16,7 @@ from outfitter.dispatch.client.events import (
     TurnFailed,
 )
 from outfitter.dispatch.contracts.context import Ctx
+from outfitter.dispatch.contracts.errors import CapabilityUnavailableError
 from outfitter.dispatch.registry.models import Lane, Subscription
 
 from . import queue
@@ -118,6 +119,8 @@ async def _deliver_subscription(
     ctx: Ctx, target: Lane, subscription: Subscription, event: SubscriptionEventInfo
 ) -> None:
     subscriber = await ctx.registry.get_lane(subscription.subscriber_lane)
+    if subscription.delivery == "turn" and subscriber.provider == "hermes":
+        raise CapabilityUnavailableError("Hermes subscriptions support delivery:inbox only")
     tail = await _tail_text(ctx, target, subscription.tail)
     subject = f"{target.handle} {event.name}"
     body = _message_body(target, subscription, event, tail)

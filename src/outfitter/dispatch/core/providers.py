@@ -882,6 +882,11 @@ class ProviderRouter:
     def facts_for_binding(self, provider: str, binding_id: str) -> ProviderBindingFacts | None:
         return self._facts.get((provider, binding_id))
 
+    def binding_facts(self) -> tuple[ProviderBindingFacts, ...]:
+        """Return the current facts for every registered binding."""
+
+        return tuple(self._facts[key] for key in sorted(self._facts))
+
     def _availability(self, provider: str, binding_id: str) -> ProviderAvailability:
         facts = self._facts.get((provider, binding_id))
         if facts is None:

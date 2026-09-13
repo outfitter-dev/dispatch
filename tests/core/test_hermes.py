@@ -4,6 +4,8 @@ import asyncio
 from collections.abc import Callable
 from typing import cast
 
+import pytest
+
 from outfitter.dispatch.client.hermes import (
     HermesAttentionEvent,
     HermesClient,
@@ -126,6 +128,38 @@ async def test_adapter_maps_correlated_native_lifecycle() -> None:
     ]
 
 
+async def test_adapter_retains_observer_failure_for_the_owning_worker() -> None:
+    events = (
+        HermesEvent(
+            type="message.start",
+            runtime_session_id="runtime-1",
+            turn_id="turn-1",
+            payload={"turn_id": "turn-1"},
+        ),
+        HermesEvent(
+            type="message.complete",
+            runtime_session_id="runtime-1",
+            turn_id="turn-1",
+            payload={"turn_id": "turn-1", "status": "complete"},
+        ),
+    )
+    client = StubHermesClient(HermesSubmissionAccepted("turn-1", _stream(*events)))
+    observed: list[str] = []
+
+    async def observe(event: ProviderObservation) -> object:
+        observed.append(event.kind)
+        raise RuntimeError("registry unavailable")
+
+    adapter = HermesLaneAdapter(cast(HermesClient, client), generation="gen-1", observe=observe)
+    result = await adapter.submit_prepared(_request())
+
+    assert isinstance(result, ProviderSubmissionAccepted)
+    with pytest.raises(RuntimeError, match="registry unavailable"):
+        await adapter.wait_observer_failure()
+    await adapter.close_observers()
+    assert observed == ["started", "uncertain"]
+
+
 async def test_adapter_reports_buffer_overflow_as_accepted_but_partial() -> None:
     client = StubHermesClient(HermesSubmissionAccepted("turn-1", _stream(partial=True)))
 
@@ -192,8 +226,8 @@ async def test_adapter_scopes_turn_uncorrelated_attention_to_created_lane() -> N
             family="clarify",
             runtime_session_id="runtime-1",
             request_id="request-1",
-            category="human_or_sensitive_input",
-            expired=False,
+            phase="request",
+            payload={"request_id": "request-1"},
         )
     )
     await asyncio.sleep(0)
@@ -203,6 +237,55 @@ async def test_adapter_scopes_turn_uncorrelated_attention_to_created_lane() -> N
     assert attention[0].stored_session_id == "stored-1"
     assert attention[0].runtime_session_id == "runtime-1"
     assert attention[0].generation == "gen-1"
+    assert attention[0].category == "human_or_sensitive_input"
+
+
+async def test_adapter_owns_attention_category_policy() -> None:
+    client = StubHermesClient(HermesSubmissionAccepted("turn-1", _stream()))
+    attention: list[HermesAttentionObservation] = []
+
+    async def observe(event: ProviderObservation) -> object:
+        return event
+
+    async def observe_attention(event: HermesAttentionObservation) -> object:
+        attention.append(event)
+        return event
+
+    adapter = HermesLaneAdapter(
+        cast(HermesClient, client),
+        generation="gen-1",
+        observe=observe,
+        observe_attention=observe_attention,
+    )
+    await adapter.create_session(lane_id="dsp_lane", cwd="/work", title="Worker")
+    assert client.attention_handler is not None
+    client.attention_handler(
+        HermesAttentionEvent(
+            type="future.blocker.request",
+            family="future.blocker",
+            runtime_session_id="runtime-1",
+            request_id="request-2",
+            phase="request",
+            payload={"request_id": "request-2"},
+        )
+    )
+    client.attention_handler(
+        HermesAttentionEvent(
+            type="terminal.read.request",
+            family="terminal.read",
+            runtime_session_id="runtime-1",
+            request_id="request-3",
+            phase="request",
+            payload={"request_id": "request-3"},
+        )
+    )
+    await asyncio.sleep(0)
+
+    assert len(attention) == 2
+    assert attention[0].family == "future.blocker"
+    assert attention[0].category == "human_or_sensitive_input"
+    assert attention[1].family == "terminal.read"
+    assert attention[1].category == "native_client_capability_unavailable"
 
 
 async def test_adapter_scopes_uncorrelated_activity_to_created_runtime_session() -> None:

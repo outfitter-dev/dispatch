@@ -33,7 +33,13 @@ from outfitter.dispatch.core.hermes import (
     apply_hermes_delivery_observation,
     apply_hermes_transcript_observation,
 )
-from outfitter.dispatch.core.models import NewInput, SendInput, ShowInput, TranscriptInput
+from outfitter.dispatch.core.models import (
+    NewInput,
+    SendInput,
+    ShowInput,
+    SubscribeInput,
+    TranscriptInput,
+)
 from outfitter.dispatch.core.providers import (
     PreparedProviderRequest,
     ProviderAction,
@@ -156,9 +162,201 @@ async def test_hermes_launch_without_prompt_persists_separate_native_identities(
     assert result.launch.stored_session_id == "stored-1"
     assert result.delivery is None
     assert result.message_accepted is False
+    assert result.capabilities.send is True
+    assert result.capabilities.queue is False
     assert adapter.create_calls[0]["cwd"] == str(tmp_path)
     assert adapter.create_calls[0]["title"].endswith("worker")
     assert adapter.submissions == []
+
+
+async def test_hermes_launch_rejects_mismatched_effective_cwd(
+    store: Registry, tmp_path: Path
+) -> None:
+    requested = tmp_path / "requested"
+    effective = tmp_path / "effective"
+    requested.mkdir()
+    effective.mkdir()
+
+    class MismatchedCwdAdapter(FakeHermesAdapter):
+        async def create_session(
+            self, *, lane_id: str, cwd: str, title: str
+        ) -> HermesSessionCreationResult:
+            self.create_calls.append({"cwd": cwd, "title": title})
+            return HermesSessionCreated(
+                runtime_session_id="runtime-1",
+                stored_session_id="stored-1",
+                effective_cwd=str(effective),
+            )
+
+    adapter = MismatchedCwdAdapter()
+    ctx = _hermes_ctx(store, adapter)
+    with pytest.raises(AppServerError, match="effective cwd did not match"):
+        await handlers.new_lane(
+            NewInput(
+                name="worker",
+                cwd=str(requested),
+                provider="hermes",
+                text="first",
+                idempotency_key="launch-key",
+            ),
+            ctx,
+        )
+
+    lanes = await store.list_lanes()
+    assert len(lanes) == 1
+    launch = await store.get_lane_launch(lanes[0].id)
+    assert launch.status == "ambiguous"
+    assert launch.runtime_session_id is None
+    assert lanes[0].provider_thread_id is None
+    assert launch.first_delivery_id is None
+    assert len(adapter.create_calls) == 1
+    assert adapter.submissions == []
+
+
+async def test_successful_create_is_persisted_before_readiness_recheck(
+    store: Registry, tmp_path: Path
+) -> None:
+    class DisconnectAfterCreateAdapter(FakeHermesAdapter):
+        router: ProviderRouter
+
+        async def create_session(
+            self, *, lane_id: str, cwd: str, title: str
+        ) -> HermesSessionCreationResult:
+            result = await super().create_session(lane_id=lane_id, cwd=cwd, title=title)
+            self.router.register_unavailable(
+                provider="hermes",
+                binding_id="hermes-default",
+                supported_actions=self.facts.supported_actions,
+                reason="gateway disconnected",
+                generation="generation-1",
+                durability=self.facts.durability,
+            )
+            return result
+
+    adapter = DisconnectAfterCreateAdapter()
+    ctx = _hermes_ctx(store, adapter)
+    adapter.router = _router(ctx)
+    request = NewInput(
+        name="worker",
+        cwd=str(tmp_path),
+        provider="hermes",
+        text="first",
+        idempotency_key="launch-key",
+    )
+
+    with pytest.raises(CapabilityUnavailableError, match="gateway disconnected"):
+        await handlers.new_lane(request, ctx)
+
+    lane = (await store.list_lanes())[0]
+    launch = await store.get_lane_launch(lane.id)
+    assert launch.status == "created"
+    assert launch.runtime_session_id == "runtime-1"
+    assert launch.stored_session_id == "stored-1"
+    assert launch.effective_cwd == str(tmp_path)
+    assert launch.first_delivery_id is not None
+    delivery = await store.get_delivery(launch.first_delivery_id)
+    assert delivery.status == "queued"
+    replay = await handlers.new_lane(request, ctx)
+    assert replay.launch is not None
+    assert replay.launch.status == launch.status
+    assert replay.launch.runtime_session_id == launch.runtime_session_id
+    assert replay.delivery is not None
+    assert replay.delivery.id == delivery.id
+    assert replay.delivery.status == "queued"
+    assert len(adapter.create_calls) == 1
+    assert adapter.submissions == []
+
+
+async def test_launch_readiness_failure_after_claim_is_recorded_as_failed(
+    store: Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = FakeHermesAdapter()
+    ctx = _hermes_ctx(store, adapter)
+    original_claim = store.claim_lane_launch
+
+    async def claim_then_disconnect(lane_id: str, *, generation: str) -> bool:
+        claimed = await original_claim(lane_id, generation=generation)
+        _router(ctx).register_unavailable(
+            provider="hermes",
+            binding_id="hermes-default",
+            supported_actions=adapter.facts.supported_actions,
+            reason="gateway disconnected before create",
+            generation=generation,
+            durability=adapter.facts.durability,
+        )
+        return claimed
+
+    monkeypatch.setattr(store, "claim_lane_launch", claim_then_disconnect)
+    request = NewInput(
+        name="worker",
+        cwd=str(tmp_path),
+        provider="hermes",
+        send=False,
+        idempotency_key="launch-key",
+    )
+
+    with pytest.raises(CapabilityUnavailableError, match="disconnected before create"):
+        await handlers.new_lane(request, ctx)
+
+    lane = (await store.list_lanes())[0]
+    launch = await store.get_lane_launch(lane.id)
+    assert launch.status == "failed"
+    assert launch.error == "gateway disconnected before create"
+    assert launch.runtime_session_id is None
+    assert launch.stored_session_id is None
+    assert lane.provider_thread_id is None
+    assert launch.first_delivery_id is None
+    assert adapter.create_calls == []
+
+    replay = await handlers.new_lane(request, ctx)
+    assert replay.launch is not None
+    assert replay.launch.status == "failed"
+    assert replay.delivery is None
+    assert adapter.create_calls == []
+
+
+async def test_hermes_target_subscription_is_rejected_before_creation(
+    store: Registry, tmp_path: Path
+) -> None:
+    adapter = FakeHermesAdapter()
+    ctx = _hermes_ctx(store, adapter)
+    lane = await handlers.new_lane(
+        NewInput(name="worker", cwd=str(tmp_path), provider="hermes", send=False), ctx
+    )
+
+    subscriber = await store.add_lane(
+        id="subscriber", handle="@subscriber", source="own", status="idle"
+    )
+    with pytest.raises(CapabilityUnavailableError, match="target subscriptions are unavailable"):
+        await handlers.subscribe(
+            SubscribeInput(
+                target=lane.ref,
+                delivery="inbox",
+                to=subscriber.ref,
+            ),
+            ctx,
+        )
+
+    assert await store.list_subscriptions() == []
+
+
+async def test_hermes_turn_subscription_is_rejected_before_creation(
+    store: Registry, tmp_path: Path
+) -> None:
+    adapter = FakeHermesAdapter()
+    ctx = _hermes_ctx(store, adapter)
+    subscriber = await handlers.new_lane(
+        NewInput(name="worker", cwd=str(tmp_path), provider="hermes", send=False), ctx
+    )
+    target = await store.add_lane(id="target", handle="@target", source="own", status="idle")
+
+    with pytest.raises(CapabilityUnavailableError, match="delivery:inbox only"):
+        await handlers.subscribe(
+            SubscribeInput(target=target.ref, delivery="turn", to=subscriber.ref),
+            ctx,
+        )
+
+    assert await store.list_subscriptions() == []
 
 
 async def test_hermes_initial_prompt_is_a_reserved_correlated_delivery(

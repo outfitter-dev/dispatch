@@ -311,7 +311,8 @@ def _capabilities(lane: Lane, ctx: Ctx) -> LaneCapabilities:
         send=effective(ProviderAction.SEND),
         context=effective(ProviderAction.INJECT_CONTEXT),
         steer=effective(ProviderAction.STEER),
-        queue=effective(
+        queue=lane.provider != "hermes"
+        and effective(
             ProviderAction.QUEUE_NATIVE if lane.source == "attached" else ProviderAction.SEND
         ),
         interject=effective(ProviderAction.INTERRUPT) and effective(ProviderAction.SEND),
@@ -2055,12 +2056,16 @@ async def server_request_respond(
 
 async def subscribe(inp: SubscribeInput, ctx: Ctx) -> SubscriptionView:
     target = await _resolve(ctx, inp.target)
+    if target.provider == "hermes":
+        raise CapabilityUnavailableError("Hermes target subscriptions are unavailable")
     settings = _subscription_settings(inp)
     subscriber = (
         await _resolve_self(ctx, inp.caller_thread_id)
         if settings["to"] == "self"
         else await _resolve(ctx, settings["to"])
     )
+    if settings["delivery"] == "turn" and subscriber.provider == "hermes":
+        raise CapabilityUnavailableError("Hermes subscriptions support delivery:inbox only")
     if (
         settings["delivery"] == "turn"
         and not _can_write(subscriber, ctx)
@@ -3808,10 +3813,10 @@ async def status(inp: StatusInput, ctx: Ctx) -> StatusOutput:
     triggers = await ctx.registry.list_triggers()
     busy = sum(1 for lane in lanes if lane.status == "busy")
     waiting_approval = sum(1 for lane in lanes if lane.status == "waiting_approval")
-    providers = (
-        []
-        if ctx.provider_manager is None
-        else [
+    providers: list[ProviderBindingStatusView] = []
+    if ctx.provider_manager is not None:
+        snapshots = ctx.provider_manager.snapshots()
+        providers.extend(
             ProviderBindingStatusView(
                 provider=snapshot.provider,
                 binding_id=snapshot.binding_id,
@@ -3822,9 +3827,26 @@ async def status(inp: StatusInput, ctx: Ctx) -> StatusOutput:
                 connection_generation=snapshot.connection_generation,
                 owns_process=snapshot.owns_process,
             )
-            for snapshot in ctx.provider_manager.snapshots()
-        ]
-    )
+            for snapshot in snapshots
+        )
+        managed = {(snapshot.provider, snapshot.binding_id) for snapshot in snapshots}
+        for facts in router_for(ctx).binding_facts():
+            if (facts.provider, facts.binding_id) in managed:
+                continue
+            availability = facts.availability
+            providers.append(
+                ProviderBindingStatusView(
+                    provider=facts.provider,
+                    binding_id=facts.binding_id,
+                    state="ready" if availability.ready else "unavailable",
+                    reason=availability.reason,
+                    last_error=None if availability.ready else availability.reason,
+                    observed_at=ctx.registry.now_iso(),
+                    connection_generation=availability.generation,
+                    owns_process=False,
+                )
+            )
+        providers.sort(key=lambda binding: (binding.provider, binding.binding_id))
     return StatusOutput(
         lanes=len(lanes),
         idle=sum(1 for lane in lanes if lane.status == "idle"),

@@ -114,6 +114,49 @@ async def test_creation_and_delivery_keys_share_one_local_namespace(store: Regis
         await _reserve(store, key="delivery-key")
 
 
+async def test_creation_and_delivery_key_race_has_one_winner_across_connections(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "registry.db"
+    first = await Registry.open(db, now=_clock)
+    second = await Registry.open(db, now=_clock)
+    try:
+        lane = await first.add_lane(
+            id="dsp_existing",
+            handle="@existing",
+            source="own",
+            provider="hermes",
+            binding_id="hermes-default",
+        )
+
+        for index in range(10):
+            key = f"shared-{index}"
+            results = await asyncio.gather(
+                _reserve(first, key=key),
+                second.reserve_delivery(
+                    key=key,
+                    lane=lane.id,
+                    mode="send",
+                    payload="{}",
+                    text="hello",
+                    provider="hermes",
+                    binding_id="hermes-default",
+                ),
+                return_exceptions=True,
+            )
+
+            assert sum(not isinstance(result, BaseException) for result in results) == 1
+            errors = [result for result in results if isinstance(result, BaseException)]
+            assert len(errors) == 1
+            assert isinstance(errors[0], DeliveryConflictError)
+            launch = await first.get_lane_launch_by_key(key)
+            delivery = await first.get_delivery_by_key(key)
+            assert (launch is None) != (delivery is None)
+    finally:
+        await first.close()
+        await second.close()
+
+
 async def test_claim_is_exclusive_and_unfinished_claim_stays_held_after_reopen(
     tmp_path: Path,
 ) -> None:

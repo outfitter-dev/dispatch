@@ -31,7 +31,7 @@ from outfitter.dispatch.core.providers import (
     ProviderDurability,
 )
 
-from .provider_manager import ProviderWorker
+from .provider_manager import ProviderWorker, SharedCoreFailure
 
 DEFAULT_HERMES_STDIO_LIMIT = 8 * 1024 * 1024
 DEFAULT_HERMES_STDERR_LINES = 50
@@ -77,6 +77,8 @@ class WorkerHermesClient(Protocol):
 
 class WorkerHermesAdapter(ProviderBindingAdapter, Protocol):
     async def close_observers(self) -> None: ...
+
+    async def wait_observer_failure(self) -> None: ...
 
 
 type HermesAdapterFactory = Callable[
@@ -308,7 +310,7 @@ class HermesWorkerSupervisor:
                 return
             adapter = self._adapter_factory(cast(HermesClient, client), generation, capabilities)
             self._mark_ready(adapter)
-            await client.wait_closed()
+            await self._wait_until_closed_or_observer_failed(client, adapter)
             if not self._stopping.is_set():
                 raise HermesTransportError(
                     f"owned Hermes gateway generation {generation} closed unexpectedly"
@@ -317,12 +319,49 @@ class HermesWorkerSupervisor:
             if client is not None:
                 await client.close()
                 if adapter is not None:
-                    await adapter.close_observers()
+                    try:
+                        await adapter.close_observers()
+                    except asyncio.CancelledError:
+                        raise
+                    except SharedCoreFailure:
+                        raise
+                    except Exception as exc:
+                        raise SharedCoreFailure(
+                            "shared registry Hermes observation failed"
+                        ) from exc
             else:
                 await transport.close(self._generation)
             if self._transport is transport:
                 self._transport = None
                 self._client = None
+
+    async def _wait_until_closed_or_observer_failed(
+        self,
+        client: WorkerHermesClient,
+        adapter: WorkerHermesAdapter,
+    ) -> None:
+        client_closed = asyncio.create_task(client.wait_closed(), name="hermes-client-closed")
+        observer_failed = asyncio.create_task(
+            adapter.wait_observer_failure(), name="hermes-observer-failed"
+        )
+        try:
+            done, _ = await asyncio.wait(
+                {client_closed, observer_failed}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if observer_failed in done:
+                try:
+                    await observer_failed
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    raise SharedCoreFailure("shared registry Hermes observation failed") from exc
+                raise SharedCoreFailure("Hermes observer failure signal ended without an error")
+            await client_closed
+        finally:
+            for task in (client_closed, observer_failed):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(client_closed, observer_failed, return_exceptions=True)
 
     async def close(self, expected_generation: str | None = None) -> None:
         if expected_generation is not None and expected_generation != self._generation:

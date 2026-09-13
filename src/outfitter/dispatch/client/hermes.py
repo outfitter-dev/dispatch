@@ -85,44 +85,20 @@ class HermesEvent:
     payload: dict[str, object]
 
 
-HermesAttentionCategory = Literal[
-    "human_or_sensitive_input", "native_client_capability_unavailable"
-]
-
-
 @dataclass(frozen=True)
 class HermesAttentionEvent:
-    """One source-proven native blocking request or matching expiry event."""
+    """One raw native request or expiry primitive from the Hermes gateway."""
 
     type: str
     family: str
     runtime_session_id: str
     request_id: str | None
-    category: HermesAttentionCategory
-    expired: bool
+    phase: Literal["request", "expire"]
+    payload: dict[str, object]
 
 
 type HermesAttentionHandler = Callable[[HermesAttentionEvent], None]
 type HermesActivityHandler = Callable[[HermesEvent], None]
-
-_HUMAN_ATTENTION_FAMILIES = frozenset(
-    {
-        "clarify",
-        "approval",
-        "mcp.setup",
-        "sudo",
-        "secret",
-        "vault.unlock",
-        "vault.save_login",
-        "vault.code",
-    }
-)
-_NATIVE_CAPABILITY_ATTENTION_FAMILIES = frozenset(
-    {"terminal.read", "preview.read", "preview.act", "window.read", "tour"}
-)
-_EXPIRING_ATTENTION_FAMILIES = (
-    _HUMAN_ATTENTION_FAMILIES | _NATIVE_CAPABILITY_ATTENTION_FAMILIES
-) - {"approval"}
 
 
 class HermesTurnStream:
@@ -571,25 +547,17 @@ def _attention_event(
     if suffix is None:
         return None
     family = event_type[: -(len(suffix) + 1)]
-    if family in _HUMAN_ATTENTION_FAMILIES:
-        category: HermesAttentionCategory = "human_or_sensitive_input"
-    elif family in _NATIVE_CAPABILITY_ATTENTION_FAMILIES:
-        category = "native_client_capability_unavailable"
-    else:
-        return None
-    if suffix == "expire" and family not in _EXPIRING_ATTENTION_FAMILIES:
+    if not family:
         return None
     raw_request_id = payload.get("request_id")
     request_id = (
         raw_request_id if isinstance(raw_request_id, str) and raw_request_id.strip() else None
     )
-    if suffix == "expire" and request_id is None:
-        return None
     return HermesAttentionEvent(
         type=event_type,
         family=family,
         runtime_session_id=runtime_session_id,
         request_id=request_id,
-        category=category,
-        expired=suffix == "expire",
+        phase=suffix,
+        payload=dict(payload),
     )
