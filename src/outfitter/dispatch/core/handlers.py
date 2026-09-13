@@ -986,7 +986,12 @@ async def attach_lane(inp: AttachInput, ctx: Ctx) -> LaneRef:
     existing = await ctx.registry.find_lane(inp.thread)
     if existing is not None:
         if inp.sync:
-            _require_default_codex_binding(existing, "sync")
+            if not _is_default_codex_lane(existing):
+                raise CapabilityUnavailableError(
+                    "history sync is unavailable for provider binding "
+                    f"{existing.provider}:{existing.binding_id}; only the default Codex "
+                    "binding has a defined history contract"
+                )
             await _sync_lane(existing, ctx, full=False)
         return _ref(existing, ctx)  # idempotent re-attach
     try:
