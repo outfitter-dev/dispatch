@@ -520,6 +520,57 @@ async def test_started_receipt_rejects_stale_nonterminal_observation_across_regi
         await winner.close()
 
 
+async def test_cancelled_immediate_transaction_does_not_acquire_writer_later(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "cancelled-begin.db"
+    holder = await Registry.open(db, now=_clock)
+    cancelled = await Registry.open(db, now=_clock)
+    holder_acquired = asyncio.Event()
+    release_holder = asyncio.Event()
+
+    async def hold_writer() -> None:
+        async with holder._transaction(immediate=True):
+            holder_acquired.set()
+            await release_holder.wait()
+
+    async def wait_for_writer() -> None:
+        async with cancelled._transaction(immediate=True):
+            pytest.fail("cancelled transaction must not enter its body")
+
+    holder_task = asyncio.create_task(hold_writer())
+    cancelled_task: asyncio.Task[None] | None = None
+    try:
+        await holder_acquired.wait()
+        cancelled_task = asyncio.create_task(wait_for_writer())
+        # The contender first enters _transaction, then its shielded begin task
+        # queues on aiosqlite's worker behind the held SQLite writer.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        cancelled_task.cancel()
+        await asyncio.sleep(0)
+        assert not cancelled_task.done()
+
+        release_holder.set()
+        await holder_task
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled_task
+
+        assert cancelled._conn.in_transaction is False
+        await cancelled.add_lane(id="after-cancel", handle="@after", source="own")
+        assert await holder.find_lane("after-cancel") is not None
+    finally:
+        release_holder.set()
+        if not holder_task.done():
+            await holder_task
+        if cancelled_task is not None and not cancelled_task.done():
+            cancelled_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await cancelled_task
+        await holder.close()
+        await cancelled.close()
+
+
 @pytest.mark.parametrize("terminal", ["failed", "interrupted"])
 async def test_execution_failure_remains_provider_accepted(
     store: Registry,

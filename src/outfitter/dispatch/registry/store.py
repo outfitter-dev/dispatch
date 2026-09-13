@@ -802,7 +802,30 @@ class Registry:
     @asynccontextmanager
     async def _transaction(self, *, immediate: bool = False) -> AsyncIterator[None]:
         async with self._write_lock:
-            await self._conn.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+
+            async def begin() -> None:
+                await self._conn.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+
+            begin_task = asyncio.create_task(begin())
+            try:
+                await asyncio.shield(begin_task)
+            except asyncio.CancelledError:
+
+                async def finish_begin_and_rollback() -> None:
+                    try:
+                        await begin_task
+                    except BaseException:
+                        return
+                    await self._conn.rollback()
+
+                cleanup_task = asyncio.create_task(finish_begin_and_rollback())
+                while not cleanup_task.done():
+                    try:
+                        await asyncio.shield(cleanup_task)
+                    except asyncio.CancelledError:
+                        continue
+                cleanup_task.result()
+                raise
             try:
                 yield
             except BaseException:
