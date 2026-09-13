@@ -9,7 +9,7 @@ import pytest_asyncio
 from outfitter.dispatch.client.events import ServerRequestReceived, classify_server_request
 from outfitter.dispatch.client.models import JsonRpcError, JsonRpcId
 from outfitter.dispatch.config import RuntimePolicy
-from outfitter.dispatch.contracts.errors import ValidationError
+from outfitter.dispatch.contracts.errors import CapabilityUnavailableError, ValidationError
 from outfitter.dispatch.core.server_request_policy import (
     automatic_response,
     expected_response,
@@ -19,7 +19,7 @@ from outfitter.dispatch.core.server_requests import (
     ServerRequestManager,
     respond_to_server_request,
 )
-from outfitter.dispatch.registry.models import Subscription
+from outfitter.dispatch.registry.models import ServerRequest, Subscription
 from outfitter.dispatch.registry.store import Registry
 from tests.fakes import FakeLaneClient, make_ctx
 
@@ -254,6 +254,34 @@ async def test_operator_response_is_validated_and_sent_once(store: Registry) -> 
         await respond_to_server_request(ctx, pending.id or 0, {"action": "decline"})
     assert len([call for name, call in client.calls if name == "respond_server_request"]) == 1
     await manager.close()
+
+
+async def test_operator_response_rejects_request_from_non_default_binding(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    ctx.provider_session_id = "session-1"
+    observation = await store.observe_server_request_once(
+        ServerRequest(
+            binding_id="profile-a",
+            provider_session_id="session-1",
+            provider_thread_id="native-other",
+            request_id="question-foreign",
+            method="item/tool/requestUserInput",
+            category="user_input",
+            received_at=datetime(2026, 7, 10, tzinfo=UTC).isoformat(),
+        )
+    )
+    request_id = observation.request.id or 0
+
+    with pytest.raises(CapabilityUnavailableError, match="codex:profile-a"):
+        await respond_to_server_request(ctx, request_id, {"answers": {}})
+
+    stored = await store.get_server_request_by_id(request_id)
+    assert stored is not None
+    assert stored.state == "pending"
+    assert not any(name == "respond_server_request" for name, _ in client.calls)
 
 
 async def test_duplicate_delivery_does_not_duplicate_attention_or_response(

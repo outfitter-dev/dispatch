@@ -10,7 +10,11 @@ from outfitter.dispatch.registry.models import (
     ProviderThreadNode,
     ProviderThreadObservation,
 )
-from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID, Registry
+from outfitter.dispatch.registry.store import (
+    DEFAULT_CODEX_BINDING_ID,
+    ProviderThreadTopology,
+    Registry,
+)
 
 
 def observation_from_thread(
@@ -127,6 +131,12 @@ async def topology_views(
         max_nodes=max_nodes,
         max_depth=16,
     )
+    return _views(topology, thread_ids)
+
+
+def _views(
+    topology: ProviderThreadTopology, thread_ids: list[str]
+) -> dict[str, ThreadTopologyView]:
     indexed = {node.thread.provider_thread_id: node for node in topology.nodes}
     views: dict[str, ThreadTopologyView] = {}
     for thread_id in thread_ids:
@@ -160,14 +170,24 @@ async def lane_topology_views(
             views[lane.id] = ThreadTopologyView()
             continue
         groups.setdefault((lane.provider, lane.binding_id), []).append(lane)
+    remaining = max_nodes  # one node budget shared by every binding group
     for (provider, binding_id), group in groups.items():
-        native_views = await topology_views(
-            registry,
-            [lane.provider_thread_id for lane in group if lane.provider_thread_id is not None],
-            max_nodes=max_nodes,
-            provider=provider,
+        if remaining < 1:
+            for lane in group:
+                views[lane.id] = ThreadTopologyView(truncated=True)
+            continue
+        thread_ids = [
+            lane.provider_thread_id for lane in group if lane.provider_thread_id is not None
+        ]
+        topology = await registry.get_provider_thread_topology(
+            provider,
+            thread_ids,
             binding_id=binding_id,
+            max_nodes=remaining,
+            max_depth=16,
         )
+        remaining -= len(topology.nodes)
+        native_views = _views(topology, thread_ids)
         for lane in group:
             assert lane.provider_thread_id is not None
             views[lane.id] = native_views[lane.provider_thread_id]

@@ -26,8 +26,10 @@ from outfitter.dispatch.core.models import (
     WatchInput,
 )
 from outfitter.dispatch.core.selectors import resolve_managed_selector
+from outfitter.dispatch.core.topology import lane_topology_views
 from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID, Registry
 from tests.fakes import FakeLaneClient, make_ctx
+from tests.fixtures.registry.builders import provider_thread_observation
 
 
 async def test_default_codex_and_non_codex_outputs_preserve_public_aliases() -> None:
@@ -147,5 +149,42 @@ async def test_malformed_default_codex_identity_cannot_execute() -> None:
         with pytest.raises(CapabilityUnavailableError):
             await handlers.transcript(TranscriptInput(lane=lane.ref), ctx)
         assert not client.calls
+    finally:
+        await store.close()
+
+
+async def test_lane_topology_shares_one_node_budget_across_bindings() -> None:
+    store = await Registry.open()
+    try:
+        lanes = []
+        for provider, binding_id in (("codex", DEFAULT_CODEX_BINDING_ID), ("claude", "profile-a")):
+            for index in range(3):
+                native_id = f"{binding_id}-thread-{index}"
+                await store.upsert_provider_thread(
+                    provider_thread_observation(
+                        provider=provider, binding_id=binding_id, provider_thread_id=native_id
+                    )
+                )
+                lanes.append(
+                    await store.add_lane(
+                        id=native_id if provider == "codex" else f"dsp_{binding_id}_{index}",
+                        handle=f"@{binding_id}-{index}",
+                        source="own",
+                        status="idle",
+                        provider=provider,
+                        binding_id=binding_id,
+                        provider_thread_id=native_id,
+                    )
+                )
+        foreign = [lane.id for lane in lanes if lane.binding_id == "profile-a"]
+
+        views = await lane_topology_views(store, lanes, max_nodes=4)
+        assert sum(view.observed for view in views.values()) == 4
+        assert all(views[lane_id].truncated for lane_id in foreign)
+
+        exhausted = await lane_topology_views(store, lanes, max_nodes=3)
+        assert sum(view.observed for view in exhausted.values()) == 3
+        assert all(not exhausted[lane_id].observed for lane_id in foreign)
+        assert all(exhausted[lane_id].truncated for lane_id in foreign)
     finally:
         await store.close()

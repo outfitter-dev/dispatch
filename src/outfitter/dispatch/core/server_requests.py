@@ -11,7 +11,11 @@ from uuid import uuid4
 
 from outfitter.dispatch.client.events import ServerRequestReceived
 from outfitter.dispatch.contracts.context import Ctx
-from outfitter.dispatch.contracts.errors import NotFoundError, ValidationError
+from outfitter.dispatch.contracts.errors import (
+    CapabilityUnavailableError,
+    NotFoundError,
+    ValidationError,
+)
 from outfitter.dispatch.registry.models import (
     Lane,
     LaneRuntimeState,
@@ -184,8 +188,19 @@ async def respond_to_server_request(
     return result
 
 
+def _require_default_binding(request: ServerRequest) -> None:
+    # The response goes over the single Codex connection; never answer a request
+    # that another provider binding observed.
+    if (request.provider, request.binding_id) != ("codex", DEFAULT_CODEX_BINDING_ID):
+        raise CapabilityUnavailableError(
+            "interactive request response is unavailable for provider binding "
+            f"{request.provider}:{request.binding_id}"
+        )
+
+
 async def _send_response(ctx: Ctx, request: ServerRequest, plan: PlannedResponse) -> bool:
     local_id = _local_id(request)
+    _require_default_binding(request)
     claimed = await ctx.registry.claim_server_request_by_id(local_id)
     if claimed is None:
         return False
