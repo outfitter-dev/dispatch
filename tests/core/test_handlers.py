@@ -577,6 +577,13 @@ async def test_models_no_refresh_uses_only_cached_registry_during_outage(
     store: Registry,
 ) -> None:
     client = FakeLaneClient()
+    client.config_result = ConfigInfo(
+        model="gpt-5.5",
+        model_provider="openai",
+        service_tier="fast",
+        model_reasoning_effort="high",
+    )
+    client.models_result.insert(0, AppModel(id="gpt-4-old", is_default=True))
     ctx = make_ctx(store, client)
     await handlers.models(ModelsInput(), ctx)
     client.calls.clear()
@@ -587,6 +594,8 @@ async def test_models_no_refresh_uses_only_cached_registry_during_outage(
     assert cached.source == "registry"
     assert cached.configured_default.model == "gpt-5.5"
     assert cached.configured_default.model_provider == "openai"
+    assert cached.configured_default.service_tier == "fast"
+    assert cached.configured_default.model_reasoning_effort == "high"
     assert "gpt-5.5" in {model.id for model in cached.models}
     assert client.calls == []
 
@@ -605,6 +614,23 @@ async def test_models_no_refresh_empty_catalog_reports_hint(store: Registry) -> 
         == "run dispatch models without --no-refresh to refresh the App Server model catalog"
     )
     assert "model_list" not in [name for name, _ in client.calls]
+
+
+async def test_models_no_refresh_uses_legacy_catalog_default_without_config_cache(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.models(ModelsInput(), ctx)
+    await store._conn.execute("DELETE FROM model_config")
+    await store._conn.commit()
+    client.calls.clear()
+
+    cached = await handlers.models(ModelsInput(refresh=False), ctx)
+
+    assert cached.configured_default.model == "gpt-5.5"
+    assert cached.configured_default.model_provider == "openai"
+    assert client.calls == []
 
 
 async def test_new_lane_no_send_registers_without_turn(store: Registry, tmp_path: Path) -> None:

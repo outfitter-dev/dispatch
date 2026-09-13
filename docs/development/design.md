@@ -186,6 +186,8 @@ The client classifies command/file/permission approvals, user input, MCP elicita
 - `lane_sync_sources`: lane, sync state, source path/file identity, source size/mtime, parsed offsets, line count, last synced timestamp, error.
 - `lane_snapshots`: lane, display name, preview, cwd, source/model/session facts, latest event timestamp, latest turn id, transcript-partial flag.
 - `model_catalog`: provider/model rows refreshed from App Server `model/list`, including reasoning efforts, service tiers, aliases, and first/last seen timestamps.
+- `model_config`: the complete configured model/provider/service-tier/reasoning
+  default from the same App Server refresh, retained for offline catalog reads.
 - `permission_profiles`: cwd-scoped profile id, description, allowed state,
   source, and first/last seen timestamps from `permissionProfile/list`.
 - `lane_model_settings`: per-lane model/provider/reasoning/service-tier provenance, distinguishing Dispatch-authored settings from configured defaults and observed metadata.

@@ -3338,11 +3338,15 @@ async def models(inp: ModelsInput, ctx: Ctx) -> ModelCatalogOutput:
         source = "app-server"
     else:
         entries = await ctx.registry.list_model_catalog()
-        configured = next((entry for entry in entries if entry.is_default), None)
-        config = ConfigInfo(
-            model=configured.id if configured is not None else None,
-            model_provider=configured.provider if configured is not None else None,
-        )
+        cached_config = await ctx.registry.get_model_config()
+        if cached_config is None:
+            configured = next((entry for entry in entries if entry.is_default), None)
+            config = ConfigInfo(
+                model=configured.id if configured is not None else None,
+                model_provider=configured.provider if configured is not None else None,
+            )
+        else:
+            config = cached_config
         source = "registry"
         refreshed_at = max((entry.last_seen_at for entry in entries), default=None)
     if not inp.include_hidden:

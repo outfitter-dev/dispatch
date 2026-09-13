@@ -58,7 +58,7 @@ class ResolvedModelSettings:
 
 async def refresh_model_catalog(ctx: Ctx, *, source: str = "app-server") -> ModelCatalogSnapshot:
     snapshot = await _read_model_catalog(ctx, source=source)
-    await ctx.registry.upsert_model_catalog(snapshot.models)
+    await ctx.registry.upsert_model_catalog(snapshot.models, config=snapshot.config)
     return snapshot
 
 

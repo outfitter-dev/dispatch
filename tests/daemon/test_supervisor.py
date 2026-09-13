@@ -16,6 +16,7 @@ from outfitter.dispatch.client.models import (
 )
 from outfitter.dispatch.core import handlers
 from outfitter.dispatch.core.turn_settings import runtime_settings_for_lane
+from outfitter.dispatch.daemon.provider_manager import SharedCoreFailure
 from outfitter.dispatch.daemon.supervisor import SupervisedClient, Supervisor
 from outfitter.dispatch.registry.models import LaneSync
 from outfitter.dispatch.registry.store import Registry
@@ -339,12 +340,51 @@ async def test_supervisor_stops_only_the_current_connection_generation(
         while len(clients) < 2 or ctx.connection_generation == first_generation:
             await asyncio.sleep(0)
 
-    current_generation = ctx.connection_generation
     await supervisor.stop(expected_generation=first_generation)
     assert clients[1].closed.is_set() is False
 
-    await supervisor.stop(expected_generation=current_generation)
+    clients[1].closed.set()
+    async with asyncio.timeout(1):
+        while len(clients) < 3:
+            await asyncio.sleep(0)
+
+    assert ctx.connection_generation not in {first_generation, None}
+    await supervisor.stop(expected_generation=ctx.connection_generation)
     await asyncio.wait_for(task, timeout=1)
+
+
+async def test_supervisor_treats_registry_failure_during_profile_restore_as_fatal(
+    store: Registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await store.add_lane(id="O1", handle="@own", source="own", status="idle")
+    await store.upsert_lane_runtime_settings(
+        runtime_settings_for_lane(
+            lane="O1",
+            updated_at="2026-06-03T12:00:00+00:00",
+            permission_profile=":read-only",
+        )
+    )
+
+    async def fail_profile_write(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(store, "replace_permission_profiles", fail_profile_write)
+    ctx = make_ctx(store)
+    clients: list[FakeSupervisedClient] = []
+
+    async def make_client() -> FakeSupervisedClient:
+        client = FakeSupervisedClient()
+        clients.append(client)
+        return client
+
+    supervisor = Supervisor(ctx, make_client, _wait_forever, backoff=0)
+    initial = await make_client()
+
+    with pytest.raises(SharedCoreFailure, match="permission profile refresh"):
+        await supervisor.supervise(initial)
+
+    assert len(clients) == 1
+    assert initial.closed.is_set()
 
 
 async def test_supervisor_retries_after_provider_recovery_failure(

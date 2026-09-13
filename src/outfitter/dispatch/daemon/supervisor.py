@@ -248,9 +248,16 @@ class Supervisor:
                         cwd = lane.cwd or "."
                         key = (cwd, permission_profile)
                         if key not in validated_profiles:
-                            validated = await resolve_permission_profile(
-                                self._ctx, permission_profile, cwd=cwd
-                            )
+                            try:
+                                validated = await resolve_permission_profile(
+                                    self._ctx, permission_profile, cwd=cwd
+                                )
+                            except (ClientError, DispatchError):
+                                raise
+                            except Exception as exc:
+                                raise SharedCoreFailure(
+                                    "shared registry permission profile refresh failed"
+                                ) from exc
                             assert validated is not None
                             validated_profiles[key] = validated
                         permission_profile = validated_profiles[key]
@@ -291,8 +298,8 @@ class Supervisor:
             self._ctx.log.info("queue.drained_on_resume", count=drained)
 
     async def stop(self, expected_generation: str | None = None) -> None:
-        self._stopped = True
         if expected_generation is not None and expected_generation != self._client_generation:
             return
+        self._stopped = True
         if self._client is not None:
             await self._client.close()  # triggers wait_closed() → the loop exits
