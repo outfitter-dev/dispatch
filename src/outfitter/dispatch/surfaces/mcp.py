@@ -80,9 +80,10 @@ async def handle_tool_call(
     # ``extra="ignore"`` and would silently drop fields it does not know. Ops
     # whose schemas match stay usable even when other ops drifted.
     op = REGISTRY.get(method)
-    compatibility = await _daemon_op_compatibility(
+    response, compatibility = await _call_daemon_bound(
         socket_path,
         op.id,
+        params,
         op_schema_hash(op),
         read_safe=op.id in registry_read_safe_ops(REGISTRY),
         baseline_safe=op.id in registry_legacy_safe_ops(REGISTRY),
@@ -90,24 +91,6 @@ async def handle_tool_call(
     skew = _compatibility_problem(compatibility, op.id)
     if skew is not None:
         return _stale_tool_error(skew)
-    if compatibility.mode == "legacy":
-        response, compatibility = await _call_daemon_bound(
-            socket_path,
-            method,
-            params,
-            op_schema_hash(op),
-            read_safe=op.id in registry_read_safe_ops(REGISTRY),
-            baseline_safe=op.id in registry_legacy_safe_ops(REGISTRY),
-        )
-        skew = _compatibility_problem(compatibility, op.id)
-        if skew is not None:
-            return _stale_tool_error(skew)
-    else:
-        response = await call_daemon(
-            socket_path,
-            CONTROL_EXEC_METHOD,
-            {"op": method, "params": params, "op_schema_hash": op_schema_hash(op)},
-        )
     error = response.get("error")
     if isinstance(error, dict):
         if compatibility.mode == "checked" and error.get("code") == _METHOD_NOT_FOUND:
@@ -159,29 +142,6 @@ def run_mcp(socket_path: Path | None = None) -> None:
     asyncio.run(_serve(socket_path if socket_path is not None else config.socket_path()))
 
 
-async def _daemon_op_compatibility(
-    socket_path: Path,
-    op_id: str,
-    expected_hash: str,
-    *,
-    read_safe: bool,
-    baseline_safe: bool,
-) -> ControlOpCompatibility:
-    """Read metadata and choose the allowed execution mode for one op.
-
-    The shared contract policy classifies the response as checked, proven
-    legacy, or blocked; this async function owns only the metadata transport.
-    """
-    response = await call_daemon(socket_path, CONTROL_META_METHOD, {})
-    return control_op_compatibility(
-        response,
-        op_id,
-        expected_hash,
-        read_safe=read_safe,
-        baseline_safe=baseline_safe,
-    )
-
-
 async def _call_daemon_bound(
     socket_path: Path,
     op_id: str,
@@ -192,7 +152,7 @@ async def _call_daemon_bound(
     baseline_safe: bool,
     timeout: float = 30.0,
 ) -> tuple[dict[str, object], ControlOpCompatibility]:
-    """Repeat legacy admission and execute on the same established socket."""
+    """Admit and execute one op on the same established socket."""
     try:
         reader, writer = await asyncio.open_unix_connection(str(socket_path))
     except OSError as exc:

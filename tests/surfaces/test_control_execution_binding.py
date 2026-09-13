@@ -19,6 +19,7 @@ from outfitter.dispatch.contracts.legacy_baseline import PARENT_VERSION
 from outfitter.dispatch.contracts.registry import (
     CONTROL_EXEC_METHOD,
     CONTROL_META_METHOD,
+    ControlOpCompatibility,
     OpRegistry,
     control_op_compatibility,
     registry_legacy_safe_ops,
@@ -182,14 +183,106 @@ async def test_mcp_legacy_metadata_and_raw_op_share_one_socket(
     result = await mcp.handle_tool_call(path, "dispatch_thread_write", {"op": "stop", "lane": "@a"})
 
     assert result.isError is False
-    # One diagnostic preflight connection, followed by the required atomic
-    # legacy metadata + raw-op pair on one connection.
-    assert [method for _, method in observed] == [
-        CONTROL_META_METHOD,
-        CONTROL_META_METHOD,
-        "stop",
-    ]
-    assert observed[1][0] == observed[2][0]
+    assert [method for _, method in observed] == [CONTROL_META_METHOD, "stop"]
+    assert observed[0][0] == observed[1][0]
+
+
+async def test_mcp_checked_metadata_and_execution_share_one_socket(socket_dir: Path) -> None:
+    path = socket_dir / "checked-mcp.sock"
+    observed: list[tuple[int, str, dict[str, object]]] = []
+    finished = asyncio.Event()
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        connection = id(writer.transport)
+        try:
+            for _ in range(2):
+                request: dict[str, object] = json.loads(await reader.readline())
+                method = request["method"]
+                params = request["params"]
+                assert isinstance(method, str)
+                assert isinstance(params, dict)
+                observed.append((connection, method, params))
+                result = (
+                    {
+                        "protocol_version": 2,
+                        "op_schemas": registry_op_schema_hashes(REGISTRY),
+                    }
+                    if method == CONTROL_META_METHOD
+                    else {"lanes": []}
+                )
+                writer.write((json.dumps({"id": 1, "result": result}) + "\n").encode())
+                await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            finished.set()
+
+    server = await asyncio.start_unix_server(handle, path=str(path))
+    try:
+        result = await mcp.handle_tool_call(path, "dispatch_thread_read", {"op": "roster"})
+        await asyncio.wait_for(finished.wait(), 2)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert result.isError is False
+    assert [method for _, method, _ in observed] == [CONTROL_META_METHOD, CONTROL_EXEC_METHOD]
+    assert observed[0][0] == observed[1][0]
+    assert observed[1][2] == {
+        "op": "roster",
+        "params": {},
+        "op_schema_hash": registry_op_schema_hashes(REGISTRY)["roster"],
+    }
+
+
+async def test_mcp_blocked_compatibility_closes_without_execution(socket_dir: Path) -> None:
+    path = socket_dir / "blocked-mcp.sock"
+    observed: list[str] = []
+    finished = asyncio.Event()
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            metadata: dict[str, object] = json.loads(await reader.readline())
+            observed.append(str(metadata["method"]))
+            writer.write(
+                (
+                    json.dumps(
+                        {
+                            "id": 1,
+                            "result": {
+                                "protocol_version": 2,
+                                "op_schemas": {
+                                    **registry_op_schema_hashes(REGISTRY),
+                                    "roster": "stale",
+                                },
+                            },
+                        }
+                    )
+                    + "\n"
+                ).encode()
+            )
+            await writer.drain()
+            extra = await reader.readline()
+            if extra:
+                request: dict[str, object] = json.loads(extra)
+                observed.append(str(request["method"]))
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            finished.set()
+
+    server = await asyncio.start_unix_server(handle, path=str(path))
+    try:
+        result = await mcp.handle_tool_call(path, "dispatch_thread_read", {"op": "roster"})
+        await asyncio.wait_for(finished.wait(), 2)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert result.isError is True
+    assert result.meta is not None
+    assert result.meta["dispatchCode"] == "daemon_stale"
+    assert observed == [CONTROL_META_METHOD]
 
 
 def test_cli_old_daemon_after_modern_preflight_never_receives_raw_op(
@@ -221,25 +314,40 @@ def test_cli_old_daemon_after_modern_preflight_never_receives_raw_op(
     assert "checked execution" in capsys.readouterr().err
 
 
-async def test_mcp_old_daemon_after_modern_preflight_never_receives_raw_op(
+async def test_mcp_checked_execution_method_missing_is_typed_stale(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     methods: list[str] = []
 
-    async def request(
-        _path: Path, method: str, _params: dict[str, object], _timeout: float = 30.0
-    ) -> dict[str, object]:
-        methods.append(method)
-        if method == CONTROL_META_METHOD:
-            return {
-                "result": {
-                    "protocol_version": 2,
-                    "op_schemas": registry_op_schema_hashes(REGISTRY),
-                }
-            }
-        return {"error": {"code": -32601, "message": "unknown op"}}
+    async def bound(
+        _path: Path,
+        _op_id: str,
+        _params: dict[str, object],
+        _expected_hash: str,
+        *,
+        read_safe: bool,
+        baseline_safe: bool,
+        timeout: float = 30.0,
+    ) -> tuple[dict[str, object], ControlOpCompatibility]:
+        del read_safe, baseline_safe, timeout
+        methods.append(CONTROL_EXEC_METHOD)
+        return (
+            {"error": {"code": -32601, "message": "unknown op"}},
+            control_op_compatibility(
+                {
+                    "result": {
+                        "protocol_version": 2,
+                        "op_schemas": registry_op_schema_hashes(REGISTRY),
+                    }
+                },
+                "new-plan",
+                registry_op_schema_hashes(REGISTRY)["new-plan"],
+                read_safe=False,
+                baseline_safe=False,
+            ),
+        )
 
-    monkeypatch.setattr(mcp, "call_daemon", request)
+    monkeypatch.setattr(mcp, "_call_daemon_bound", bound)
     result = await mcp.handle_tool_call(
         Path("/replaced.sock"),
         "dispatch_thread_read",
@@ -250,7 +358,7 @@ async def test_mcp_old_daemon_after_modern_preflight_never_receives_raw_op(
     assert result.meta is not None
     assert result.meta["dispatchCode"] == "daemon_stale"
     assert result.meta["exitCode"] == 8
-    assert methods == [CONTROL_META_METHOD, CONTROL_EXEC_METHOD]
+    assert methods == [CONTROL_EXEC_METHOD]
 
 
 async def test_mcp_socket_replacement_with_old_daemon_rejects_checked_method(
@@ -260,23 +368,24 @@ async def test_mcp_socket_replacement_with_old_daemon_rejects_checked_method(
     methods: list[str] = []
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        line = await reader.readline()
-        request: dict[str, object] = json.loads(line)
-        method = request["method"]
-        assert isinstance(method, str)
-        methods.append(method)
-        if method == CONTROL_META_METHOD:
-            response: dict[str, object] = {
-                "id": 1,
-                "result": {
-                    "protocol_version": 2,
-                    "op_schemas": registry_op_schema_hashes(REGISTRY),
-                },
-            }
-        else:
-            response = {"id": 1, "error": {"code": -32601, "message": "unknown op"}}
-        writer.write((json.dumps(response) + "\n").encode())
-        await writer.drain()
+        for _ in range(2):
+            line = await reader.readline()
+            request: dict[str, object] = json.loads(line)
+            method = request["method"]
+            assert isinstance(method, str)
+            methods.append(method)
+            if method == CONTROL_META_METHOD:
+                response: dict[str, object] = {
+                    "id": 1,
+                    "result": {
+                        "protocol_version": 2,
+                        "op_schemas": registry_op_schema_hashes(REGISTRY),
+                    },
+                }
+            else:
+                response = {"id": 1, "error": {"code": -32601, "message": "unknown op"}}
+            writer.write((json.dumps(response) + "\n").encode())
+            await writer.drain()
         writer.close()
         await writer.wait_closed()
 
@@ -359,26 +468,41 @@ async def test_mcp_lost_checked_connection_is_not_retried_as_raw(
 ) -> None:
     methods: list[str] = []
 
-    async def request(
-        _path: Path, method: str, _params: dict[str, object], _timeout: float = 30.0
-    ) -> dict[str, object]:
-        methods.append(method)
-        if method == CONTROL_META_METHOD:
-            return {
-                "result": {
-                    "protocol_version": 2,
-                    "op_schemas": registry_op_schema_hashes(REGISTRY),
-                }
-            }
-        return {"error": {"code": -32603, "message": "no response from daemon", "data": {}}}
+    async def bound(
+        _path: Path,
+        _op_id: str,
+        _params: dict[str, object],
+        _expected_hash: str,
+        *,
+        read_safe: bool,
+        baseline_safe: bool,
+        timeout: float = 30.0,
+    ) -> tuple[dict[str, object], ControlOpCompatibility]:
+        del read_safe, baseline_safe, timeout
+        methods.append(CONTROL_EXEC_METHOD)
+        return (
+            {"error": {"code": -32603, "message": "no response from daemon", "data": {}}},
+            control_op_compatibility(
+                {
+                    "result": {
+                        "protocol_version": 2,
+                        "op_schemas": registry_op_schema_hashes(REGISTRY),
+                    }
+                },
+                "roster",
+                registry_op_schema_hashes(REGISTRY)["roster"],
+                read_safe=True,
+                baseline_safe=True,
+            ),
+        )
 
-    monkeypatch.setattr(mcp, "call_daemon", request)
+    monkeypatch.setattr(mcp, "_call_daemon_bound", bound)
     result = await mcp.handle_tool_call(
         Path("/lost.sock"), "dispatch_thread_read", {"op": "roster"}
     )
 
     assert result.isError is True
-    assert methods == [CONTROL_META_METHOD, CONTROL_EXEC_METHOD]
+    assert methods == [CONTROL_EXEC_METHOD]
 
 
 def test_cli_lost_checked_connection_is_not_retried_as_raw(socket_dir: Path) -> None:

@@ -15,6 +15,7 @@ from outfitter.dispatch.contracts.registry import (
     CONTROL_META_METHOD,
     ControlOpCompatibility,
     OpRegistry,
+    control_op_compatibility,
 )
 from outfitter.dispatch.core.ops import REGISTRY
 from outfitter.dispatch.daemon.control import ControlServer
@@ -244,7 +245,30 @@ async def test_tool_call_daemon_predating_handshake_blocks_all_ops(
         forwarded.append(method)
         return {"id": 1, "result": {"lanes": []}}
 
-    monkeypatch.setattr(mcp, "call_daemon", fake_call_daemon)
+    async def fake_bound(
+        socket_path: Path,
+        op_id: str,
+        params: dict[str, object],
+        expected_hash: str,
+        *,
+        read_safe: bool,
+        baseline_safe: bool,
+        timeout: float = 30.0,
+    ) -> tuple[dict[str, object], ControlOpCompatibility]:
+        metadata = await fake_call_daemon(socket_path, CONTROL_META_METHOD, {}, timeout)
+        compatibility = control_op_compatibility(
+            metadata,
+            op_id,
+            expected_hash,
+            read_safe=read_safe,
+            baseline_safe=baseline_safe,
+        )
+        if compatibility.mode == "blocked":
+            return {}, compatibility
+        response = await fake_call_daemon(socket_path, op_id, params, timeout)
+        return response, compatibility
+
+    monkeypatch.setattr(mcp, "_call_daemon_bound", fake_bound)
 
     blocked = await handle_tool_call(
         Path("/nonexistent.sock"),
@@ -325,8 +349,6 @@ async def test_tool_call_prehandshake_baseline_ops_gated_by_reported_version(
         baseline_safe: bool,
         timeout: float = 30.0,
     ) -> tuple[dict[str, object], ControlOpCompatibility]:
-        from outfitter.dispatch.contracts.registry import control_op_compatibility
-
         metadata = await fake_call_daemon(socket_path, CONTROL_META_METHOD, {}, timeout)
         compatibility = control_op_compatibility(
             metadata,
@@ -335,7 +357,15 @@ async def test_tool_call_prehandshake_baseline_ops_gated_by_reported_version(
             read_safe=read_safe,
             baseline_safe=baseline_safe,
         )
-        response = await fake_call_daemon(socket_path, op_id, params, timeout)
+        if compatibility.mode == "blocked":
+            return {}, compatibility
+        method = CONTROL_EXEC_METHOD if compatibility.mode == "checked" else op_id
+        request_params: dict[str, object] = (
+            {"op": op_id, "params": params, "op_schema_hash": expected_hash}
+            if compatibility.mode == "checked"
+            else params
+        )
+        response = await fake_call_daemon(socket_path, method, request_params, timeout)
         return response, compatibility
 
     monkeypatch.setattr(mcp, "_call_daemon_bound", fake_bound)
@@ -402,23 +432,27 @@ async def test_hash_capable_tool_call_uses_checked_execution_envelope(
 ) -> None:
     calls: list[tuple[str, dict[str, object]]] = []
 
-    async def fake_call_daemon(
-        _socket_path: Path, method: str, params: dict[str, object], _timeout: float = 30.0
-    ) -> dict[str, object]:
-        calls.append((method, params))
-        if method == CONTROL_META_METHOD:
-            from outfitter.dispatch.contracts.registry import registry_op_schema_hashes
+    async def fake_bound(
+        _socket_path: Path,
+        op_id: str,
+        params: dict[str, object],
+        expected_hash: str,
+        *,
+        read_safe: bool,
+        baseline_safe: bool,
+        timeout: float = 30.0,
+    ) -> tuple[dict[str, object], ControlOpCompatibility]:
+        del read_safe, baseline_safe, timeout
+        calls.append((CONTROL_META_METHOD, {}))
+        calls.append(
+            (
+                CONTROL_EXEC_METHOD,
+                {"op": op_id, "params": params, "op_schema_hash": expected_hash},
+            )
+        )
+        return {"id": 1, "result": {"lanes": []}}, ControlOpCompatibility("checked")
 
-            return {
-                "id": 1,
-                "result": {
-                    "protocol_version": 2,
-                    "op_schemas": registry_op_schema_hashes(REGISTRY),
-                },
-            }
-        return {"id": 1, "result": {"lanes": []}}
-
-    monkeypatch.setattr(mcp, "call_daemon", fake_call_daemon)
+    monkeypatch.setattr(mcp, "_call_daemon_bound", fake_bound)
 
     result = await handle_tool_call(
         Path("/nonexistent.sock"), "dispatch_thread_read", {"op": "roster"}
