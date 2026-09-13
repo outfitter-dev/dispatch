@@ -25,13 +25,14 @@ from outfitter.dispatch.client.hermes import (
     HermesTransportError,
 )
 from outfitter.dispatch.config import HERMES_GATEWAY_MODULE as HERMES_GATEWAY_MODULE
+from outfitter.dispatch.contracts.errors import SharedCoreFailure
 from outfitter.dispatch.core.providers import (
     ProviderAction,
     ProviderBindingAdapter,
     ProviderDurability,
 )
 
-from .provider_manager import ProviderWorker, SharedCoreFailure
+from .provider_manager import ProviderWorker
 
 DEFAULT_HERMES_STDIO_LIMIT = 8 * 1024 * 1024
 DEFAULT_HERMES_STDERR_LINES = 50

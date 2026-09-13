@@ -16,6 +16,7 @@ from outfitter.dispatch.client.hermes import (
     HermesProtocolError,
     HermesTransport,
 )
+from outfitter.dispatch.contracts.errors import SharedCoreFailure
 from outfitter.dispatch.core.providers import (
     ProviderAction,
     ProviderAvailability,
@@ -30,7 +31,6 @@ from outfitter.dispatch.daemon.hermes_worker import (
     OwnedHermesTransport,
     WorkerHermesClient,
 )
-from outfitter.dispatch.daemon.provider_manager import SharedCoreFailure
 
 
 @dataclass(frozen=True)
