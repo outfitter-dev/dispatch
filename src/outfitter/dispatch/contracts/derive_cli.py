@@ -95,7 +95,7 @@ _COMPOSED_SCHEMA_ROUTES: dict[str, str] = {
     "new --dry-run": "new-plan",
 }
 # Execution-provider shorthands (DIS-49): ops that choose an execution provider at
-# invocation time also project one boolean flag per enum value (--codex/--claude)
+# invocation time also projects one boolean flag per provider enum value.
 # beside the canonical --provider option. CLI-only sugar consumed by the derivation;
 # MCP/remote schemas stay canonical. Ops whose target lane already determines the
 # provider (e.g. send) must not be listed here.
@@ -321,7 +321,7 @@ def _provider_choices(op: Op) -> tuple[str, ...]:
 def _with_provider_alias_parameters(
     op: Op, parameters: list[inspect.Parameter]
 ) -> list[inspect.Parameter]:
-    """Insert --codex/--claude style shorthand flags beside the canonical --provider."""
+    """Insert provider shorthand flags beside the canonical --provider."""
     if op.id not in CLI_PROVIDER_ALIAS_OPS:
         return parameters
     aliases = [

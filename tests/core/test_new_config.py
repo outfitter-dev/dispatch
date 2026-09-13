@@ -94,6 +94,43 @@ allow_attached_writes = true
     assert resolved.settings.cwd == str(tmp_path)
 
 
+def test_resolve_new_ignores_global_provider_runtime_table(tmp_path: Path) -> None:
+    global_path = config_path()
+    global_path.parent.mkdir(parents=True)
+    global_path.write_text(
+        """
+[defaults]
+provider = "hermes"
+prefix = "[global]"
+
+[providers.hermes]
+hermes_home = "/not-read-by-launch-resolution"
+source_root = "/not-read-by-launch-resolution"
+interpreter = "/not-read-by-launch-resolution"
+"""
+    )
+
+    resolved = resolve_new(name="work", presets=[], cli=NewSettings(cwd=str(tmp_path)))
+
+    assert resolved.settings.provider == "hermes"
+    assert resolved.display_name == "[global] work"
+
+
+def test_resolve_new_rejects_repo_provider_runtime_table(tmp_path: Path) -> None:
+    (tmp_path / ".dispatch").mkdir()
+    (tmp_path / ".dispatch" / "config.toml").write_text(
+        """
+[providers.hermes]
+hermes_home = "/tmp"
+source_root = "/tmp"
+interpreter = "/bin/sh"
+"""
+    )
+
+    with pytest.raises(ValidationError, match="invalid dispatch config"):
+        resolve_new(name="work", presets=[], cli=NewSettings(cwd=str(tmp_path)))
+
+
 def test_resolve_new_threads_provider_through_defaults_presets_and_cli(tmp_path: Path) -> None:
     (tmp_path / ".dispatch").mkdir()
     (tmp_path / ".dispatch" / "config.toml").write_text(
@@ -120,6 +157,66 @@ provider = "claude"
         cli=NewSettings(cwd=str(tmp_path), provider="codex"),
     )
     assert cli_wins.settings.provider == "codex"
+
+
+def test_resolve_new_drops_inherited_codex_overrides_for_hermes(tmp_path: Path) -> None:
+    (tmp_path / ".dispatch").mkdir()
+    (tmp_path / ".dispatch" / "config.toml").write_text(
+        """
+[defaults]
+provider = "hermes"
+model = "codex-model"
+effort = "high"
+sandbox = "read-only"
+ephemeral = true
+prefix = "[team]"
+"""
+    )
+
+    resolved = resolve_new(name="work", presets=[], cli=NewSettings(cwd=str(tmp_path)))
+
+    assert resolved.settings.provider == "hermes"
+    assert resolved.settings.model is None
+    assert resolved.settings.effort is None
+    assert resolved.settings.sandbox is None
+    assert resolved.settings.ephemeral is None
+    assert resolved.settings.prefix == "[team]"
+
+
+def test_resolve_new_rejects_selected_codex_preset_for_hermes(tmp_path: Path) -> None:
+    (tmp_path / ".dispatch").mkdir()
+    (tmp_path / ".dispatch" / "config.toml").write_text(
+        """
+[presets.fast]
+effort = "low"
+"""
+    )
+
+    with pytest.raises(ValidationError, match=r"preset 'fast'.*effort"):
+        resolve_new(
+            name="work",
+            presets=["fast"],
+            cli=NewSettings(cwd=str(tmp_path), provider="hermes"),
+        )
+
+
+def test_resolve_new_treats_explicit_false_as_a_hermes_override(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match=r"operation input.*ephemeral"):
+        resolve_new(
+            name="work",
+            presets=[],
+            cli=NewSettings(cwd=str(tmp_path), provider="hermes", ephemeral=False),
+        )
+
+
+def test_resolve_new_rejects_codex_override_in_hermes_packet(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match=r"launch packet.*model"):
+        resolve_new(
+            name="work",
+            presets=[],
+            cli=NewSettings(cwd=str(tmp_path), provider="hermes"),
+            packet=NewSettings(model="codex-model"),
+        )
 
 
 def test_resolve_new_rejects_unknown_provider_in_config(tmp_path: Path) -> None:

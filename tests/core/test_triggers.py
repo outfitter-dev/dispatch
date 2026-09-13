@@ -525,6 +525,46 @@ async def test_reactor_subscription_can_disable_dispatch_attribution(store: Regi
     assert "dispatch (sub):" not in text
 
 
+async def test_reactor_rejects_legacy_hermes_turn_subscription_before_mutation(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    reactor = Reactor(ctx, TriggerRunner(ctx, lambda: _T0))
+    await store.add_lane(id="target", handle="@target", source="own", status="busy")
+    await store.add_lane(
+        id="dsp_subscriber",
+        handle="@subscriber",
+        source="own",
+        status="idle",
+        provider="hermes",
+        binding_id="hermes-default",
+        provider_thread_id="stored-1",
+    )
+    await store.add_subscription(
+        Subscription(
+            id="sub_hermes",
+            target_lane="target",
+            subscriber_lane="dsp_subscriber",
+            when="done",
+            delivery="turn",
+            deliver="idle",
+            tail=0,
+            once=True,
+            ack="auto",
+            created_at=_T0,
+            updated_at=_T0,
+        )
+    )
+
+    await reactor.handle(TurnCompleted("target", "turn-1"))
+
+    assert await store.list_inbox_messages(lane="dsp_subscriber", state=None) == []
+    assert await store.pending_message_count("dsp_subscriber") == 0
+    assert (await store.get_subscription("sub_hermes")).state == "active"
+    assert not any(name == "turn_start" for name, _ in client.calls)
+
+
 async def test_lane_event_reactor_leaves_response_to_generic_request_manager(
     store: Registry,
 ) -> None:
