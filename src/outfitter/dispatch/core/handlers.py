@@ -455,7 +455,10 @@ def _action_ref(
     )
 
 
-def _managed_identity(lane: Lane, ctx: Ctx) -> _ManagedIdentityPayload:
+async def _managed_identity(lane: Lane, ctx: Ctx) -> _ManagedIdentityPayload:
+    runtime = (
+        await ctx.registry.get_lane_runtime_state(lane.id) if lane.provider == "hermes" else None
+    )
     return {
         "lane": lane.id,
         "ref": lane.ref,
@@ -469,9 +472,9 @@ def _managed_identity(lane: Lane, ctx: Ctx) -> _ManagedIdentityPayload:
         "source": lane.source,
         "status": lane.status,
         "cwd": lane.cwd,
-        "writable": _can_write(lane, ctx),
-        "capabilities": _capabilities(lane, ctx),
-        "write_locked_reason": _write_locked_reason(lane, ctx),
+        "writable": _can_write(lane, ctx, runtime),
+        "capabilities": _capabilities(lane, ctx, runtime),
+        "write_locked_reason": _write_locked_reason(lane, ctx, runtime),
     }
 
 
@@ -1739,7 +1742,7 @@ async def send(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
         raise
     await _record_direct_send_receipt(ctx, lane, status="sent")
     await ctx.registry.log_action("send", lane=lane.id, detail=inp.text[:120])
-    return ActionAck(**_managed_identity(lane, ctx), op="send")
+    return ActionAck(**(await _managed_identity(lane, ctx)), op="send")
 
 
 async def send_message(inp: SendInput, ctx: Ctx) -> SendAck:
@@ -1755,7 +1758,7 @@ async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
         if replay is not None:
             receipt, lane = replay
             return SendAck(
-                **_managed_identity(lane, ctx),
+                **(await _managed_identity(lane, ctx)),
                 op=receipt.mode,
                 delivery=receipt,
                 detail=f"delivery {receipt.id}: {receipt.status}",
@@ -1778,7 +1781,7 @@ async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
         receipt = await send_reserved(inp, lane, text, ctx)
         lane = await ctx.registry.get_lane(lane.id)
         return SendAck(
-            **_managed_identity(lane, ctx),
+            **(await _managed_identity(lane, ctx)),
             op="send",
             delivery=receipt,
             detail=f"delivery {receipt.id}: {receipt.status}",
@@ -1808,7 +1811,7 @@ async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
         if reserved_lane is not None:
             lane = reserved_lane
         return SendAck(
-            **_managed_identity(lane, ctx),
+            **(await _managed_identity(lane, ctx)),
             op=inp.mode,
             delivery=receipt,
             detail=f"delivery {receipt.id}: {receipt.status}",
@@ -1850,7 +1853,7 @@ async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
             await ctx.registry.log_action(
                 "steer", lane=lane.id, detail=message_audit_detail(wire, ctx.capture)
             )
-            return ActionAck(**_managed_identity(lane, ctx), op="steer")
+            return ActionAck(**(await _managed_identity(lane, ctx)), op="steer")
         case "context":
             await _prepare_attached_write(lane, route, ctx)
             parts = []
@@ -1869,7 +1872,7 @@ async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
             await ctx.registry.log_action(
                 "brief", lane=lane.id, detail=message_audit_detail(rich, ctx.capture)
             )
-            return ActionAck(**_managed_identity(lane, ctx), op="brief")
+            return ActionAck(**(await _managed_identity(lane, ctx)), op="brief")
         case "interject":
             turn_id = _require_active_turn(lane, "interject")
             await _prepare_attached_write(lane, route, ctx)
@@ -1895,7 +1898,7 @@ async def _send_message(inp: SendInput, ctx: Ctx) -> ActionAck:
                     )
             pending = await ctx.registry.pending_message_count(lane.id)
             return ActionAck(
-                **_managed_identity(lane, ctx),
+                **(await _managed_identity(lane, ctx)),
                 op="queue",
                 detail=f"queued message {message.id}; pending={pending}",
             )
@@ -1949,7 +1952,7 @@ async def _send_rich(
     await ctx.registry.log_action(
         "send", lane=lane.id, detail=message_audit_detail(wire, ctx.capture)
     )
-    return ActionAck(**_managed_identity(lane, ctx), op=op)
+    return ActionAck(**(await _managed_identity(lane, ctx)), op=op)
 
 
 async def steer(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
@@ -1960,7 +1963,7 @@ async def steer(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
     route.recheck()
     await route.adapter.steer(route.target, turn_id, inp.text)
     await ctx.registry.log_action("steer", lane=lane.id, detail=inp.text[:120])
-    return ActionAck(**_managed_identity(lane, ctx), op="steer")
+    return ActionAck(**(await _managed_identity(lane, ctx)), op="steer")
 
 
 async def brief(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
@@ -1975,7 +1978,7 @@ async def brief(inp: LaneTextInput, ctx: Ctx) -> ActionAck:
     route.recheck()
     await route.adapter.inject(route.target, [item])
     await ctx.registry.log_action("brief", lane=lane.id, detail=inp.text[:120])
-    return ActionAck(**_managed_identity(lane, ctx), op="brief")
+    return ActionAck(**(await _managed_identity(lane, ctx)), op="brief")
 
 
 async def interrupt(inp: LaneInput, ctx: Ctx) -> ActionAck:
@@ -1986,7 +1989,7 @@ async def interrupt(inp: LaneInput, ctx: Ctx) -> ActionAck:
     route.recheck()
     await route.adapter.interrupt(route.target, turn_id)
     await ctx.registry.log_action("interrupt", lane=lane.id)
-    return ActionAck(**_managed_identity(lane, ctx), op="interrupt")
+    return ActionAck(**(await _managed_identity(lane, ctx)), op="interrupt")
 
 
 async def stop(inp: LaneInput, ctx: Ctx) -> ActionAck:
@@ -1997,7 +2000,7 @@ async def stop(inp: LaneInput, ctx: Ctx) -> ActionAck:
     route.recheck()
     await route.adapter.interrupt(route.target, turn_id)
     await ctx.registry.log_action("stop", lane=lane.id)
-    return ActionAck(**_managed_identity(lane, ctx), op="stop")
+    return ActionAck(**(await _managed_identity(lane, ctx)), op="stop")
 
 
 async def _inbox_message_view(message: InboxMessage, ctx: Ctx) -> InboxMessageView:
@@ -2413,7 +2416,7 @@ async def sync_lane(inp: LaneSyncInput, ctx: Ctx) -> LaneSyncResult:
         "sync", lane=lane.id, detail=f"state={sync.state}; full={inp.full}"
     )
     return LaneSyncResult(
-        **_managed_identity(lane, ctx),
+        **(await _managed_identity(lane, ctx)),
         sync=_sync_view(sync),
         model=_model_view(model_settings, sync),
     )
@@ -2488,7 +2491,7 @@ async def watch(inp: WatchInput, ctx: Ctx) -> WatchOutput:
     lane = resolved.lane
     route = route_lane(ctx, lane, ProviderAction.TAIL)
     if inp.timeout == 0:
-        return WatchOutput(**_managed_identity(lane, ctx), events=[], timed_out=True)
+        return WatchOutput(**(await _managed_identity(lane, ctx)), events=[], timed_out=True)
     route.recheck()
     stream = route.adapter.raw_events(route.target)
     events: list[WatchEvent] = []
@@ -2515,7 +2518,7 @@ async def watch(inp: WatchInput, ctx: Ctx) -> WatchOutput:
         aclose = getattr(stream, "aclose", None)
         if aclose is not None:
             await aclose()
-    return WatchOutput(**_managed_identity(lane, ctx), events=events, timed_out=timed_out)
+    return WatchOutput(**(await _managed_identity(lane, ctx)), events=events, timed_out=timed_out)
 
 
 async def transcript(inp: TranscriptInput, ctx: Ctx) -> TranscriptOutput:
@@ -2525,7 +2528,7 @@ async def transcript(inp: TranscriptInput, ctx: Ctx) -> TranscriptOutput:
     lane = resolved.lane
     if lane.provider == "hermes" and _provider_supports(lane, ctx, ProviderAction.TRANSCRIPT):
         return TranscriptOutput(
-            **_managed_identity(lane, ctx),
+            **(await _managed_identity(lane, ctx)),
             items=await _observed_transcript(ctx, lane, limit=inp.limit),
             transcript_source="live_observed",
             partial=True,
@@ -2535,7 +2538,7 @@ async def transcript(inp: TranscriptInput, ctx: Ctx) -> TranscriptOutput:
     result = await route.adapter.read(route.target, include_turns=True)
     await index_codex_thread_read(ctx.registry, lane, result, ctx.capture)
     return TranscriptOutput(
-        **_managed_identity(lane, ctx),
+        **(await _managed_identity(lane, ctx)),
         items=_transcript_from_thread(result, limit=inp.limit),
     )
 
@@ -3243,7 +3246,10 @@ async def goal_get(inp: GoalGetInput, ctx: Ctx) -> GoalView:
     route = route_lane(ctx, lane, ProviderAction.GOAL_READ)
     route.recheck()
     goal = await route.adapter.goal_get(route.target)
-    return GoalView(**_managed_identity(lane, ctx), goal=_goal(goal) if goal is not None else None)
+    return GoalView(
+        **(await _managed_identity(lane, ctx)),
+        goal=_goal(goal) if goal is not None else None,
+    )
 
 
 async def goal_set(inp: GoalSetInput, ctx: Ctx) -> GoalView:
@@ -3266,7 +3272,7 @@ async def goal_set(inp: GoalSetInput, ctx: Ctx) -> GoalView:
         token_budget=inp.token_budget,
     )
     await ctx.registry.log_action("goal-set", lane=lane.id, detail=inp.objective)
-    return GoalView(**_managed_identity(lane, ctx), goal=_goal(goal))
+    return GoalView(**(await _managed_identity(lane, ctx)), goal=_goal(goal))
 
 
 async def goal_clear(inp: GoalClearInput, ctx: Ctx) -> GoalView:
@@ -3276,7 +3282,7 @@ async def goal_clear(inp: GoalClearInput, ctx: Ctx) -> GoalView:
     route.recheck()
     await route.adapter.goal_clear(route.target)
     await ctx.registry.log_action("goal-clear", lane=lane.id)
-    return GoalView(**_managed_identity(lane, ctx), goal=None)
+    return GoalView(**(await _managed_identity(lane, ctx)), goal=None)
 
 
 async def fork(inp: ForkInput, ctx: Ctx) -> LaneRef:
@@ -3373,7 +3379,7 @@ async def compact(inp: CompactInput, ctx: Ctx) -> ActionAck:
     route.recheck()
     await route.adapter.compact(route.target)
     await ctx.registry.log_action("compact", lane=lane.id)
-    return ActionAck(**_managed_identity(lane, ctx), op="compact")
+    return ActionAck(**(await _managed_identity(lane, ctx)), op="compact")
 
 
 async def roster(inp: RosterInput, ctx: Ctx) -> Roster:
