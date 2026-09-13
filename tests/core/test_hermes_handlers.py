@@ -48,6 +48,7 @@ from outfitter.dispatch.core.models import (
 )
 from outfitter.dispatch.core.providers import (
     PreparedProviderRequest,
+    ProviderAction,
     ProviderAvailability,
     ProviderBindingFacts,
     ProviderDurability,
