@@ -82,7 +82,7 @@ class ClaudeLaunchObservation:
     provider: Literal["claude"]
     reconciliation: Literal["reconciled", "pending"]
     short_id: str
-    provider_session_id: str | None
+    provider_thread_id: str | None
     launch_cwd: str
     pending_reason: Literal["roster_absent", "identity_pending", "roster_unavailable"] | None = None
     observed_cwd: str | None = None

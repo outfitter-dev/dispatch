@@ -11,13 +11,18 @@ from uuid import uuid4
 
 from outfitter.dispatch.client.events import ServerRequestReceived
 from outfitter.dispatch.contracts.context import Ctx
-from outfitter.dispatch.contracts.errors import NotFoundError, ValidationError
+from outfitter.dispatch.contracts.errors import (
+    CapabilityUnavailableError,
+    NotFoundError,
+    ValidationError,
+)
 from outfitter.dispatch.registry.models import (
     Lane,
     LaneRuntimeState,
     ProviderEvent,
     ServerRequest,
 )
+from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID
 
 from .server_request_policy import (
     PlannedResponse,
@@ -86,7 +91,13 @@ class ServerRequestManager:
         self._timeouts.clear()
 
     async def handle(self, request: ServerRequestReceived) -> ServerRequest:
-        lane = await self._ctx.registry.find_lane(request.lane_id) if request.lane_id else None
+        lane = (
+            await self._ctx.registry.find_lane_by_provider_thread(
+                "codex", DEFAULT_CODEX_BINDING_ID, request.lane_id
+            )
+            if request.lane_id
+            else None
+        )
         now = datetime.now(UTC)
         received_at = now.isoformat()
         timeout = self._ctx.policy.interactive_request_timeout_seconds
@@ -177,8 +188,19 @@ async def respond_to_server_request(
     return result
 
 
+def _require_default_binding(request: ServerRequest) -> None:
+    # The response goes over the single Codex connection; never answer a request
+    # that another provider binding observed.
+    if (request.provider, request.binding_id) != ("codex", DEFAULT_CODEX_BINDING_ID):
+        raise CapabilityUnavailableError(
+            "interactive request response is unavailable for provider binding "
+            f"{request.provider}:{request.binding_id}"
+        )
+
+
 async def _send_response(ctx: Ctx, request: ServerRequest, plan: PlannedResponse) -> bool:
     local_id = _local_id(request)
+    _require_default_binding(request)
     claimed = await ctx.registry.claim_server_request_by_id(local_id)
     if claimed is None:
         return False
@@ -240,8 +262,9 @@ async def _surface_attention(
     await ctx.registry.upsert_lane_runtime_state(
         LaneRuntimeState(
             lane=lane.id,
-            provider="codex",
-            provider_thread_id=lane.id,
+            provider=lane.provider,
+            binding_id=lane.binding_id,
+            provider_thread_id=lane.provider_thread_id or lane.id,
             status=status,
             active_turn_id=(current.active_turn_id if current else lane.active_turn_id),
             latest_turn_id=(current.latest_turn_id if current else lane.latest_turn_id),
@@ -304,8 +327,9 @@ async def _clear_attention_if_resolved(ctx: Ctx, lane_id: str) -> None:
     await ctx.registry.upsert_lane_runtime_state(
         LaneRuntimeState(
             lane=lane_id,
-            provider="codex",
-            provider_thread_id=lane_id,
+            provider=lane.provider,
+            binding_id=lane.binding_id,
+            provider_thread_id=lane.provider_thread_id or lane.id,
             status=status,
             active_turn_id=active_turn_id,
             latest_turn_id=(current.latest_turn_id if current else lane.latest_turn_id),
@@ -372,7 +396,8 @@ async def _record_request_event(ctx: Ctx, request: ServerRequest, state: str) ->
     now = datetime.now(UTC).isoformat()
     await ctx.registry.record_provider_event(
         ProviderEvent(
-            provider="codex",
+            provider=request.provider,
+            binding_id=request.binding_id,
             provider_thread_id=request.provider_thread_id,
             lane=request.lane,
             event_type=f"server_request.{state}",

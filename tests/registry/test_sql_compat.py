@@ -36,12 +36,17 @@ def test_registry_sql_exercise_sets_schema_version_and_rolls_back(tmp_path: Path
             ("server_requests",),
         ).fetchone()
         assert server_requests is not None
+        server_request_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(server_requests)").fetchall()
+        }
+        assert "binding_id" in server_request_columns
 
         provider_thread_columns = {
             str(row[1]) for row in conn.execute("PRAGMA table_info(provider_threads)").fetchall()
         }
         assert {
             "provider",
+            "binding_id",
             "provider_thread_id",
             "parent_thread_id",
             "forked_from_id",
@@ -51,13 +56,15 @@ def test_registry_sql_exercise_sets_schema_version_and_rolls_back(tmp_path: Path
         } <= provider_thread_columns
         assert conn.execute("PRAGMA foreign_key_list(provider_threads)").fetchall() == []
         conn.execute(
-            "INSERT INTO provider_threads (provider, provider_thread_id, parent_thread_id, "
-            "lifecycle_state, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(provider, provider_thread_id) DO UPDATE SET "
+            "INSERT INTO provider_threads (provider, binding_id, provider_thread_id, "
+            "parent_thread_id, lifecycle_state, first_seen_at, last_seen_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(provider, binding_id, provider_thread_id) DO UPDATE SET "
             "parent_thread_id = COALESCE(excluded.parent_thread_id, "
             "provider_threads.parent_thread_id), last_seen_at = excluded.last_seen_at",
             (
                 "codex",
+                "codex-default",
                 "thread-topology",
                 "parent-topology",
                 "active",

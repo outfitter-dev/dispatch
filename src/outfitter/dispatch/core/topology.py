@@ -5,11 +5,16 @@ from __future__ import annotations
 from outfitter.dispatch.client.models import ThreadInfo
 from outfitter.dispatch.core.models import ThreadTopologyNode, ThreadTopologyView
 from outfitter.dispatch.registry.models import (
+    Lane,
     ProviderThreadLifecycleState,
     ProviderThreadNode,
     ProviderThreadObservation,
 )
-from outfitter.dispatch.registry.store import Registry
+from outfitter.dispatch.registry.store import (
+    DEFAULT_CODEX_BINDING_ID,
+    ProviderThreadTopology,
+    Registry,
+)
 
 
 def observation_from_thread(
@@ -25,6 +30,7 @@ def observation_from_thread(
     spawned_nickname = spawned.get("agent_nickname")
     spawned_role = spawned.get("agent_role")
     return ProviderThreadObservation(
+        binding_id=DEFAULT_CODEX_BINDING_ID,
         provider_thread_id=thread.id,
         session_id=thread.session_id,
         parent_thread_id=thread.parent_thread_id
@@ -89,6 +95,8 @@ def _node(node: ProviderThreadNode | None, relation: str) -> ThreadTopologyNode 
     thread = node.thread
     return ThreadTopologyNode(
         id=thread.provider_thread_id,
+        provider=thread.provider,
+        binding_id=thread.binding_id,
         managed=node.managed,
         ref=node.ref,
         handle=node.handle,
@@ -107,13 +115,28 @@ def _nodes(nodes: list[ProviderThreadNode], relation: str) -> list[ThreadTopolog
 
 
 async def topology_views(
-    registry: Registry, thread_ids: list[str], *, max_nodes: int
+    registry: Registry,
+    thread_ids: list[str],
+    *,
+    max_nodes: int,
+    provider: str = "codex",
+    binding_id: str = DEFAULT_CODEX_BINDING_ID,
 ) -> dict[str, ThreadTopologyView]:
     if not thread_ids:
         return {}
     topology = await registry.get_provider_thread_topology(
-        "codex", thread_ids, max_nodes=max_nodes, max_depth=16
+        provider,
+        thread_ids,
+        binding_id=binding_id,
+        max_nodes=max_nodes,
+        max_depth=16,
     )
+    return _views(topology, thread_ids)
+
+
+def _views(
+    topology: ProviderThreadTopology, thread_ids: list[str]
+) -> dict[str, ThreadTopologyView]:
     indexed = {node.thread.provider_thread_id: node for node in topology.nodes}
     views: dict[str, ThreadTopologyView] = {}
     for thread_id in thread_ids:
@@ -132,4 +155,40 @@ async def topology_views(
             truncated=topology.truncated,
             observed_at=current.thread.last_seen_at if current is not None else None,
         )
+    return views
+
+
+async def lane_topology_views(
+    registry: Registry, lanes: list[Lane], *, max_nodes: int
+) -> dict[str, ThreadTopologyView]:
+    """Project topology by stable lane id without confusing it with native identity."""
+
+    views: dict[str, ThreadTopologyView] = {}
+    groups: dict[tuple[str, str], list[Lane]] = {}
+    for lane in lanes:
+        if lane.provider_thread_id is None:
+            views[lane.id] = ThreadTopologyView()
+            continue
+        groups.setdefault((lane.provider, lane.binding_id), []).append(lane)
+    remaining = max_nodes  # one node budget shared by every binding group
+    for (provider, binding_id), group in groups.items():
+        if remaining < 1:
+            for lane in group:
+                views[lane.id] = ThreadTopologyView(truncated=True)
+            continue
+        thread_ids = [
+            lane.provider_thread_id for lane in group if lane.provider_thread_id is not None
+        ]
+        topology = await registry.get_provider_thread_topology(
+            provider,
+            thread_ids,
+            binding_id=binding_id,
+            max_nodes=remaining,
+            max_depth=16,
+        )
+        remaining -= len(topology.nodes)
+        native_views = _views(topology, thread_ids)
+        for lane in group:
+            assert lane.provider_thread_id is not None
+            views[lane.id] = native_views[lane.provider_thread_id]
     return views

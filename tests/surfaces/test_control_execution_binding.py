@@ -117,8 +117,10 @@ def test_cli_legacy_metadata_and_raw_op_share_one_socket(socket_dir: Path) -> No
                         {
                             "protocol_version": 1,
                             "version": PARENT_VERSION,
-                            "supported_ops": ["stop"],
-                            "op_schemas": {"stop": registry_op_schema_hashes(REGISTRY)["stop"]},
+                            "supported_ops": ["archive"],
+                            "op_schemas": {
+                                "archive": registry_op_schema_hashes(REGISTRY)["archive"]
+                            },
                         }
                         if request["method"] == CONTROL_META_METHOD
                         else {"ok": True}
@@ -130,13 +132,13 @@ def test_cli_legacy_metadata_and_raw_op_share_one_socket(socket_dir: Path) -> No
     thread.start()
     assert ready.wait(timeout=2)
 
-    assert _invoke_cli(path, "stop", {"lane": "@a"}) == {"ok": True}
+    assert _invoke_cli(path, "archive", {"target": "T1"}) == {"ok": True}
     thread.join(timeout=2)
     assert not thread.is_alive()
 
     assert observed == [
         (observed[0][0], CONTROL_META_METHOD),
-        (observed[0][0], "stop"),
+        (observed[0][0], "archive"),
     ]
 
 
@@ -156,8 +158,10 @@ async def legacy_mcp_socket(socket_dir: Path) -> AsyncIterator[tuple[Path, list[
                 {
                     "protocol_version": 1,
                     "version": PARENT_VERSION,
-                    "supported_ops": ["stop"],
-                    "op_schemas": {"stop": registry_op_schema_hashes(REGISTRY)["stop"]},
+                    "supported_ops": ["lane-rename"],
+                    "op_schemas": {
+                        "lane-rename": registry_op_schema_hashes(REGISTRY)["lane-rename"]
+                    },
                 }
                 if method == CONTROL_META_METHOD
                 else {"accepted": True}
@@ -180,10 +184,14 @@ async def test_mcp_legacy_metadata_and_raw_op_share_one_socket(
 ) -> None:
     path, observed = legacy_mcp_socket
 
-    result = await mcp.handle_tool_call(path, "dispatch_thread_write", {"op": "stop", "lane": "@a"})
+    result = await mcp.handle_tool_call(
+        path,
+        "dispatch_thread_write",
+        {"op": "rename", "old": "T1", "new": "renamed"},
+    )
 
     assert result.isError is False
-    assert [method for _, method in observed] == [CONTROL_META_METHOD, "stop"]
+    assert [method for _, method in observed] == [CONTROL_META_METHOD, "lane-rename"]
     assert observed[0][0] == observed[1][0]
 
 

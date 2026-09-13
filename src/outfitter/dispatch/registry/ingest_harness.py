@@ -164,6 +164,7 @@ async def _write_synthetic_event(
     await store.record_provider_event(
         ProviderEvent(
             provider="codex",
+            binding_id="codex-default",
             provider_thread_id=thread_id,
             lane=lane,
             event_type="turn/completed",
@@ -180,6 +181,7 @@ async def _write_synthetic_event(
     await store.upsert_thread_turn(
         ThreadTurn(
             provider="codex",
+            binding_id="codex-default",
             provider_thread_id=thread_id,
             turn_id=turn_id,
             lane=lane,
@@ -193,6 +195,7 @@ async def _write_synthetic_event(
     await store.upsert_thread_item(
         ThreadItem(
             provider="codex",
+            binding_id="codex-default",
             provider_thread_id=thread_id,
             item_id=item_id,
             lane=lane,
@@ -210,6 +213,7 @@ async def _write_synthetic_event(
         refs=[
             ThreadItemRef(
                 provider="codex",
+                binding_id="codex-default",
                 provider_thread_id=thread_id,
                 item_id=item_id,
                 ref_type="file",
@@ -221,6 +225,7 @@ async def _write_synthetic_event(
         MessageReceipt(
             lane=lane,
             provider="codex",
+            binding_id="codex-default",
             provider_thread_id=thread_id,
             dispatch_message_id=f"dispatch-message-{index:06d}",
             status="completed",
@@ -236,6 +241,7 @@ async def _write_synthetic_event(
         LaneRuntimeState(
             lane=lane,
             provider="codex",
+            binding_id="codex-default",
             provider_thread_id=thread_id,
             status="idle",
             latest_turn_id=turn_id,

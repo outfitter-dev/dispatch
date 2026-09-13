@@ -720,6 +720,9 @@ class LaneCapabilities(BaseModel):
 class LaneRef(BaseModel):
     ref: str
     id: str
+    provider: str
+    binding_id: str
+    provider_thread_id: str | None = None
     handle: str
     source: LaneSource
     status: LaneStatus
@@ -744,13 +747,16 @@ class ThreadActionRef(BaseModel):
 class ManagedThreadIdentity(BaseModel):
     """Stable identity fields for outputs that refer to one managed thread.
 
-    ``lane`` stays as the compatibility field for the full Codex thread id.
-    ``id`` names the same full id explicitly for thread-oriented consumers.
+    ``lane`` stays as the compatibility alias for the stable Dispatch ``id``.
+    Default-Codex rows retain their native thread id as that stable key.
     """
 
     lane: str
     ref: str
     id: str
+    provider: str
+    binding_id: str
+    provider_thread_id: str | None = None
     title: str | None = None
     handle: str | None = None
     managed: bool = True
@@ -790,6 +796,8 @@ class LaneSyncView(BaseModel):
 
 class ThreadTopologyNode(BaseModel):
     id: str
+    provider: str = "codex"
+    binding_id: str = "codex-default"
     managed: bool = False
     ref: str | None = None
     handle: str | None = None
@@ -1148,6 +1156,9 @@ class HistoryItem(TranscriptItem):
 class HistoryThreadSummary(BaseModel):
     ref: str | None = None
     id: str
+    provider: str
+    binding_id: str
+    provider_thread_id: str | None = None
     handle: str | None = None
     source: LaneSource | None = None
     status: LaneStatus | None = None
@@ -1296,6 +1307,9 @@ class QueryRef(BaseModel):
 class QueryMatch(BaseModel):
     ref: str
     id: str
+    provider: str
+    binding_id: str
+    provider_thread_id: str | None = None
     handle: str
     source: LaneSource
     status: LaneStatus

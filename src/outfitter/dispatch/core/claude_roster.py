@@ -41,7 +41,7 @@ def reconcile_claude_launch(
             provider="claude",
             reconciliation="pending",
             short_id=short_id,
-            provider_session_id=None,
+            provider_thread_id=None,
             launch_cwd=str(launch_cwd),
             pending_reason="roster_absent",
         )
@@ -57,7 +57,7 @@ def reconcile_claude_launch(
             provider="claude",
             reconciliation="pending",
             short_id=short_id,
-            provider_session_id=None,
+            provider_thread_id=None,
             launch_cwd=str(launch_cwd),
             pending_reason="identity_pending",
             observed_cwd=_optional_text(row, "cwd"),
@@ -69,14 +69,14 @@ def reconcile_claude_launch(
     if not isinstance(session_id, str):
         raise ClaudeLaunchOutputError("Claude roster session identity has an incompatible type")
     try:
-        provider_session_id = str(uuid.UUID(session_id))
+        provider_thread_id = str(uuid.UUID(session_id))
     except ValueError as exc:
         raise ClaudeLaunchOutputError("Claude roster session identity is not a full UUID") from exc
     return ClaudeLaunchObservation(
         provider="claude",
         reconciliation="reconciled",
         short_id=short_id,
-        provider_session_id=provider_session_id,
+        provider_thread_id=provider_thread_id,
         launch_cwd=str(launch_cwd),
         observed_cwd=_optional_text(row, "cwd"),
         observed_name=_optional_text(row, "name"),

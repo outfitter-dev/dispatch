@@ -743,6 +743,18 @@ async def test_server_request_observation_reports_atomic_insert_winner(store: Re
     assert {first.inserted, duplicate.inserted} == {True, False}
 
 
+async def test_pending_server_requests_filter_by_binding_without_session(store: Registry) -> None:
+    profile_a = await store.observe_server_request(
+        server_request(binding_id="profile-a", lane=None, request_id="a")
+    )
+    profile_b = await store.observe_server_request(
+        server_request(binding_id="profile-b", lane=None, request_id="b")
+    )
+
+    assert await store.list_pending_server_requests(binding_id="profile-a") == [profile_a]
+    assert await store.list_pending_server_requests() == [profile_a, profile_b]
+
+
 async def test_server_requests_support_threadless_recovery_and_terminal_claims(
     store: Registry,
 ) -> None:
@@ -949,7 +961,7 @@ async def test_thread_history_snapshot_batches_rows_prunes_and_summarizes(
     assert [found.item_id for found in listed_items] == ["item-1"]
     assert listed_items[0].inserted_at == item.inserted_at
     refs_by_item = await store.list_thread_item_refs_many([item])
-    key = (item.provider, item.provider_thread_id, item.item_id)
+    key = (item.provider, item.binding_id, item.provider_thread_id, item.item_id)
     assert [(ref.ref_type, ref.ref_value) for ref in refs_by_item[key]] == [
         ("file", "README.md"),
         ("tool", "bash"),
@@ -990,11 +1002,15 @@ async def test_list_thread_item_refs_many_keeps_same_item_ids_separate(
     refs = await store.list_thread_item_refs_many([first, second])
 
     assert set(refs) == {
-        ("codex", "thread-1", "shared"),
-        ("codex", "thread-2", "shared"),
+        ("codex", "codex-default", "thread-1", "shared"),
+        ("codex", "codex-default", "thread-2", "shared"),
     }
-    assert [ref.ref_value for ref in refs[("codex", "thread-1", "shared")]] == ["bash"]
-    assert [ref.ref_value for ref in refs[("codex", "thread-2", "shared")]] == ["linear"]
+    assert [ref.ref_value for ref in refs[("codex", "codex-default", "thread-1", "shared")]] == [
+        "bash"
+    ]
+    assert [ref.ref_value for ref in refs[("codex", "codex-default", "thread-2", "shared")]] == [
+        "linear"
+    ]
 
 
 async def test_concurrent_lane_sync_writes_are_serialized(store: Registry) -> None:
@@ -1820,7 +1836,7 @@ async def test_v17_migration_adds_replace_in_place_provider_capacity_table(
         async with migrated._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
         assert row is not None
-        assert int(row[0]) == SCHEMA_VERSION == 23
+        assert int(row[0]) == SCHEMA_VERSION == 25
     finally:
         await migrated.close()
 

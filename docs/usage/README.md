@@ -228,6 +228,30 @@ Common recovery paths:
   operations. In shared mode, verify the configured Unix socket exists and its daemon is
   ready; Dispatch will not replace it with a private server.
 
+### Provider identity migration (schemas 24-25)
+
+Schema 24 adds a runtime binding namespace to managed threads and normalized
+provider history, topology, receipts, runtime state and server requests. Schema
+25 names a managed thread's native conversation identity `provider_thread_id`.
+Existing Codex thread IDs, refs and dependent records remain unchanged.
+Managed-thread output adds `provider`, `binding_id` and `provider_thread_id`;
+`id` and the existing `lane` alias still identify the same stable Dispatch
+thread. Native thread IDs are interpreted inside their binding, so identical IDs
+in different profiles cannot share evidence.
+
+Use the backed-up `dispatch registry migrate` workflow above before starting the
+new binary against an existing registry. The migration rebuilds affected tables
+transactionally and verifies foreign keys. Binaries supporting only schema 23
+refuse to open the upgraded database. Rolling back the executable therefore also
+requires restoring the pre-migration backup with the daemon stopped; it does not
+preserve work recorded after that snapshot. Keep the upgraded database for
+recovery rather than replacing it without a copy.
+
+This migration provides storage identity. It does not itself enable another
+execution provider or grant additional write authority. Existing full Codex IDs
+remain valid selectors; another provider's bare native session ID is not a new
+public selector syntax.
+
 ## Release Publishing
 
 `project.version` in `pyproject.toml` is the release trigger. Maintainers bump
@@ -316,9 +340,11 @@ uv run dispatch send <dispatch-ref> "Review the README for missing usage steps."
 ```
 
 Every managed thread gets a dispatch-local `ref`, for example `0k7M4a`. Use refs
-for day-to-day commands. The full Codex thread id is still the canonical global
-identity and is accepted everywhere. Titles and `@handles` are mutable labels;
-they are convenient, but not stable identity.
+for day-to-day commands. Its `id` is the stable Dispatch identity. For the
+default Codex binding, that remains the full native Codex thread ID; existing
+full-ID selectors retain their behavior. Other bindings keep native identity
+in `provider_thread_id`. Titles and `@handles` are mutable labels; they are
+convenient, but not stable identity.
 
 Example `.dispatch/config.toml`:
 
@@ -1340,8 +1366,10 @@ to fork history through that completed turn, inclusive.
 The thread-read tool's `roster`, `discover`, and `show` ops expose the same
 parent/ancestor/root filters and bounded topology fields as the CLI. Reading or
 discovering topology does not create a lane or grant write authority.
-Structured MCP outputs that identify a managed thread include the dispatch `ref`, full
-Codex id, title/handle, managed/source/status, and cwd when available.
+Structured MCP outputs that identify a managed thread include its Dispatch `ref`
+and stable `id`, provider/binding/native-session metadata, title/handle,
+managed/source/status, and cwd when available. In the default Codex binding,
+the stable `id` remains the full native Codex thread ID.
 
 The workspace Codex plugin at [`plugins/dispatch/`](../../plugins/dispatch/) exposes that
 MCP server through [`plugins/dispatch/.mcp.json`](../../plugins/dispatch/.mcp.json). The

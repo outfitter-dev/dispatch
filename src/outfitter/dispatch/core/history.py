@@ -61,7 +61,7 @@ def history_items_from_thread(
 
 def history_items_from_indexed(
     items: list[ThreadItem],
-    refs_by_item: dict[tuple[str, str, str], list[ThreadItemRef]],
+    refs_by_item: dict[tuple[str, str, str, str], list[ThreadItemRef]],
     *,
     item_type: str | None = None,
     role: str | None = None,
@@ -104,7 +104,7 @@ def history_items_from_indexed(
 
 def history_rollups_from_indexed(
     items: list[ThreadItem],
-    refs_by_item: dict[tuple[str, str, str], list[ThreadItemRef]],
+    refs_by_item: dict[tuple[str, str, str, str], list[ThreadItemRef]],
 ) -> tuple[list[HistoryToolStat], list[HistoryFileStat]]:
     projected = [
         _indexed_history_item(item, refs_by_item.get(_item_identity(item), []), include_raw=False)
@@ -133,6 +133,9 @@ def summarize_history(
     summary = HistoryThreadSummary(
         ref=lane.ref,
         id=lane.id,
+        provider=lane.provider,
+        binding_id=lane.binding_id,
+        provider_thread_id=lane.provider_thread_id,
         handle=lane.handle,
         source=lane.source,
         status=lane.status,
@@ -315,8 +318,8 @@ def _indexed_history_item(
     )
 
 
-def _item_identity(item: ThreadItem) -> tuple[str, str, str]:
-    return (item.provider, item.provider_thread_id, item.item_id)
+def _item_identity(item: ThreadItem) -> tuple[str, str, str, str]:
+    return (item.provider, item.binding_id, item.provider_thread_id, item.item_id)
 
 
 def _turns(thread: dict[str, object]) -> list[dict[str, object]]:
