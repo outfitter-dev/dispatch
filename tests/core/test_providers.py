@@ -14,6 +14,7 @@ from outfitter.dispatch.config import RuntimePolicy
 from outfitter.dispatch.contracts.errors import CapabilityUnavailableError
 from outfitter.dispatch.core import handlers
 from outfitter.dispatch.core.models import (
+    AttachInput,
     DiscoverInput,
     ForkInput,
     ImageUrlContent,
@@ -306,6 +307,41 @@ async def test_nondefault_sync_is_not_advertised_and_fails_before_effects() -> N
             )
             is None
         )
+        assert await store.get_lane_sync(lane.id) is None
+        assert not any(action.op == "sync" for action in await store.recent_actions())
+    finally:
+        await store.close()
+
+
+async def test_attach_sync_on_nondefault_lane_fails_before_provider_io() -> None:
+    store = await Registry.open()
+    try:
+        client = FakeLaneClient()
+        ctx = make_ctx(store, client)
+        # A registered adapter that advertises SYNC for the non-default binding: without the
+        # attach guard, route_lane would succeed and _sync_lane would issue thread/read.
+        ctx.providers = ProviderRouter(
+            (
+                CodexLaneAdapter(
+                    client,
+                    binding_id="profile-a",
+                    availability=ProviderAvailability(ready=True),
+                ),
+            )
+        )
+        lane = await store.add_lane(
+            id="dsp_profile_a",
+            handle="@profile-a",
+            source="own",
+            provider="codex",
+            binding_id="profile-a",
+            provider_thread_id="native-shared",
+        )
+
+        with pytest.raises(CapabilityUnavailableError, match="default Codex"):
+            await handlers.attach_lane(AttachInput(thread=lane.id, sync=True), ctx)
+
+        assert client.calls == []
         assert await store.get_lane_sync(lane.id) is None
         assert not any(action.op == "sync" for action in await store.recent_actions())
     finally:
