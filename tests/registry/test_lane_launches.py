@@ -13,7 +13,7 @@ import pytest
 import pytest_asyncio
 
 from outfitter.dispatch.contracts.errors import DeliveryConflictError, ValidationError
-from outfitter.dispatch.registry.launch import LaneLaunch
+from outfitter.dispatch.registry.launch import LaneLaunch, LaneLaunchFirstDelivery
 from outfitter.dispatch.registry.models import Lane
 from outfitter.dispatch.registry.store import SCHEMA_VERSION, Registry
 
@@ -186,7 +186,7 @@ async def test_positive_mapping_without_prompt_finishes_creation(store: Registry
         runtime_session_id="runtime-1",
         stored_session_id="stored-1",
         effective_cwd="/effective",
-        first_delivery_required=False,
+        first_delivery=None,
     )
 
     assert mapped.status == "created"
@@ -196,23 +196,6 @@ async def test_positive_mapping_without_prompt_finishes_creation(store: Registry
     assert saved_lane.provider_thread_id == "stored-1"
     assert saved_lane.cwd == "/effective"
     assert saved_lane.status == "idle"
-
-
-async def test_positive_mapping_with_prompt_remains_held_until_receipt(store: Registry) -> None:
-    _, lane, _ = await _reserve(store)
-    assert await store.claim_lane_launch(lane.id, generation="generation-1")
-    mapped = await store.record_lane_launch_mapping(
-        lane.id,
-        generation="generation-1",
-        runtime_session_id="runtime-1",
-        stored_session_id="stored-1",
-        effective_cwd="/effective",
-        first_delivery_required=True,
-    )
-
-    assert mapped.status == "creating"
-    assert mapped.first_delivery_id is None
-    assert (await store.get_lane(lane.id)).status == "unknown"
 
 
 async def test_provider_thread_collision_rolls_back_lane_and_launch_mapping(
@@ -228,7 +211,7 @@ async def test_provider_thread_collision_rolls_back_lane_and_launch_mapping(
         runtime_session_id="runtime-first",
         stored_session_id="stored-shared",
         effective_cwd="/first",
-        first_delivery_required=False,
+        first_delivery=None,
     )
 
     with pytest.raises(aiosqlite.IntegrityError):
@@ -238,7 +221,7 @@ async def test_provider_thread_collision_rolls_back_lane_and_launch_mapping(
             runtime_session_id="runtime-second",
             stored_session_id="stored-shared",
             effective_cwd="/second",
-            first_delivery_required=False,
+            first_delivery=None,
         )
 
     assert (await store.get_lane(second.id)).provider_thread_id is None
@@ -248,17 +231,11 @@ async def test_provider_thread_collision_rolls_back_lane_and_launch_mapping(
     assert held.stored_session_id is None
 
 
-async def test_first_delivery_is_reserved_and_linked_atomically(store: Registry) -> None:
+async def test_positive_mapping_with_prompt_links_first_delivery_in_one_write(
+    store: Registry,
+) -> None:
     _, lane, _ = await _reserve(store)
     assert await store.claim_lane_launch(lane.id, generation="generation-1")
-    await store.record_lane_launch_mapping(
-        lane.id,
-        generation="generation-1",
-        runtime_session_id="runtime-1",
-        stored_session_id="stored-1",
-        effective_cwd="/effective",
-        first_delivery_required=True,
-    )
     prepared = json.dumps(
         {
             "target": {
@@ -273,22 +250,30 @@ async def test_first_delivery_is_reserved_and_linked_atomically(store: Registry)
         sort_keys=True,
     )
 
-    receipt = await store.reserve_lane_launch_first_delivery(
+    launch = await store.record_lane_launch_mapping(
         lane.id,
-        submitted_payload='{"text":"hello"}',
-        payload=prepared,
-        text="hello",
+        generation="generation-1",
+        runtime_session_id="runtime-1",
+        stored_session_id="stored-1",
+        effective_cwd="/effective",
+        first_delivery=LaneLaunchFirstDelivery(
+            id="receipt-1",
+            submitted_payload='{"text":"hello"}',
+            payload=prepared,
+            text="hello",
+        ),
     )
 
-    launch = await store.get_lane_launch(lane.id)
+    assert launch.status == "created"
+    assert launch.first_delivery_id == "receipt-1"
+    receipt = await store.get_delivery("receipt-1")
     assert receipt.key is None
     assert receipt.status == "queued"
     assert receipt.lane == lane.id
     assert receipt.provider == "hermes"
     assert receipt.binding_id == "hermes-default"
     assert receipt.native_session_id == "stored-1"
-    assert launch.first_delivery_id == receipt.id
-    assert launch.status == "created"
+    assert receipt.correlation_id == "receipt-1"
     assert (await store.get_lane(lane.id)).status == "idle"
 
     await store.update_lane_provider_thread(
@@ -300,44 +285,47 @@ async def test_first_delivery_is_reserved_and_linked_atomically(store: Registry)
     immutable = await store.get_lane_launch(lane.id)
     assert immutable.runtime_session_id == "runtime-1"
     assert immutable.stored_session_id == "stored-1"
-    assert (await store.get_delivery(receipt.id)).native_session_id == "stored-1"
+    assert (await store.get_delivery("receipt-1")).native_session_id == "stored-1"
 
 
-async def test_first_delivery_failure_rolls_back_receipt_link_and_state(
+async def test_first_delivery_failure_rolls_back_mapping_with_receipt(
     store: Registry, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, lane, _ = await _reserve(store)
     assert await store.claim_lane_launch(lane.id, generation="generation-1")
-    await store.record_lane_launch_mapping(
-        lane.id,
-        generation="generation-1",
-        runtime_session_id="runtime-1",
-        stored_session_id="stored-1",
-        effective_cwd="/effective",
-        first_delivery_required=True,
-    )
 
     async def fail(*args: object, **kwargs: object) -> None:
         raise RuntimeError("injected receipt failure")
 
     monkeypatch.setattr(Registry, "_insert_delivery_reservation", fail)
     with pytest.raises(RuntimeError, match="injected"):
-        await store.reserve_lane_launch_first_delivery(
+        await store.record_lane_launch_mapping(
             lane.id,
-            submitted_payload='{"text":"hello"}',
-            payload="{}",
-            text="hello",
+            generation="generation-1",
+            runtime_session_id="runtime-1",
+            stored_session_id="stored-1",
+            effective_cwd="/effective",
+            first_delivery=LaneLaunchFirstDelivery(
+                id="receipt-1",
+                submitted_payload='{"text":"hello"}',
+                payload="{}",
+                text="hello",
+            ),
         )
 
     launch = await store.get_lane_launch(lane.id)
     assert launch.status == "creating"
+    assert launch.runtime_session_id is None
+    assert launch.stored_session_id is None
     assert launch.first_delivery_id is None
     async with store._conn.execute(
         "SELECT count(*) FROM deliveries WHERE lane = ?", (lane.id,)
     ) as cur:
         row = await cur.fetchone()
     assert row is not None and int(row[0]) == 0
-    assert (await store.get_lane(lane.id)).status == "unknown"
+    saved_lane = await store.get_lane(lane.id)
+    assert saved_lane.provider_thread_id is None
+    assert saved_lane.status == "unknown"
 
 
 @pytest.mark.parametrize("terminal", ["failed", "ambiguous"])
@@ -365,7 +353,7 @@ async def test_terminal_creation_attempt_cannot_be_reclaimed(
             runtime_session_id="runtime-1",
             stored_session_id="stored-1",
             effective_cwd="/work",
-            first_delivery_required=False,
+            first_delivery=None,
         )
 
 

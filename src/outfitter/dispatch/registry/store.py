@@ -36,7 +36,7 @@ from .delivery import (
     DeliveryStatus,
     DeliveryTransport,
 )
-from .launch import LaneLaunch, LaneLaunchStatus
+from .launch import LaneLaunch, LaneLaunchFirstDelivery, LaneLaunchStatus
 from .models import (
     SERVER_REQUEST_TEXT_LIMIT,
     ActionAdapter,
@@ -2154,9 +2154,9 @@ class Registry:
         runtime_session_id: str,
         stored_session_id: str,
         effective_cwd: str,
-        first_delivery_required: bool,
+        first_delivery: LaneLaunchFirstDelivery | None,
     ) -> LaneLaunch:
-        """Persist a positive native mapping without reconstructing a first submit."""
+        """Persist a positive native mapping and, in the same write, its first submit."""
 
         if not runtime_session_id or not stored_session_id or not effective_cwd:
             raise ValidationError("native lane launch mapping fields cannot be empty")
@@ -2175,18 +2175,15 @@ class Registry:
                 or launch.stored_session_id is not None
             ):
                 raise ValidationError(f"cannot record native mapping for lane launch {lane_id!r}")
-            status = "creating" if first_delivery_required else "created"
-            updated_at = self.now_iso()
-            lane_status = "unknown" if first_delivery_required else "idle"
+            now = self.now_iso()
             changed = await self._conn.execute(
-                "UPDATE lanes SET provider_thread_id = ?, cwd = ?, status = ?, updated_at = ? "
-                "WHERE id = ? AND provider = ? AND binding_id = ? "
+                "UPDATE lanes SET provider_thread_id = ?, cwd = ?, status = 'idle', "
+                "updated_at = ? WHERE id = ? AND provider = ? AND binding_id = ? "
                 "AND provider_thread_id IS NULL",
                 (
                     stored_session_id,
                     effective_cwd,
-                    lane_status,
-                    updated_at,
+                    now,
                     lane_id,
                     launch.provider,
                     launch.binding_id,
@@ -2194,82 +2191,36 @@ class Registry:
             )
             if changed.rowcount != 1:
                 raise ValidationError(f"cannot record native mapping for lane launch {lane_id!r}")
+            if first_delivery is not None:
+                await self._insert_delivery_reservation(
+                    receipt_id=first_delivery.id,
+                    key=None,
+                    lane=lane_id,
+                    mode="send",
+                    submitted_payload=first_delivery.submitted_payload,
+                    payload=first_delivery.payload,
+                    text=first_delivery.text,
+                    transport="turn",
+                    provider=launch.provider,
+                    binding_id=launch.binding_id,
+                    native_session_id=stored_session_id,
+                    correlation_id=first_delivery.id,
+                    now=now,
+                )
             await self._conn.execute(
                 "UPDATE lane_launches SET runtime_session_id = ?, stored_session_id = ?, "
-                "effective_cwd = ?, status = ?, updated_at = ? WHERE lane = ?",
+                "effective_cwd = ?, first_delivery_id = ?, status = 'created', updated_at = ? "
+                "WHERE lane = ?",
                 (
                     runtime_session_id,
                     stored_session_id,
                     effective_cwd,
-                    status,
-                    updated_at,
+                    first_delivery.id if first_delivery is not None else None,
+                    now,
                     lane_id,
                 ),
             )
         return await self.get_lane_launch(lane_id)
-
-    @_serialized_access
-    async def reserve_lane_launch_first_delivery(
-        self,
-        lane_id: str,
-        *,
-        submitted_payload: str,
-        payload: str,
-        text: str,
-        delivery_id: str | None = None,
-    ) -> DeliveryReceipt:
-        """Atomically reserve and link the first submit after positive creation."""
-
-        receipt_id = delivery_id or str(uuid4())
-        now = self.now_iso()
-        async with self._transaction():
-            async with self._conn.execute(
-                "SELECT * FROM lane_launches WHERE lane = ?", (lane_id,)
-            ) as cur:
-                row = await cur.fetchone()
-            if row is None:
-                raise NotFoundError(f"no lane launch {lane_id!r}")
-            launch = _row_to_lane_launch(row)
-            if (
-                launch.status != "creating"
-                or launch.runtime_session_id is None
-                or launch.stored_session_id is None
-                or launch.first_delivery_id is not None
-            ):
-                raise ValidationError(f"cannot reserve first delivery for lane launch {lane_id!r}")
-            async with self._conn.execute(
-                "SELECT provider_thread_id FROM lanes WHERE id = ? AND provider = ? "
-                "AND binding_id = ?",
-                (lane_id, launch.provider, launch.binding_id),
-            ) as cur:
-                lane_row = await cur.fetchone()
-            if lane_row is None or lane_row["provider_thread_id"] != launch.stored_session_id:
-                raise ValidationError(f"cannot reserve first delivery for lane launch {lane_id!r}")
-            await self._insert_delivery_reservation(
-                receipt_id=receipt_id,
-                key=None,
-                lane=lane_id,
-                mode="send",
-                submitted_payload=submitted_payload,
-                payload=payload,
-                text=text,
-                transport="turn",
-                provider=launch.provider,
-                binding_id=launch.binding_id,
-                native_session_id=launch.stored_session_id,
-                correlation_id=receipt_id,
-                now=now,
-            )
-            await self._conn.execute(
-                "UPDATE lane_launches SET first_delivery_id = ?, status = 'created', "
-                "updated_at = ? WHERE lane = ?",
-                (receipt_id, now, lane_id),
-            )
-            await self._conn.execute(
-                "UPDATE lanes SET status = 'idle', updated_at = ? WHERE id = ?",
-                (now, lane_id),
-            )
-        return await self.get_delivery(receipt_id)
 
     async def _finish_lane_launch(
         self,

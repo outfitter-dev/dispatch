@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,7 +18,7 @@ from outfitter.dispatch.contracts.errors import (
     ValidationError,
 )
 from outfitter.dispatch.registry.delivery import DeliveryReceipt
-from outfitter.dispatch.registry.launch import LaneLaunch
+from outfitter.dispatch.registry.launch import LaneLaunch, LaneLaunchFirstDelivery
 from outfitter.dispatch.registry.models import Lane
 
 from .delivery import encode_prepared_request, submit_reserved
@@ -162,11 +163,21 @@ async def create_hermes_lane(
             error=str(exc)[:2000],
         )
         raise
-    result = await route.adapter.create_session(
-        lane_id=lane.id,
-        cwd=str(launch.resolved.cwd),
-        title=launch.resolved.display_name,
-    )
+    try:
+        result = await route.adapter.create_session(
+            lane_id=lane.id,
+            cwd=str(launch.resolved.cwd),
+            title=launch.resolved.display_name,
+        )
+    except asyncio.CancelledError:
+        # The native session may already exist; hold the launch rather than
+        # leaving a permanently claimed `creating` record behind.
+        await ctx.registry.mark_lane_launch_ambiguous(
+            lane.id,
+            generation=generation,
+            error="Hermes session creation was cancelled before its outcome was observed",
+        )
+        raise
     if not isinstance(result, HermesSessionCreated):
         launch_record = await ctx.registry.mark_lane_launch_ambiguous(
             lane.id,
@@ -198,15 +209,7 @@ async def create_hermes_lane(
         )
         raise AppServerError(f"Hermes effective cwd did not match requested cwd for {lane.ref}")
 
-    launch_record = await ctx.registry.record_lane_launch_mapping(
-        lane.id,
-        generation=generation,
-        runtime_session_id=result.runtime_session_id,
-        stored_session_id=result.stored_session_id,
-        effective_cwd=result.effective_cwd,
-        first_delivery_required=launch.would_send,
-    )
-    delivery: DeliveryReceipt | None = None
+    first_delivery: LaneLaunchFirstDelivery | None = None
     if launch.would_send:
         assert launch.text is not None
         delivery_id = str(uuid4())
@@ -225,18 +228,29 @@ async def create_hermes_lane(
             text=launch.text,
             cwd=result.effective_cwd,
         )
-        delivery = await ctx.registry.reserve_lane_launch_first_delivery(
-            lane.id,
+        first_delivery = LaneLaunchFirstDelivery(
+            id=delivery_id,
             submitted_payload=_canonical_json(
                 {"version": 1, "lane": lane.id, "text": launch.text, "mode": "send"}
             ),
             payload=encode_prepared_request(prepared),
             text=launch.text,
-            delivery_id=delivery_id,
         )
+    # The native mapping and the first receipt commit together: a crash between
+    # them would otherwise leave a mapped launch that no replay can complete.
+    launch_record = await ctx.registry.record_lane_launch_mapping(
+        lane.id,
+        generation=generation,
+        runtime_session_id=result.runtime_session_id,
+        stored_session_id=result.stored_session_id,
+        effective_cwd=result.effective_cwd,
+        first_delivery=first_delivery,
+    )
+    delivery: DeliveryReceipt | None = None
+    if launch_record.first_delivery_id is not None:
         route.recheck()
-        await submit_reserved(delivery.id, ctx)
-        delivery = await ctx.registry.get_delivery(delivery.id)
+        await submit_reserved(launch_record.first_delivery_id, ctx)
+        delivery = await ctx.registry.get_delivery(launch_record.first_delivery_id)
     lane = await ctx.registry.get_lane(lane.id)
     launch_record = await ctx.registry.get_lane_launch(lane.id)
     return HermesLaunchOutcome(lane, launch_record, delivery, True)

@@ -28,3 +28,12 @@ class LaneLaunch(BaseModel):
     error: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class LaneLaunchFirstDelivery(BaseModel):
+    """The initial submit reserved in the same write as a positive native mapping."""
+
+    id: str
+    submitted_payload: str
+    payload: str
+    text: str
