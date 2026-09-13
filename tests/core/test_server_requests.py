@@ -265,7 +265,7 @@ async def test_operator_response_rejects_request_from_non_default_binding(
 ) -> None:
     client = FakeLaneClient()
     ctx = make_ctx(store, client)
-    ctx.provider_session_id = "session-1"
+    ctx.connection_generation = "session-1"
     observation = await store.observe_server_request_once(
         ServerRequest(
             binding_id="profile-a",
