@@ -281,6 +281,19 @@ async def test_new_lane_sets_name_and_sends_initial_turn(store: Registry, tmp_pa
     )
 
 
+async def test_new_lane_with_initial_message_reports_busy_state(
+    store: Registry, tmp_path: Path
+) -> None:
+    ctx = make_ctx(store, FakeLaneClient())
+
+    out = await handlers.new_lane(NewInput(name="builder", cwd=str(tmp_path), text="start"), ctx)
+
+    assert out.message_accepted is True
+    assert out.status == "busy"
+    assert out.provider_state.activity == "busy"
+    assert (await store.get_lane(out.id)).status == "busy"
+
+
 async def test_new_lane_omits_policy_fields_to_inherit_codex_config(
     store: Registry, tmp_path: Path
 ) -> None:
