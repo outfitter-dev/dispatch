@@ -156,19 +156,19 @@ async def lane_topology_views(
     views: dict[str, ThreadTopologyView] = {}
     groups: dict[tuple[str, str], list[Lane]] = {}
     for lane in lanes:
-        if lane.provider_session_id is None:
+        if lane.provider_thread_id is None:
             views[lane.id] = ThreadTopologyView()
             continue
         groups.setdefault((lane.provider, lane.binding_id), []).append(lane)
     for (provider, binding_id), group in groups.items():
         native_views = await topology_views(
             registry,
-            [lane.provider_session_id for lane in group if lane.provider_session_id is not None],
+            [lane.provider_thread_id for lane in group if lane.provider_thread_id is not None],
             max_nodes=max_nodes,
             provider=provider,
             binding_id=binding_id,
         )
         for lane in group:
-            assert lane.provider_session_id is not None
-            views[lane.id] = native_views[lane.provider_session_id]
+            assert lane.provider_thread_id is not None
+            views[lane.id] = native_views[lane.provider_thread_id]
     return views

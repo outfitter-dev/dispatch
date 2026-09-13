@@ -214,7 +214,7 @@ class _ManagedIdentityPayload(TypedDict):
     id: str
     provider: str
     binding_id: str
-    provider_session_id: str | None
+    provider_thread_id: str | None
     title: str | None
     handle: str | None
     managed: bool
@@ -253,7 +253,7 @@ def _has_default_codex_binding(lane: Lane) -> bool:
     return (
         lane.provider == "codex"
         and lane.binding_id == DEFAULT_CODEX_BINDING_ID
-        and lane.provider_session_id == lane.id
+        and lane.provider_thread_id == lane.id
     )
 
 
@@ -262,8 +262,8 @@ def _require_default_codex_binding(lane: Lane, operation: str) -> str:
         raise CapabilityUnavailableError(
             f"{operation} is unavailable for provider binding {lane.provider}:{lane.binding_id}"
         )
-    assert lane.provider_session_id is not None
-    return lane.provider_session_id
+    assert lane.provider_thread_id is not None
+    return lane.provider_thread_id
 
 
 def _can_write(lane: Lane, ctx: Ctx) -> bool:
@@ -309,7 +309,7 @@ def _ref(lane: Lane, ctx: Ctx) -> LaneRef:
         id=lane.id,
         provider=lane.provider,
         binding_id=lane.binding_id,
-        provider_session_id=lane.provider_session_id,
+        provider_thread_id=lane.provider_thread_id,
         handle=lane.handle,
         source=lane.source,
         status=lane.status,
@@ -346,7 +346,7 @@ def _managed_identity(lane: Lane, ctx: Ctx) -> _ManagedIdentityPayload:
         "id": lane.id,
         "provider": lane.provider,
         "binding_id": lane.binding_id,
-        "provider_session_id": lane.provider_session_id,
+        "provider_thread_id": lane.provider_thread_id,
         "title": lane.handle.removeprefix("@"),
         "handle": lane.handle,
         "managed": True,
@@ -537,7 +537,7 @@ async def _resolve_self(ctx: Ctx, caller_thread_id: str | None) -> Lane:
     thread_id = caller_thread_id or os.environ.get("CODEX_THREAD_ID")
     if not thread_id:
         raise ValidationError("self requires CODEX_THREAD_ID from the current Codex thread")
-    lane = await ctx.registry.find_lane_by_provider_session(
+    lane = await ctx.registry.find_lane_by_provider_thread(
         "codex", DEFAULT_CODEX_BINDING_ID, thread_id
     )
     if lane is None:
@@ -951,6 +951,7 @@ async def attach_lane(inp: AttachInput, ctx: Ctx) -> LaneRef:
     existing = await ctx.registry.find_lane(inp.thread)
     if existing is not None:
         if inp.sync:
+            _require_default_codex_binding(existing, "sync")
             await _sync_lane(existing, ctx, full=False)
         return _ref(existing, ctx)  # idempotent re-attach
     try:
@@ -1371,7 +1372,7 @@ async def _record_direct_send_receipt(
             lane=lane.id,
             provider=lane.provider,
             binding_id=lane.binding_id,
-            provider_thread_id=lane.provider_session_id or lane.id,
+            provider_thread_id=lane.provider_thread_id or lane.id,
             status=status,  # type: ignore[arg-type]
             error=error,
             created_at=now,
@@ -1397,7 +1398,7 @@ async def _record_queue_receipt(
             queued_message_id=queued_message_id,
             provider=lane.provider,
             binding_id=lane.binding_id,
-            provider_thread_id=lane.provider_session_id or lane.id,
+            provider_thread_id=lane.provider_thread_id or lane.id,
             dispatch_message_id=f"queue:{queued_message_id}",
             status=status,  # type: ignore[arg-type]
             error=error,
@@ -2224,6 +2225,9 @@ async def _history_summary_from_index(lane: Lane, ctx: Ctx) -> HistoryThreadSumm
     return HistoryThreadSummary(
         ref=lane.ref,
         id=lane.id,
+        provider=lane.provider,
+        binding_id=lane.binding_id,
+        provider_thread_id=lane.provider_thread_id,
         handle=lane.handle,
         source=lane.source,
         status=lane.status,
@@ -2420,6 +2424,9 @@ def _query_match(
     return QueryMatch(
         ref=lane.ref,
         id=lane.id,
+        provider=lane.provider,
+        binding_id=lane.binding_id,
+        provider_thread_id=lane.provider_thread_id,
         handle=lane.handle,
         source=lane.source,
         status=lane.status,

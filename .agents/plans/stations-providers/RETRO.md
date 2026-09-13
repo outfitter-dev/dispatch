@@ -35,7 +35,7 @@ DIS-79–82 remain unimplemented. DIS-84's isolated native Hermes API investigat
 
 ## September 12, 2026 — provider and binding identity
 
-Matt expanded the assignment through the shared foundation and native Hermes implementation, including direct default-profile research. DIS-79 extends the reviewed `904386c` stack with schema v24. It scopes native sessions, history, topology, events, normalized receipts, runtime state and server requests by provider and binding, while preserving Dispatch lane keys and refs. Default Codex keeps `provider_session_id == id`; other bindings remain non-executable in this migration slice.
+Matt expanded the assignment through the shared foundation and native Hermes implementation, including direct default-profile research. DIS-79 extends the reviewed `904386c` stack with schema v24. It scopes native sessions, history, topology, events, normalized receipts, runtime state and server requests by provider and binding, while preserving Dispatch lane keys and refs. Default Codex keeps `provider_thread_id == id`; other bindings remain non-executable in this migration slice.
 
 ### Verification and review
 

@@ -228,15 +228,16 @@ Common recovery paths:
   operations. In shared mode, verify the configured Unix socket exists and its daemon is
   ready; Dispatch will not replace it with a private server.
 
-### Provider identity migration (schema 24)
+### Provider identity migration (schemas 24-25)
 
 Schema 24 adds a runtime binding namespace to managed threads and normalized
-provider history, topology, receipts, runtime state and server requests. Existing
-Codex thread IDs, refs and dependent records remain unchanged. Managed-thread
-output adds `provider`, `binding_id` and `provider_session_id`; `id` and the
-existing `lane` alias still identify the same stable Dispatch thread. Native
-session IDs are interpreted inside their binding, so identical IDs in different
-profiles cannot share evidence.
+provider history, topology, receipts, runtime state and server requests. Schema
+25 names a managed thread's native conversation identity `provider_thread_id`.
+Existing Codex thread IDs, refs and dependent records remain unchanged.
+Managed-thread output adds `provider`, `binding_id` and `provider_thread_id`;
+`id` and the existing `lane` alias still identify the same stable Dispatch
+thread. Native thread IDs are interpreted inside their binding, so identical IDs
+in different profiles cannot share evidence.
 
 Use the backed-up `dispatch registry migrate` workflow above before starting the
 new binary against an existing registry. The migration rebuilds affected tables
@@ -342,7 +343,7 @@ Every managed thread gets a dispatch-local `ref`, for example `0k7M4a`. Use refs
 for day-to-day commands. Its `id` is the stable Dispatch identity. For the
 default Codex binding, that remains the full native Codex thread ID; existing
 full-ID selectors retain their behavior. Other bindings keep native identity
-in `provider_session_id`. Titles and `@handles` are mutable labels; they are
+in `provider_thread_id`. Titles and `@handles` are mutable labels; they are
 convenient, but not stable identity.
 
 Example `.dispatch/config.toml`:

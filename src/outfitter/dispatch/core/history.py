@@ -133,6 +133,9 @@ def summarize_history(
     summary = HistoryThreadSummary(
         ref=lane.ref,
         id=lane.id,
+        provider=lane.provider,
+        binding_id=lane.binding_id,
+        provider_thread_id=lane.provider_thread_id,
         handle=lane.handle,
         source=lane.source,
         status=lane.status,

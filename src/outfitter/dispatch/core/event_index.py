@@ -48,7 +48,7 @@ async def index_codex_lane_event(
     provider_event = ProviderEvent(
         provider=lane.provider,
         binding_id=lane.binding_id,
-        provider_thread_id=lane.provider_session_id or lane.id,
+        provider_thread_id=lane.provider_thread_id or lane.id,
         lane=lane.id,
         event_type=_event_type(event),
         provider_event_id=_provider_event_id(event),
@@ -65,7 +65,7 @@ async def index_codex_lane_event(
     if isinstance(event, ItemStarted | ItemCompleted) and event.item is not None:
         item, refs = normalize_codex_item(
             event.item,
-            provider_thread_id=lane.provider_session_id or lane.id,
+            provider_thread_id=lane.provider_thread_id or lane.id,
             binding_id=lane.binding_id,
             lane=lane.id,
             turn_id=event.turn_id,
@@ -261,7 +261,7 @@ def _thread_turn(
         return ThreadTurn(
             provider=lane.provider,
             binding_id=lane.binding_id,
-            provider_thread_id=lane.provider_session_id or lane.id,
+            provider_thread_id=lane.provider_thread_id or lane.id,
             lane=lane.id,
             turn_id=event.turn_id,
             status="started",
@@ -272,7 +272,7 @@ def _thread_turn(
         return ThreadTurn(
             provider=lane.provider,
             binding_id=lane.binding_id,
-            provider_thread_id=lane.provider_session_id or lane.id,
+            provider_thread_id=lane.provider_thread_id or lane.id,
             lane=lane.id,
             turn_id=event.turn_id,
             status="completed",
@@ -285,7 +285,7 @@ def _thread_turn(
         return ThreadTurn(
             provider=lane.provider,
             binding_id=lane.binding_id,
-            provider_thread_id=lane.provider_session_id or lane.id,
+            provider_thread_id=lane.provider_thread_id or lane.id,
             lane=lane.id,
             turn_id=event.turn_id,
             status=event.execution_status,
@@ -356,7 +356,7 @@ def _state(
         lane=lane.id,
         provider=lane.provider,
         binding_id=lane.binding_id,
-        provider_thread_id=lane.provider_session_id or lane.id,
+        provider_thread_id=lane.provider_thread_id or lane.id,
         status=status,  # type: ignore[arg-type]
         active_turn_id=active_turn_id,
         latest_turn_id=latest_turn_id,

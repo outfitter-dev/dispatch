@@ -208,7 +208,7 @@ async def launch_claude_background(
             provider="claude",
             reconciliation="pending",
             short_id=short_id,
-            provider_session_id=None,
+            provider_thread_id=None,
             launch_cwd=str(envelope.cwd),
             pending_reason="roster_unavailable",
         )
@@ -217,7 +217,7 @@ async def launch_claude_background(
             provider="claude",
             reconciliation="pending",
             short_id=short_id,
-            provider_session_id=None,
+            provider_thread_id=None,
             launch_cwd=str(envelope.cwd),
             pending_reason="roster_unavailable",
         )

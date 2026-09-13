@@ -87,12 +87,12 @@ async def backfill_codex_history(
     if (
         lane.provider != "codex"
         or lane.binding_id != DEFAULT_CODEX_BINDING_ID
-        or lane.provider_session_id != lane.id
+        or lane.provider_thread_id != lane.id
     ):
         raise CapabilityUnavailableError(
             f"history sync is unavailable for provider binding {lane.provider}:{lane.binding_id}"
         )
-    native_id = lane.provider_session_id
+    native_id = lane.provider_thread_id
     started = monotonic()
     deadline = started + max_seconds
     initial_request = ThreadResumeInitialTurnsPageParams(

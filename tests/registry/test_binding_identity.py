@@ -33,7 +33,7 @@ async def test_same_native_identity_is_isolated_by_binding(tmp_path: Path) -> No
             source="own",
             provider="claude",
             binding_id="profile-a",
-            provider_session_id="native-shared",
+            provider_thread_id="native-shared",
         )
         lane_b = await store.add_lane(
             id="dsp_lane_b",
@@ -41,7 +41,7 @@ async def test_same_native_identity_is_isolated_by_binding(tmp_path: Path) -> No
             source="own",
             provider="claude",
             binding_id="profile-b",
-            provider_session_id="native-shared",
+            provider_thread_id="native-shared",
         )
         assert lane_a.ref_source == lane_b.ref_source == "1"
 
@@ -182,7 +182,7 @@ async def test_dispatch_message_id_cannot_retarget_binding() -> None:
         await store.close()
 
 
-async def test_provider_session_continuation_cannot_retarget_binding() -> None:
+async def test_provider_thread_continuation_cannot_retarget_binding() -> None:
     store = await Registry.open()
     try:
         reserved = await store.add_lane(
@@ -192,27 +192,27 @@ async def test_provider_session_continuation_cannot_retarget_binding() -> None:
             provider="claude",
             binding_id="profile-a",
         )
-        assert reserved.provider_session_id is None
-        continued = await store.update_lane_provider_session(
+        assert reserved.provider_thread_id is None
+        continued = await store.update_lane_provider_thread(
             reserved.id,
             provider="claude",
             binding_id="profile-a",
-            provider_session_id="native-1",
+            provider_thread_id="native-1",
         )
-        assert continued.provider_session_id == "native-1"
+        assert continued.provider_thread_id == "native-1"
         with pytest.raises(NotFoundError, match=r"no lane .* provider binding"):
-            await store.update_lane_provider_session(
+            await store.update_lane_provider_thread(
                 reserved.id,
                 provider="claude",
                 binding_id="profile-b",
-                provider_session_id="native-2",
+                provider_thread_id="native-2",
             )
-        assert (await store.get_lane(reserved.id)).provider_session_id == "native-1"
+        assert (await store.get_lane(reserved.id)).provider_thread_id == "native-1"
     finally:
         await store.close()
 
 
-async def test_provider_session_collision_rolls_back_and_registry_remains_writable() -> None:
+async def test_provider_thread_collision_rolls_back_and_registry_remains_writable() -> None:
     store = await Registry.open()
     try:
         first = await store.add_lane(
@@ -221,7 +221,7 @@ async def test_provider_session_collision_rolls_back_and_registry_remains_writab
             source="own",
             provider="claude",
             binding_id="profile-a",
-            provider_session_id="native-shared",
+            provider_thread_id="native-shared",
         )
         second = await store.add_lane(
             id="dsp_second",
@@ -231,15 +231,15 @@ async def test_provider_session_collision_rolls_back_and_registry_remains_writab
             binding_id="profile-a",
         )
         with pytest.raises(sqlite3.IntegrityError):
-            await store.update_lane_provider_session(
+            await store.update_lane_provider_thread(
                 second.id,
                 provider="claude",
                 binding_id="profile-a",
-                provider_session_id="native-shared",
+                provider_thread_id="native-shared",
             )
         assert store._conn.in_transaction is False
-        assert (await store.get_lane(first.id)).provider_session_id == "native-shared"
-        assert (await store.get_lane(second.id)).provider_session_id is None
+        assert (await store.get_lane(first.id)).provider_thread_id == "native-shared"
+        assert (await store.get_lane(second.id)).provider_thread_id is None
         created = await store.add_lane(
             id="dsp_after",
             handle="@after",
@@ -252,18 +252,18 @@ async def test_provider_session_collision_rolls_back_and_registry_remains_writab
         await store.close()
 
 
-async def test_default_codex_provider_session_cannot_diverge_from_stable_id() -> None:
+async def test_default_codex_provider_thread_cannot_diverge_from_stable_id() -> None:
     store = await Registry.open()
     try:
         lane = await store.add_lane(id="codex-native", handle="@codex", source="own", status="idle")
         with pytest.raises(ValidationError, match="must equal the stable lane id"):
-            await store.update_lane_provider_session(
+            await store.update_lane_provider_thread(
                 lane.id,
                 provider="codex",
                 binding_id=DEFAULT_CODEX_BINDING_ID,
-                provider_session_id="replacement-native",
+                provider_thread_id="replacement-native",
             )
-        assert (await store.get_lane(lane.id)).provider_session_id == lane.id
+        assert (await store.get_lane(lane.id)).provider_thread_id == lane.id
     finally:
         await store.close()
 
@@ -276,7 +276,7 @@ async def test_new_lane_ids_keep_default_codex_and_other_provider_namespaces_dis
                 id="codex-key",
                 handle="@bad-codex",
                 source="own",
-                provider_session_id="different-native",
+                provider_thread_id="different-native",
             )
         with pytest.raises(ValueError, match="opaque dsp_ Dispatch id"):
             await store.add_lane(
@@ -438,8 +438,8 @@ async def _downgrade_seed_to_v23(path: Path, *, migration_collision: bool = Fals
                 )
         for table in ("provider_events", "message_receipts", "server_requests"):
             conn.execute("UPDATE sqlite_sequence SET seq = 42 WHERE name = ?", (table,))
-        conn.execute("DROP INDEX idx_lanes_provider_session")
-        conn.execute("ALTER TABLE lanes DROP COLUMN provider_session_id")
+        conn.execute("DROP INDEX idx_lanes_provider_thread")
+        conn.execute("ALTER TABLE lanes DROP COLUMN provider_thread_id")
         conn.execute("ALTER TABLE lanes DROP COLUMN binding_id")
         conn.execute("ALTER TABLE lanes DROP COLUMN provider")
         if migration_collision:
@@ -465,7 +465,7 @@ async def test_v23_migration_preserves_keys_ids_and_foreign_keys(tmp_path: Path)
         lane = await store.get_lane("codex-native")
         assert lane.provider == "codex"
         assert lane.binding_id == DEFAULT_CODEX_BINDING_ID
-        assert lane.provider_session_id == lane.id
+        assert lane.provider_thread_id == lane.id
         assert lane.ref_source == "0"
         assert (
             lane.id,
@@ -538,9 +538,49 @@ async def test_v23_migration_preserves_keys_ids_and_foreign_keys(tmp_path: Path)
             "item_id",
         }
         async with store._conn.execute("PRAGMA user_version") as cur:
-            assert int((await cur.fetchone())[0]) == 24  # type: ignore[index]
+            assert int((await cur.fetchone())[0]) == 25  # type: ignore[index]
     finally:
         await store.close()
+
+
+async def test_v24_migration_renames_lane_native_identity(tmp_path: Path) -> None:
+    path = tmp_path / "registry-v24.db"
+    store = await Registry.open(path)
+    lane = await store.add_lane(
+        id="dsp_claude",
+        handle="@claude",
+        source="own",
+        provider="claude",
+        binding_id="profile-a",
+        provider_thread_id="native-1",
+    )
+    await store.close()
+
+    with sqlite3.connect(path) as legacy:
+        legacy.execute("DROP INDEX idx_lanes_provider_thread")
+        legacy.execute("ALTER TABLE lanes RENAME COLUMN provider_thread_id TO provider_session_id")
+        legacy.execute(
+            "CREATE UNIQUE INDEX idx_lanes_provider_session "
+            "ON lanes(provider, binding_id, provider_session_id) "
+            "WHERE provider_session_id IS NOT NULL"
+        )
+        legacy.execute("PRAGMA user_version = 24")
+        legacy.commit()
+
+    migrated = await Registry.open(path)
+    try:
+        restored = await migrated.get_lane(lane.id)
+        assert restored.provider_thread_id == "native-1"
+        async with migrated._conn.execute("PRAGMA table_info(lanes)") as cur:
+            columns = {str(row["name"]) for row in await cur.fetchall()}
+        assert "provider_thread_id" in columns
+        assert "provider_session_id" not in columns
+        async with migrated._conn.execute("PRAGMA index_list(lanes)") as cur:
+            indexes = {str(row["name"]) for row in await cur.fetchall()}
+        assert "idx_lanes_provider_thread" in indexes
+        assert "idx_lanes_provider_session" not in indexes
+    finally:
+        await migrated.close()
 
 
 async def test_v23_migration_failure_rolls_back_schema_and_data(tmp_path: Path) -> None:

@@ -71,7 +71,7 @@ def exercise_registry_sql(conn: Any) -> None:
         conn,
         """
         INSERT INTO lanes (
-            id, provider, binding_id, provider_session_id, ref, ref_source, ref_payload,
+            id, provider, binding_id, provider_thread_id, ref, ref_source, ref_payload,
             ref_mixer, handle, source, status, pinned, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,

@@ -78,7 +78,7 @@ from .refs import (
 )
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 DEFAULT_CODEX_BINDING_ID = "codex-default"
 
 
@@ -242,16 +242,16 @@ def _extension_suffix(ext: str) -> str:
     return ext if ext.startswith(".") else f".{ext}"
 
 
-def _initial_provider_session_id(
-    lane_id: str, provider: str, binding_id: str, provider_session_id: str | None
+def _initial_provider_thread_id(
+    lane_id: str, provider: str, binding_id: str, provider_thread_id: str | None
 ) -> str | None:
     if provider == "codex" and binding_id == DEFAULT_CODEX_BINDING_ID:
-        if provider_session_id not in (None, lane_id):
+        if provider_thread_id not in (None, lane_id):
             raise ValueError("a new default-Codex lane must retain its native id as the lane id")
         return lane_id
     if not lane_id.startswith("dsp_"):
         raise ValueError("non-default provider lanes require an opaque dsp_ Dispatch id")
-    return provider_session_id
+    return provider_thread_id
 
 
 _QUEUED_MESSAGES_SCHEMA = """
@@ -513,7 +513,7 @@ CREATE TABLE IF NOT EXISTS lanes (
     id TEXT PRIMARY KEY,
     provider TEXT NOT NULL,
     binding_id TEXT NOT NULL,
-    provider_session_id TEXT,
+    provider_thread_id TEXT,
     ref TEXT NOT NULL UNIQUE,
     ref_source TEXT NOT NULL,
     ref_payload TEXT NOT NULL,
@@ -710,9 +710,9 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 """
 
 _BINDING_SCOPE_INDEX_STATEMENTS = (
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_lanes_provider_session "
-    "ON lanes(provider, binding_id, provider_session_id) "
-    "WHERE provider_session_id IS NOT NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_lanes_provider_thread "
+    "ON lanes(provider, binding_id, provider_thread_id) "
+    "WHERE provider_thread_id IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS idx_provider_threads_parent "
     "ON provider_threads(provider, binding_id, parent_thread_id)",
     "CREATE INDEX IF NOT EXISTS idx_provider_threads_fork "
@@ -870,6 +870,8 @@ class Registry:
             await self._ensure_deliveries_table()
         if user_version < 24:
             await self._ensure_binding_scope_v24()
+        if user_version < 25:
+            await self._ensure_lane_provider_thread_id_v25()
 
     async def _ensure_binding_scope_v24(self) -> None:
         """Add binding identity without changing stable lane keys or local row ids."""
@@ -897,11 +899,11 @@ class Registry:
                     "ALTER TABLE lanes ADD COLUMN binding_id TEXT NOT NULL "
                     f"DEFAULT '{DEFAULT_CODEX_BINDING_ID}'"
                 )
-            added_provider_session_id = "provider_session_id" not in lane_columns
-            if added_provider_session_id:
-                await self._conn.execute("ALTER TABLE lanes ADD COLUMN provider_session_id TEXT")
+            added_provider_thread_id = "provider_thread_id" not in lane_columns
+            if added_provider_thread_id:
+                await self._conn.execute("ALTER TABLE lanes ADD COLUMN provider_thread_id TEXT")
                 await self._conn.execute(
-                    "UPDATE lanes SET provider = 'codex', binding_id = ?, provider_session_id = id",
+                    "UPDATE lanes SET provider = 'codex', binding_id = ?, provider_thread_id = id",
                     (DEFAULT_CODEX_BINDING_ID,),
                 )
 
@@ -989,6 +991,22 @@ class Registry:
     async def _create_binding_scope_indexes(self) -> None:
         for statement in _BINDING_SCOPE_INDEX_STATEMENTS:
             await self._conn.execute(statement)
+
+    async def _ensure_lane_provider_thread_id_v25(self) -> None:
+        """Rename the managed lane's native conversation identity column."""
+
+        async with self._conn.execute("PRAGMA table_info(lanes)") as cur:
+            columns = {str(row["name"]) for row in await cur.fetchall()}
+        if "provider_thread_id" not in columns and "provider_session_id" in columns:
+            await self._conn.execute("DROP INDEX IF EXISTS idx_lanes_provider_session")
+            await self._conn.execute(
+                "ALTER TABLE lanes RENAME COLUMN provider_session_id TO provider_thread_id"
+            )
+        await self._conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_lanes_provider_thread "
+            "ON lanes(provider, binding_id, provider_thread_id) "
+            "WHERE provider_thread_id IS NOT NULL"
+        )
 
     async def _ensure_deliveries_table(self) -> None:
         await self._conn.executescript(_DELIVERIES_SCHEMA)
@@ -1368,18 +1386,18 @@ class Registry:
         pinned: bool = False,
         provider: str = "codex",
         binding_id: str = DEFAULT_CODEX_BINDING_ID,
-        provider_session_id: str | None = None,
+        provider_thread_id: str | None = None,
     ) -> Lane:
         now = self._now()
-        native_id = _initial_provider_session_id(id, provider, binding_id, provider_session_id)
+        native_id = _initial_provider_thread_id(id, provider, binding_id, provider_thread_id)
         ref, ref_source, ref_payload, ref_mixer = await self._allocate_ref_parts(
-            id, provider=provider, binding_id=binding_id, provider_session_id=native_id
+            id, provider=provider, binding_id=binding_id, provider_thread_id=native_id
         )
         lane = Lane(
             id=id,
             provider=provider,
             binding_id=binding_id,
-            provider_session_id=native_id,
+            provider_thread_id=native_id,
             ref=ref,
             ref_source=ref_source,
             ref_payload=ref_payload,
@@ -1414,20 +1432,20 @@ class Registry:
         audit_detail: str | None = None,
         provider: str = "codex",
         binding_id: str = DEFAULT_CODEX_BINDING_ID,
-        provider_session_id: str | None = None,
+        provider_thread_id: str | None = None,
     ) -> tuple[Lane, LaneSync]:
         if sync.lane != id:
             raise ValueError(f"sync lane {sync.lane!r} does not match lane id {id!r}")
         now = self._now()
-        native_id = _initial_provider_session_id(id, provider, binding_id, provider_session_id)
+        native_id = _initial_provider_thread_id(id, provider, binding_id, provider_thread_id)
         ref, ref_source, ref_payload, ref_mixer = await self._allocate_ref_parts(
-            id, provider=provider, binding_id=binding_id, provider_session_id=native_id
+            id, provider=provider, binding_id=binding_id, provider_thread_id=native_id
         )
         lane = Lane(
             id=id,
             provider=provider,
             binding_id=binding_id,
-            provider_session_id=native_id,
+            provider_thread_id=native_id,
             ref=ref,
             ref_source=ref_source,
             ref_payload=ref_payload,
@@ -1455,7 +1473,7 @@ class Registry:
 
     async def _insert_lane(self, lane: Lane) -> None:
         await self._conn.execute(
-            "INSERT INTO lanes (id, provider, binding_id, provider_session_id, ref, ref_source, "
+            "INSERT INTO lanes (id, provider, binding_id, provider_thread_id, ref, ref_source, "
             "ref_payload, ref_mixer, handle, role, cwd, "
             "source, status, pinned, active_turn_id, latest_turn_id, latest_turn_status, "
             "latest_error, latest_error_at, created_at, updated_at, last_event_at) "
@@ -1464,7 +1482,7 @@ class Registry:
                 lane.id,
                 lane.provider,
                 lane.binding_id,
-                lane.provider_session_id,
+                lane.provider_thread_id,
                 lane.ref,
                 lane.ref_source,
                 lane.ref_payload,
@@ -1492,14 +1510,14 @@ class Registry:
         *,
         provider: str = "codex",
         binding_id: str = DEFAULT_CODEX_BINDING_ID,
-        provider_session_id: str | None = None,
+        provider_thread_id: str | None = None,
     ) -> tuple[str, str, str, str]:
         native_id = (
             lane_id
             if provider == "codex"
             and binding_id == DEFAULT_CODEX_BINDING_ID
-            and provider_session_id is None
-            else provider_session_id
+            and provider_thread_id is None
+            else provider_thread_id
         )
         is_default_codex = (
             provider == "codex" and binding_id == DEFAULT_CODEX_BINDING_ID and native_id == lane_id
@@ -1516,40 +1534,40 @@ class Registry:
         )
 
     @_serialized_access
-    async def find_lane_by_provider_session(
-        self, provider: str, binding_id: str, provider_session_id: str
+    async def find_lane_by_provider_thread(
+        self, provider: str, binding_id: str, provider_thread_id: str
     ) -> Lane | None:
         async with self._conn.execute(
-            "SELECT * FROM lanes WHERE provider = ? AND binding_id = ? AND provider_session_id = ?",
-            (provider, binding_id, provider_session_id),
+            "SELECT * FROM lanes WHERE provider = ? AND binding_id = ? AND provider_thread_id = ?",
+            (provider, binding_id, provider_thread_id),
         ) as cur:
             row = await cur.fetchone()
         return _row_to_lane(row) if row is not None else None
 
     @_serialized_access
-    async def update_lane_provider_session(
+    async def update_lane_provider_thread(
         self,
         lane_id: str,
         *,
         provider: str,
         binding_id: str,
-        provider_session_id: str,
+        provider_thread_id: str,
     ) -> Lane:
         """Record native continuation evidence without permitting a binding retarget."""
 
         if (
             provider == "codex"
             and binding_id == DEFAULT_CODEX_BINDING_ID
-            and provider_session_id != lane_id
+            and provider_thread_id != lane_id
         ):
             raise ValidationError(
-                "default-Codex provider session identity must equal the stable lane id"
+                "default-Codex provider thread identity must equal the stable lane id"
             )
         async with self._transaction():
             cur = await self._conn.execute(
-                "UPDATE lanes SET provider_session_id = ?, updated_at = ? "
+                "UPDATE lanes SET provider_thread_id = ?, updated_at = ? "
                 "WHERE id = ? AND provider = ? AND binding_id = ?",
-                (provider_session_id, self.now_iso(), lane_id, provider, binding_id),
+                (provider_thread_id, self.now_iso(), lane_id, provider, binding_id),
             )
             if cur.rowcount != 1:
                 raise NotFoundError(
@@ -3046,7 +3064,7 @@ class Registry:
             "lanes.status AS lane_status FROM provider_threads "
             "LEFT JOIN lanes ON lanes.provider = provider_threads.provider "
             "AND lanes.binding_id = provider_threads.binding_id "
-            "AND lanes.provider_session_id = provider_threads.provider_thread_id "
+            "AND lanes.provider_thread_id = provider_threads.provider_thread_id "
             "WHERE provider_threads.provider = ? AND provider_threads.binding_id = ? "
             f"AND provider_threads.provider_thread_id IN ({placeholders}) "
             "ORDER BY provider_threads.provider_thread_id",
@@ -3375,7 +3393,7 @@ class Registry:
         binding_id: str = DEFAULT_CODEX_BINDING_ID,
         limit: int = 50,
     ) -> list[ServerRequest]:
-        if provider_session_id is None:
+        if provider_session_id is None and binding_id == DEFAULT_CODEX_BINDING_ID:
             return await self.list_server_requests(lane=lane, limit=limit)
 
         sql = "SELECT * FROM server_requests WHERE state = 'pending'"
@@ -3383,9 +3401,11 @@ class Registry:
         if lane is not None:
             sql += " AND lane = ?"
             params.append(lane)
+        sql += " AND binding_id = ?"
+        params.append(binding_id)
         if provider_session_id is not None:
-            sql += " AND binding_id = ? AND provider_session_id = ?"
-            params.extend((binding_id, provider_session_id))
+            sql += " AND provider_session_id = ?"
+            params.append(provider_session_id)
         sql += " ORDER BY deadline_at, received_at, request_id_json LIMIT ?"
         params.append(limit)
         async with self._conn.execute(sql, tuple(params)) as cur:

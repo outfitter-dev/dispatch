@@ -449,7 +449,7 @@ class Lane(BaseModel):
     id: str  # stable Dispatch key (native Codex id for the default binding)
     provider: str = "codex"
     binding_id: str = "codex-default"
-    provider_session_id: str | None = None
+    provider_thread_id: str | None = None
     ref: str  # dispatch-local stable short ref
     ref_source: str
     ref_payload: str

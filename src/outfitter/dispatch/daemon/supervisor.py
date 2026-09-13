@@ -96,7 +96,7 @@ class Supervisor:
             if (
                 lane.provider != "codex"
                 or lane.binding_id != DEFAULT_CODEX_BINDING_ID
-                or lane.provider_session_id != lane.id
+                or lane.provider_thread_id != lane.id
             ):
                 self._ctx.log.info(
                     "lane.restore_unsupported_binding",
@@ -105,7 +105,7 @@ class Supervisor:
                     binding_id=lane.binding_id,
                 )
                 continue
-            native_id = lane.provider_session_id
+            native_id = lane.provider_thread_id
             try:
                 sync = await self._ctx.registry.get_lane_sync(lane.id)
                 observed = sync is not None and sync.observation_enabled

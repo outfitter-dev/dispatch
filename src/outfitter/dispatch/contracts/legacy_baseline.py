@@ -58,9 +58,11 @@ CHANGED_SINCE_PARENT: frozenset[str] = frozenset(
         "goal-clear",
         "goal-get",
         "goal-set",
+        "history",
         "new",
         "new-plan",
         "open",
+        "query",
         "rollback",
         "roster",
         "send",
@@ -82,9 +84,7 @@ ADDED_SINCE_PARENT: frozenset[str] = frozenset({"delivery-get", "delivery-reconc
 
 PARENT_OP_SCHEMA_HASHES: dict[str, str] = {
     "lane-rename": "c90f27886bd7bb6a8468f7bc7336716d60525b2361b4e9507d6e9d8b9273cf46",
-    "history": "43f8d8689b4171d655a8b14895cbb1af6ffe007aaa93ec14d6be76c19d2e1243",
     "search": "6383eb95772eae4ad689ad90c123244f36434f5b884cbe43cfab15075a891c0e",
-    "query": "37544d538a1ee55818edcda6b9615db719d35fd8dd4274fc4075fccf5e6b79ba",
     "models": "246d581df042fe34b36c404ab9d75bdce1e678aee1c01662a16b93bb6f997035",
     "permissions": "c9601fe3d928338d3f09d66bfddd705672af66fdcef17f12237ad0244989b03f",
     "usage": "e39b1afb1f34f970cde77645cf62aa9aed23b88c5b7bb1364d2745120640b956",

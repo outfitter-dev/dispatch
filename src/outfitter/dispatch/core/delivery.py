@@ -29,10 +29,10 @@ def _native_id(lane: Lane) -> str | None:
     if (
         lane.provider != "codex"
         or lane.binding_id != DEFAULT_CODEX_BINDING_ID
-        or lane.provider_session_id != lane.id
+        or lane.provider_thread_id != lane.id
     ):
         return None
-    return lane.provider_session_id
+    return lane.provider_thread_id
 
 
 async def get_receipt(inp: DeliveryLookupInput, ctx: Ctx) -> DeliveryView:

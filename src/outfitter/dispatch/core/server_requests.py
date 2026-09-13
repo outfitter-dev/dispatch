@@ -88,7 +88,7 @@ class ServerRequestManager:
 
     async def handle(self, request: ServerRequestReceived) -> ServerRequest:
         lane = (
-            await self._ctx.registry.find_lane_by_provider_session(
+            await self._ctx.registry.find_lane_by_provider_thread(
                 "codex", DEFAULT_CODEX_BINDING_ID, request.lane_id
             )
             if request.lane_id
@@ -249,7 +249,7 @@ async def _surface_attention(
             lane=lane.id,
             provider=lane.provider,
             binding_id=lane.binding_id,
-            provider_thread_id=lane.provider_session_id or lane.id,
+            provider_thread_id=lane.provider_thread_id or lane.id,
             status=status,
             active_turn_id=(current.active_turn_id if current else lane.active_turn_id),
             latest_turn_id=(current.latest_turn_id if current else lane.latest_turn_id),
@@ -314,7 +314,7 @@ async def _clear_attention_if_resolved(ctx: Ctx, lane_id: str) -> None:
             lane=lane_id,
             provider=lane.provider,
             binding_id=lane.binding_id,
-            provider_thread_id=lane.provider_session_id or lane.id,
+            provider_thread_id=lane.provider_thread_id or lane.id,
             status=status,
             active_turn_id=active_turn_id,
             latest_turn_id=(current.latest_turn_id if current else lane.latest_turn_id),

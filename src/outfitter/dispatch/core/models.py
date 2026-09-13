@@ -722,7 +722,7 @@ class LaneRef(BaseModel):
     id: str
     provider: str
     binding_id: str
-    provider_session_id: str | None = None
+    provider_thread_id: str | None = None
     handle: str
     source: LaneSource
     status: LaneStatus
@@ -756,7 +756,7 @@ class ManagedThreadIdentity(BaseModel):
     id: str
     provider: str
     binding_id: str
-    provider_session_id: str | None = None
+    provider_thread_id: str | None = None
     title: str | None = None
     handle: str | None = None
     managed: bool = True
@@ -1156,6 +1156,9 @@ class HistoryItem(TranscriptItem):
 class HistoryThreadSummary(BaseModel):
     ref: str | None = None
     id: str
+    provider: str
+    binding_id: str
+    provider_thread_id: str | None = None
     handle: str | None = None
     source: LaneSource | None = None
     status: LaneStatus | None = None
@@ -1304,6 +1307,9 @@ class QueryRef(BaseModel):
 class QueryMatch(BaseModel):
     ref: str
     id: str
+    provider: str
+    binding_id: str
+    provider_thread_id: str | None = None
     handle: str
     source: LaneSource
     status: LaneStatus

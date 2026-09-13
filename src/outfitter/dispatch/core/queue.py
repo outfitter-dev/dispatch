@@ -36,10 +36,10 @@ async def drain_next_queued_message(ctx: Ctx, lane_id: str) -> bool:
     if (
         lane.provider != "codex"
         or lane.binding_id != DEFAULT_CODEX_BINDING_ID
-        or lane.provider_session_id != lane.id
+        or lane.provider_thread_id != lane.id
     ):
         return False
-    native_id = lane.provider_session_id
+    native_id = lane.provider_thread_id
     if await ctx.registry.lane_delivery_held(lane.id):
         return False
     message = await ctx.registry.next_pending_message(lane.id)
@@ -137,7 +137,7 @@ async def _record_queue_receipt(
             queued_message_id=message.id,
             provider=lane.provider,
             binding_id=lane.binding_id,
-            provider_thread_id=lane.provider_session_id or lane.id,
+            provider_thread_id=lane.provider_thread_id or lane.id,
             dispatch_message_id=f"queue:{message.id}",
             status=status,  # type: ignore[arg-type]
             error=error,

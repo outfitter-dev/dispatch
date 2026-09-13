@@ -40,7 +40,7 @@ async def index_codex_thread_read(
         registry,
         lane,
         [turn for turn in turns if isinstance(turn, dict)],
-        provider_thread_id=_string(thread.get("id")) or lane.provider_session_id or lane.id,
+        provider_thread_id=_string(thread.get("id")) or lane.provider_thread_id or lane.id,
         capture=capture,
         completion_source="thread-read",
     )
@@ -58,7 +58,7 @@ async def index_codex_turns_page(
         registry,
         lane,
         [turn.model_dump(by_alias=True, exclude_none=True) for turn in turns],
-        provider_thread_id=lane.provider_session_id or lane.id,
+        provider_thread_id=lane.provider_thread_id or lane.id,
         capture=capture,
         completion_source="thread-turns-list",
     )
@@ -86,7 +86,7 @@ async def index_codex_items_page(
         item_ids.add(item_id)
         item, refs = normalize_codex_item(
             raw_item,
-            provider_thread_id=lane.provider_session_id or lane.id,
+            provider_thread_id=lane.provider_thread_id or lane.id,
             binding_id=lane.binding_id,
             lane=lane.id,
             turn_id=turn_id,
@@ -100,7 +100,7 @@ async def index_codex_items_page(
         items=indexed_items,
         provider=lane.provider,
         binding_id=lane.binding_id,
-        provider_thread_id=lane.provider_session_id or lane.id,
+        provider_thread_id=lane.provider_thread_id or lane.id,
         turn_ids=set(),
         item_ids=item_ids,
         prune_missing=False,

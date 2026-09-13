@@ -150,7 +150,7 @@ def test_reconcile_unique_full_uuid(tmp_path: Path) -> None:
     )
 
     assert observation.reconciliation == "reconciled"
-    assert observation.provider_session_id == session_id
+    assert observation.provider_thread_id == session_id
     assert observation.observed_cwd == "/effective/worktree"
     assert observation.observed_worktree == "/effective/worktree"
 
@@ -164,7 +164,7 @@ def test_reconcile_absent_or_not_yet_identified_is_pending(tmp_path: Path) -> No
     )
 
     assert absent.reconciliation == "pending"
-    assert absent.provider_session_id is None
+    assert absent.provider_thread_id is None
     assert absent.pending_reason == "roster_absent"
     assert provisional.reconciliation == "pending"
     assert provisional.pending_reason == "identity_pending"
@@ -218,7 +218,7 @@ async def test_launch_invokes_exact_argv_then_global_unscoped_roster(tmp_path: P
         ("claude", "agents", "--json", "--all"),
     ]
     assert all(call[1] == tmp_path for call in calls)
-    assert result.provider_session_id == session_id
+    assert result.provider_thread_id == session_id
 
 
 async def test_validation_happens_before_process_invocation(tmp_path: Path) -> None:
@@ -268,7 +268,7 @@ async def test_post_launch_roster_failure_preserves_short_id_as_explicit_pending
     assert observation.reconciliation == "pending"
     assert observation.pending_reason == "roster_unavailable"
     assert observation.short_id == "518b912b"
-    assert observation.provider_session_id is None
+    assert observation.provider_thread_id is None
 
 
 async def test_post_launch_incompatible_roster_still_fails_closed(tmp_path: Path) -> None:
@@ -313,7 +313,7 @@ async def test_interrupted_launch_with_one_partial_short_id_reconciles(
     )
 
     assert observation.reconciliation == "reconciled"
-    assert observation.provider_session_id == session_id
+    assert observation.provider_thread_id == session_id
 
 
 @pytest.mark.parametrize("candidates", [(), ("518b912b", "91abcdef")])

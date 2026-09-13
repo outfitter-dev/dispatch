@@ -107,7 +107,7 @@ async def test_codex_request_does_not_capture_colliding_non_codex_lane_key(
         status="idle",
         provider="claude",
         binding_id="profile-a",
-        provider_session_id="native-other",
+        provider_thread_id="native-other",
     )
     ctx = make_ctx(store, FakeLaneClient())
     ctx.provider_session_id = "session-1"

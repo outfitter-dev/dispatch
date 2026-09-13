@@ -95,7 +95,7 @@ class Reactor:
             await registry.mark_provider_thread_state("codex", event.lane_id, "active")
         elif isinstance(event, ThreadDeleted):
             await registry.mark_provider_thread_state("codex", event.lane_id, "deleted")
-        lane = await registry.find_lane_by_provider_session(
+        lane = await registry.find_lane_by_provider_thread(
             "codex", DEFAULT_CODEX_BINDING_ID, event.lane_id
         )
         if lane is None:

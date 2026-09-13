@@ -743,6 +743,18 @@ async def test_server_request_observation_reports_atomic_insert_winner(store: Re
     assert {first.inserted, duplicate.inserted} == {True, False}
 
 
+async def test_pending_server_requests_filter_by_binding_without_session(store: Registry) -> None:
+    profile_a = await store.observe_server_request(
+        server_request(binding_id="profile-a", lane=None, request_id="a")
+    )
+    profile_b = await store.observe_server_request(
+        server_request(binding_id="profile-b", lane=None, request_id="b")
+    )
+
+    assert await store.list_pending_server_requests(binding_id="profile-a") == [profile_a]
+    assert await store.list_pending_server_requests() == [profile_a, profile_b]
+
+
 async def test_server_requests_support_threadless_recovery_and_terminal_claims(
     store: Registry,
 ) -> None:
@@ -1824,7 +1836,7 @@ async def test_v17_migration_adds_replace_in_place_provider_capacity_table(
         async with migrated._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
         assert row is not None
-        assert int(row[0]) == SCHEMA_VERSION == 24
+        assert int(row[0]) == SCHEMA_VERSION == 25
     finally:
         await migrated.close()
 

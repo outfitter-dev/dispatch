@@ -106,7 +106,7 @@ async def test_supervisor_skips_non_default_provider_bindings(store: Registry) -
         status="idle",
         provider="codex",
         binding_id="profile-a",
-        provider_session_id="native-shared",
+        provider_thread_id="native-shared",
     )
     ctx = make_ctx(store)
     client = FakeSupervisedClient()

@@ -159,11 +159,11 @@ async def _tail_text(ctx: Ctx, lane: Lane, tail: int) -> str | None:
     if (
         lane.provider != "codex"
         or lane.binding_id != DEFAULT_CODEX_BINDING_ID
-        or lane.provider_session_id != lane.id
+        or lane.provider_thread_id != lane.id
     ):
         return None
     try:
-        result = await ctx.client.thread_read(lane.provider_session_id, include_turns=True)
+        result = await ctx.client.thread_read(lane.provider_thread_id, include_turns=True)
     except Exception as exc:
         ctx.log.warning("subscription.tail_read_failed", lane=lane.id, error=str(exc))
         return None

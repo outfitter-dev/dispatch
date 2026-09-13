@@ -1372,6 +1372,9 @@ async def test_history_overview_summarizes_managed_threads(store: Registry) -> N
     assert len(out.threads) == 1
     summary = out.threads[0]
     assert summary.ref == "0BGeK1"
+    assert summary.provider == "codex"
+    assert summary.binding_id == "codex-default"
+    assert summary.provider_thread_id == "lane-1"
     assert summary.turns == 1
     assert summary.items == 3
     assert summary.messages == 1
@@ -3048,20 +3051,35 @@ async def test_query_reads_indexed_managed_history_without_app_server_search(
     (repo / ".git").mkdir()
     client = FakeLaneClient()
     ctx = make_ctx(store, client)
-    lane = await store.add_lane(id="L1", handle="@local", source="own", cwd=str(repo))
+    lane = await store.add_lane(
+        id="dsp_local",
+        handle="@local",
+        source="own",
+        cwd=str(repo),
+        provider="codex",
+        binding_id="profile-a",
+        provider_thread_id="profile-native",
+    )
     await store.upsert_thread_turn(
-        thread_turn(lane=lane.id, provider_thread_id=lane.id, turn_id="turn-1")
+        thread_turn(
+            lane=lane.id,
+            binding_id="profile-a",
+            provider_thread_id="profile-native",
+            turn_id="turn-1",
+        )
     )
     await store.upsert_thread_item(
         thread_item(
             lane=lane.id,
-            provider_thread_id=lane.id,
+            binding_id="profile-a",
+            provider_thread_id="profile-native",
             turn_id="turn-1",
             item_id="item-1",
         ).model_copy(update={"text": "local needle lives in normalized history"}),
         refs=[
             thread_item_ref(
-                provider_thread_id=lane.id,
+                binding_id="profile-a",
+                provider_thread_id="profile-native",
                 item_id="item-1",
                 ref_type="file",
                 ref_value="src/local.py",
@@ -3075,6 +3093,9 @@ async def test_query_reads_indexed_managed_history_without_app_server_search(
     assert out.scanned == 1
     assert [match.ref for match in out.matches] == [lane.ref]
     assert out.matches[0].handle == "@local"
+    assert out.matches[0].provider == "codex"
+    assert out.matches[0].binding_id == "profile-a"
+    assert out.matches[0].provider_thread_id == "profile-native"
     assert "local needle lives" in out.matches[0].snippet
     assert out.matches[0].files == ["src/local.py"]
     assert not any(name == "thread_search" for name, _ in client.calls)

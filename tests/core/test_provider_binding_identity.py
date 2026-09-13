@@ -11,6 +11,7 @@ from outfitter.dispatch.contracts.errors import (
 )
 from outfitter.dispatch.core import handlers, queue
 from outfitter.dispatch.core.models import (
+    AttachInput,
     DiscoverInput,
     GoalGetInput,
     HistoryInput,
@@ -42,7 +43,7 @@ async def test_default_codex_and_non_codex_outputs_preserve_public_aliases() -> 
             status="idle",
             provider="claude",
             binding_id="profile-a",
-            provider_session_id="claude-native",
+            provider_thread_id="claude-native",
         )
         client = FakeLaneClient()
         ctx = make_ctx(store, client)
@@ -52,19 +53,25 @@ async def test_default_codex_and_non_codex_outputs_preserve_public_aliases() -> 
         codex_view = by_id[codex.id]
         assert codex_view.provider == "codex"
         assert codex_view.binding_id == DEFAULT_CODEX_BINDING_ID
-        assert codex_view.provider_session_id == codex.id
+        assert codex_view.provider_thread_id == codex.id
         assert codex_view.ref == codex.ref
 
         other_view = by_id[other.id]
         assert other_view.provider == "claude"
         assert other_view.binding_id == "profile-a"
-        assert other_view.provider_session_id == "claude-native"
+        assert other_view.provider_thread_id == "claude-native"
         assert other_view.id == other.id
         assert other_view.capabilities.send is False
         assert other_view.capabilities.read is False
         assert other_view.capabilities.sync is False
         assert other_view.capabilities.tail is False
         assert other_view.writable is False
+
+        overview = await handlers.history(HistoryInput(), ctx)
+        other_summary = next(summary for summary in overview.threads if summary.id == other.id)
+        assert other_summary.provider == "claude"
+        assert other_summary.binding_id == "profile-a"
+        assert other_summary.provider_thread_id == "claude-native"
 
         with pytest.raises(NotFoundError, match="no managed thread"):
             await resolve_managed_selector(ctx, "claude-native")
@@ -85,7 +92,7 @@ async def test_non_default_binding_reads_fail_before_codex_client_calls() -> Non
             status="idle",
             provider="codex",
             binding_id="profile-a",
-            provider_session_id="native-shared",
+            provider_thread_id="native-shared",
         )
         client = FakeLaneClient()
         ctx = make_ctx(store, client)
@@ -96,6 +103,7 @@ async def test_non_default_binding_reads_fail_before_codex_client_calls() -> Non
         assert not client.calls
 
         calls = (
+            handlers.attach_lane(AttachInput(thread=lane.id, sync=True), ctx),
             handlers.show(ShowInput(lane=lane.ref, include_transcript=True), ctx),
             handlers.show(ShowInput(lane=lane.ref, topology=True), ctx),
             handlers.sync_lane(LaneSyncInput(lane=lane.ref), ctx),
@@ -130,7 +138,7 @@ async def test_malformed_default_codex_identity_cannot_execute() -> None:
     try:
         lane = await store.add_lane(id="codex-stable", handle="@codex", source="own", status="idle")
         await store._conn.execute(
-            "UPDATE lanes SET provider_session_id = 'wrong-native' WHERE id = ?", (lane.id,)
+            "UPDATE lanes SET provider_thread_id = 'wrong-native' WHERE id = ?", (lane.id,)
         )
         await store._conn.commit()
         client = FakeLaneClient()
