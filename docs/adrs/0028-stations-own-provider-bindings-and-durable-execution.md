@@ -35,13 +35,14 @@ Keep one daemon per station. Provider process ownership, client connection owner
 | Station ID and incarnation | Owning runtime and replacement/restore fence for future network targets. |
 | Dispatch thread/lane key | Stable station-local managed identity; existing Codex lane keys and refs remain unchanged. |
 | Runtime binding ID | Stable local configured provider namespace, independent of endpoint addresses and raw credentials. |
-| Native session ID | Provider session identity inside a binding; continuation requires positive provider evidence. |
+| Native thread ID | Provider conversation identity inside a binding; continuation requires positive provider evidence. |
 | Network operation ID | Immutable network request with authenticated origin and pinned destination; may exist before local admission. |
+| Local launch reservation ID | Provisional station idempotency identity; independent of a provider-assigned native thread ID and final compatibility lane key. |
 | Local delivery ID | Station reservation and receipt associated with a request. |
 | Native run/turn ID | Evidence for a particular provider admission or execution. |
 | Connection generation | Fence for client readiness and observations, not a new logical thread. |
 
-A future managed network target is `(network_id, station_id, station_incarnation, thread_id)`. Its `thread_id` denotes the stable Dispatch key, not an unscoped native session ID. The station resolves binding and native identity internally. Provider continuation does not rename the public target; replacing a profile or installation does not silently retarget it.
+A future managed network target is `(network_id, station_id, station_incarnation, thread_id)`. Its `thread_id` denotes the stable Dispatch key, not an unscoped native thread ID. The station resolves binding and native identity internally. Provider continuation does not rename the public target; replacing a profile or installation does not silently retarget it.
 
 Observed-only sessions require stable binding-scoped observation identity without automatically enrolling a writable lane. Preserve `@project:name` semantics. Station selection is a separate future contract; network scope must not silently change existing scripting output.
 
@@ -52,7 +53,7 @@ Observed-only sessions require stable binding-scoped observation identity withou
 This proposal extends [ADR-0019](0019-dispatch-local-refs-and-flat-thread-cli.md) to additional providers while preserving its full Codex ID escape hatch:
 
 - Existing and newly created threads in the default Codex binding retain their full native Codex ID as `lanes.id`. Existing refs and child foreign keys remain unchanged. Other providers allocate opaque Dispatch keys in a namespace disjoint from Codex IDs; they never derive refs with Codex-specific hashing.
-- In local managed-thread outputs, `id` remains the stable Dispatch key and the existing `lane` compatibility field, wherever present, remains its alias. `ref` and `handle` retain their current meanings. Add `provider`, `binding_id`, and `provider_session_id` as local identity metadata; do not introduce another `lane_key` output alias or rename existing fields. Native session continuation may change `provider_session_id` with positive evidence while `id`, `lane`, and `ref` stay stable.
+- In local managed-thread outputs, `id` remains the stable Dispatch key and the existing `lane` compatibility field, wherever present, remains its alias. `ref` and `handle` retain their current meanings. Add `provider`, `binding_id`, and `provider_thread_id` as local identity metadata; do not introduce another `lane_key` output alias or rename existing fields. Native thread continuation may change `provider_thread_id` with positive evidence while `id`, `lane`, and `ref` stay stable.
 - Existing managed ref, exact Dispatch key, handle and title resolution keeps its precedence. The full native Codex ID remains accepted, including unmanaged read paths, against the designated default Codex binding. Enabling Hermes does not redirect that fallback or make it ambiguous. Unsupported operations still fail at the authority/capability boundary.
 - The first additional-provider slice selects managed threads by existing refs, Dispatch keys or labels. It does not accept a bare Hermes/Claude native ID or invent colon-qualified selector syntax. Native lookup within another binding requires a future explicit binding-scoped authored contract. Additional Codex execution bindings remain disabled until that contract is defined; storage collision tests cover them without implying public execution support.
 - A network target's `thread_id` is the managed Dispatch key. Binding IDs and native IDs remain local metadata by default and are not remote authority tokens. Endpoint addresses, credentials and filesystem paths are never encoded into these identifiers.
@@ -70,6 +71,16 @@ For a supported keyed operation:
 3. Claim submission in per-thread reservation order without holding a database transaction across provider I/O.
 4. Recheck mutable authority, expiry and readiness immediately before submission.
 5. Persist acknowledgment or uncertainty and reduce later evidence against that same receipt.
+
+Keyed session creation requires a pre-mutation launch reservation whose identity does
+not depend on the provider response. After creation succeeds, bind the returned native
+thread ID to that reservation atomically, then materialize the stable Dispatch lane key
+according to the provider compatibility contract. A provider such as Hermes can reserve
+its opaque Dispatch lane key directly. Default-Codex keyed creation remains unsupported
+while `lanes.id` must equal the native thread ID and `thread/start` does not accept a
+caller-assigned ID; reject such a key before `thread/start` until a provisional
+launch-to-native binding exists. Post-mutation registration is not a substitute for this
+crash/retry guarantee.
 
 Exact retry reuses the persisted target, request and effective settings. Changed input conflicts. Handle renames, default changes, endpoint labels and transport routes cannot redirect admitted work. A possibly submitted request is reconciled; missing history, a missing mapping, changed credentials or expired provider replay never authorize a new automatic call. Ambiguous work holds later submissions on that thread while other threads may continue.
 

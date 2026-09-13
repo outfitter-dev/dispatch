@@ -28,7 +28,7 @@ Remote lanes are addressable but not local:
 - Existing `@project:name` handle syntax keeps its meaning. A separate station selector qualifies a stable station-local Dispatch thread key; exact CLI grammar remains a contract decision.
 - The local daemon routes remote ops to the owning peer daemon.
 - The remote daemon authorizes and executes the op locally.
-- Targets pin network, station, station incarnation and Dispatch thread identity. Provider binding/native session resolution stays within the station.
+- Targets pin network, station, station incarnation and Dispatch thread identity. Provider binding/native thread resolution stays within the station.
 - Remote events are relayed as normalized dispatch events, not raw app-server streams.
 
 The mesh must preserve local sovereignty: no remote peer receives implicit access to another machine's filesystem, shell, app-server, or account. Remote command execution means "invoke an authorized dispatch op remotely," not arbitrary shell by default.

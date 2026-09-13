@@ -125,7 +125,7 @@ provider runtime before acting. No surface imports a provider runtime.
 class ProviderIdentity:
     provider: ProviderId
     binding_id: str
-    provider_session_id: str
+    provider_thread_id: str
 
 
 @dataclass(frozen=True)
@@ -142,7 +142,7 @@ class MessageEnvelope:
 class ProviderEventEnvelope:
     provider: ProviderId
     binding_id: str
-    provider_session_id: str
+    provider_thread_id: str
     process_generation: UUID
     event_type: str
     source_delivery_id: UUID
@@ -168,7 +168,7 @@ pairs hook starts/responses but is not present in the raw hook payload.
 `ProviderEventEnvelope` is the provider-neutral reactor input; it generalizes the
 current Codex-shaped `LaneEvent` rather than creating a parallel reducer. Each
 runtime emits envelopes into a merged `ProviderManager.events()` stream. The
-reactor resolves `(provider, binding_id, provider_session_id)` to the local lane key, persists
+reactor resolves `(provider, binding_id, provider_thread_id)` to the local lane key, persists
 the provider event, runs the common receipt/runtime/attention reducer, and then
 publishes a compatibility `LaneEvent` carrying the local lane key to existing
 subscriptions and triggers. Codex's current event indexer becomes the Codex
@@ -306,7 +306,7 @@ table or migrate shared history independently.
 - Allocate Claude Dispatch keys in the non-Codex namespace and store native
   identity through the shared schema before any provider mutation. Keep `id`
   and existing `lane` output aliases stable; expose `provider`, `binding_id` and
-  `provider_session_id` as additive local metadata. Do not add `lane_key` or
+  `provider_thread_id` as additive local metadata. Do not add `lane_key` or
   invent a provider-qualified selector grammar in this slice.
 - Select managed Claude threads through refs, Dispatch keys or existing labels.
   Bare native Claude UUIDs are unsupported until an explicit binding-scoped

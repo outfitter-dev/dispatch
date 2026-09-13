@@ -23,7 +23,7 @@ Gateway admission (immutable)
 
 Station admission (immutable after first reservation)
   operation_id -> local_delivery_id (atomic mapping in local registry)
-  pinned Dispatch thread -> binding_id + native session identity
+  pinned Dispatch thread -> binding_id + native thread identity
   submitted_request_digest
   permitted effective settings + effective_request_digest
   local authority decision + reservation order
