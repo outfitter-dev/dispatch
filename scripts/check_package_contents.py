@@ -30,12 +30,21 @@ def _check_wheel(path: Path) -> None:
     missing = sorted(required - names)
     if missing:
         raise SystemExit(f"{path.name} missing required files: {', '.join(missing)}")
+    contributor_only = sorted(
+        name for name in names if name.startswith(("tests/", "scripts/", ".hermes/"))
+    )
+    if contributor_only:
+        raise SystemExit(
+            f"{path.name} contains contributor-only files: {', '.join(contributor_only)}"
+        )
 
 
 def _check_sdist(path: Path) -> None:
     with tarfile.open(path) as tf:
-        names = {member.name.partition("/")[2] for member in tf.getmembers()}
+        members = {member.name.partition("/")[2]: member for member in tf.getmembers()}
     required = {
+        "scripts/bootstrap.sh",
+        "tests/test_bootstrap.py",
         "plugins/dispatch/skills/dispatch/SKILL.md",
         "plugins/dispatch/skills/dm/SKILL.md",
         "plugins/dispatch/README.md",
@@ -49,9 +58,16 @@ def _check_sdist(path: Path) -> None:
         "spikes/claude/fixtures/persistent-owner-completion.jsonl",
         "spikes/claude/fixtures/preflight-nonce-raw.jsonl",
     }
-    missing = sorted(required - names)
+    missing = sorted(required - set(members))
     if missing:
         raise SystemExit(f"{path.name} missing required files: {', '.join(missing)}")
+    contributor_only = sorted(name for name in members if name.startswith(".hermes/"))
+    if contributor_only:
+        raise SystemExit(
+            f"{path.name} contains contributor-only files: {', '.join(contributor_only)}"
+        )
+    if members["scripts/bootstrap.sh"].mode & 0o111 != 0o111:
+        raise SystemExit(f"{path.name} bootstrap is not executable")
 
 
 if __name__ == "__main__":
