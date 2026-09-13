@@ -13,6 +13,7 @@ import aiosqlite
 import pytest
 import pytest_asyncio
 
+from outfitter.dispatch.client.models import ConfigInfo
 from outfitter.dispatch.contracts.errors import NotFoundError
 from outfitter.dispatch.registry.models import (
     SERVER_REQUEST_TEXT_LIMIT,
@@ -337,6 +338,40 @@ async def test_model_catalog_and_lane_model_settings_roundtrip(store: Registry) 
     got = await store.get_model_catalog_entry("gpt-5.5")
     assert got == refreshed.model_copy(update={"first_seen_at": now})
     assert await store.list_model_catalog() == [got]
+
+
+async def test_model_config_roundtrip(store: Registry) -> None:
+    config = ConfigInfo(
+        model="gpt-5.5",
+        model_provider="openai",
+        service_tier="fast",
+        model_reasoning_effort="high",
+    )
+
+    await store.upsert_model_catalog([], config=config)
+
+    assert await store.get_model_config() == config
+
+
+async def test_v28_migration_adds_model_config_cache(tmp_path: Path) -> None:
+    db = tmp_path / "registry-v27.db"
+    seeded = await Registry.open(db, now=_clock)
+    await seeded.close()
+
+    conn = await aiosqlite.connect(db)
+    await conn.execute("DROP TABLE model_config")
+    await conn.execute("PRAGMA user_version = 27")
+    await conn.commit()
+    await conn.close()
+
+    migrated = await Registry.open(db, now=_clock)
+    try:
+        assert await migrated.get_model_config() is None
+        async with migrated._conn.execute("PRAGMA user_version") as cur:
+            row = await cur.fetchone()
+        assert row is not None and int(row[0]) == SCHEMA_VERSION
+    finally:
+        await migrated.close()
 
 
 async def test_permission_profile_catalog_is_scoped_and_replaced(store: Registry) -> None:
@@ -1856,7 +1891,7 @@ async def test_v17_migration_adds_replace_in_place_provider_capacity_table(
         async with migrated._conn.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
         assert row is not None
-        assert int(row[0]) == SCHEMA_VERSION == 27
+        assert int(row[0]) == SCHEMA_VERSION == 28
     finally:
         await migrated.close()
 

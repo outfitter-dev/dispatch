@@ -8,23 +8,32 @@ from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
+import structlog
 
-from outfitter.dispatch.client.errors import AppServerError
+from outfitter.dispatch.client.errors import AppServerError, ClientError
 from outfitter.dispatch.client.models import (
     PermissionProfileSummary,
     ThreadInfo,
     ThreadResumeInitialTurnsPageParams,
 )
+from outfitter.dispatch.contracts.errors import SharedCoreFailure
 from outfitter.dispatch.core import handlers
+from outfitter.dispatch.core.providers import ALL_CODEX_ACTIONS, ProviderDurability, ProviderRouter
 from outfitter.dispatch.core.reactor import Reactor
 from outfitter.dispatch.core.triggers import TriggerRunner
 from outfitter.dispatch.core.turn_settings import runtime_settings_for_lane
-from outfitter.dispatch.daemon.supervisor import Supervisor
+from outfitter.dispatch.daemon.provider_manager import (
+    ProviderManager,
+    ProviderWorker,
+)
+from outfitter.dispatch.daemon.supervisor import SupervisedClient, Supervisor
 from outfitter.dispatch.registry.models import LaneSync
-from outfitter.dispatch.registry.store import Registry
+from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID, Registry
 from tests.fakes import FakeSupervisedClient, make_ctx
 
-_T0 = datetime(2026, 6, 3, 12, 0, 0, tzinfo=UTC)
+
+async def _wait_forever() -> None:
+    await asyncio.Event().wait()
 
 
 @pytest_asyncio.fixture
@@ -54,8 +63,7 @@ async def test_supervisor_restarts_and_restores_lanes_on_crash(store: Registry) 
         clients.append(client)
         return client
 
-    runner = TriggerRunner(ctx, lambda: _T0)
-    supervisor = Supervisor(ctx, make_client, lambda: Reactor(ctx, runner).run(), backoff=0)
+    supervisor = Supervisor(ctx, make_client, _wait_forever, backoff=0)
 
     first = await make_client()
     task = asyncio.create_task(supervisor.supervise(first))
@@ -73,7 +81,7 @@ async def test_supervisor_restarts_and_restores_lanes_on_crash(store: Registry) 
         for name, kw in clients[0].calls
     )
     assert ctx.client is clients[0]
-    first_provider_session_id = ctx.provider_session_id
+    first_provider_session_id = ctx.connection_generation
     assert first_provider_session_id
 
     # Simulate app-server crash (stdout EOF → wait_closed returns).
@@ -92,8 +100,8 @@ async def test_supervisor_restarts_and_restores_lanes_on_crash(store: Registry) 
         for name, kw in clients[1].calls
     )
     assert ctx.client is clients[1]
-    assert ctx.provider_session_id
-    assert ctx.provider_session_id != first_provider_session_id
+    assert ctx.connection_generation
+    assert ctx.connection_generation != first_provider_session_id
 
     await supervisor.stop()
     await asyncio.wait_for(task, timeout=1)
@@ -110,10 +118,7 @@ async def test_supervisor_marks_provider_unavailable_during_respawn(store: Regis
         await hold_respawn.wait()
         return FakeSupervisedClient()
 
-    async def run_reactor() -> None:
-        await asyncio.Event().wait()
-
-    supervisor = Supervisor(ctx, make_client, run_reactor, backoff=0)
+    supervisor = Supervisor(ctx, make_client, _wait_forever, backoff=0)
     first = FakeSupervisedClient()
     task = asyncio.create_task(supervisor.supervise(first))
     await asyncio.sleep(0)
@@ -122,13 +127,171 @@ async def test_supervisor_marks_provider_unavailable_during_respawn(store: Regis
 
     state = handlers._ref(lane, ctx).provider_state
     assert state.readiness == "unavailable"
-    assert state.readiness_reason == "App Server connection unavailable"
-    assert state.generation is not None
-    assert ctx.provider_session_id == ""
+    assert state.readiness_reason == "Codex App Server connection closed; reconnecting"
+    assert state.generation == ctx.connection_generation
+    assert ctx.client is None
 
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+async def test_supervisor_withdraws_generation_when_client_closes_during_recovery(
+    store: Registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lane = await store.add_lane(id="O1", handle="@own", source="own", status="idle")
+    ctx = make_ctx(store)
+    recovery_started = asyncio.Event()
+    hold_recovery = asyncio.Event()
+    recovery_cleanup_started = asyncio.Event()
+    release_recovery_cleanup = asyncio.Event()
+    respawn_started = asyncio.Event()
+    hold_respawn = asyncio.Event()
+
+    async def blocked_recovery(_client: SupervisedClient) -> None:
+        recovery_started.set()
+        try:
+            await hold_recovery.wait()
+        except asyncio.CancelledError:
+            recovery_cleanup_started.set()
+            await release_recovery_cleanup.wait()
+            raise
+
+    async def make_client() -> FakeSupervisedClient:
+        respawn_started.set()
+        await hold_respawn.wait()
+        return FakeSupervisedClient()
+
+    supervisor = Supervisor(ctx, make_client, _wait_forever, backoff=0)
+    monkeypatch.setattr(supervisor, "_restore_shared_state", blocked_recovery)
+    first = FakeSupervisedClient()
+    task = asyncio.create_task(supervisor.supervise(first))
+    await asyncio.wait_for(recovery_started.wait(), timeout=1)
+    generation = ctx.connection_generation
+
+    first.closed.set()
+    await asyncio.wait_for(recovery_cleanup_started.wait(), timeout=1)
+
+    state = handlers._ref(lane, ctx).provider_state
+    assert state.readiness == "unavailable"
+    assert state.readiness_reason == "Codex App Server connection closed; reconnecting"
+    assert state.generation == generation
+
+    release_recovery_cleanup.set()
+    await asyncio.wait_for(respawn_started.wait(), timeout=1)
+    assert ctx.client is None
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.parametrize(
+    "recovery_error",
+    [None, ClientError("provider recovery failed")],
+    ids=["blocked-recovery", "ordinary-recovery-error"],
+)
+async def test_supervisor_prioritizes_simultaneous_reactor_fatal(
+    store: Registry,
+    monkeypatch: pytest.MonkeyPatch,
+    recovery_error: Exception | None,
+) -> None:
+    router = ProviderRouter.unavailable_codex("Codex App Server is starting")
+    ctx = make_ctx(store)
+    ctx.providers = router
+    manager = ProviderManager(router, structlog.get_logger())
+    client = FakeSupervisedClient()
+    client.closed.set()
+    clients: list[FakeSupervisedClient] = []
+    recovery_started = asyncio.Event()
+
+    async def make_client() -> FakeSupervisedClient:
+        clients.append(client)
+        return client
+
+    async def fail_reactor() -> None:
+        raise SharedCoreFailure("registry failed during reactor")
+
+    async def blocked_recovery(_client: SupervisedClient) -> None:
+        recovery_started.set()
+        if recovery_error is not None:
+            raise recovery_error
+        await asyncio.Event().wait()
+
+    supervisor = Supervisor(ctx, make_client, fail_reactor, backoff=0, manager=manager)
+    monkeypatch.setattr(supervisor, "_restore_shared_state", blocked_recovery)
+    manager.add(
+        ProviderWorker(
+            provider="codex",
+            binding_id=DEFAULT_CODEX_BINDING_ID,
+            supported_actions=ALL_CODEX_ACTIONS,
+            durability=ProviderDurability(),
+            owns_process=True,
+            run=supervisor.supervise,
+            close=supervisor.stop,
+        )
+    )
+    manager.start()
+
+    with pytest.raises(SharedCoreFailure, match="registry failed during reactor"):
+        await asyncio.wait_for(manager.wait_fatal(), timeout=1)
+
+    assert recovery_started.is_set()
+    assert len(clients) == 1
+    snapshot = manager.snapshot("codex", DEFAULT_CODEX_BINDING_ID)
+    assert snapshot.state == "unavailable"
+    assert snapshot.last_error == "registry failed during reactor"
+    await manager.stop()
+
+
+async def test_supervisor_escalates_reactor_registry_failure_from_task_group(
+    store: Registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fail_listing(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(store, "list_open_server_requests_except_session", fail_listing)
+    router = ProviderRouter.unavailable_codex("Codex App Server is starting")
+    ctx = make_ctx(store)
+    ctx.providers = router
+    manager = ProviderManager(router, structlog.get_logger())
+    clients: list[FakeSupervisedClient] = []
+
+    async def make_client() -> FakeSupervisedClient:
+        client = FakeSupervisedClient()
+        clients.append(client)
+        return client
+
+    async def blocked_recovery(_client: SupervisedClient) -> None:
+        await asyncio.Event().wait()
+
+    runner = TriggerRunner(ctx, lambda: datetime.now(UTC))
+    supervisor = Supervisor(
+        ctx, make_client, lambda: Reactor(ctx, runner).run(), backoff=0, manager=manager
+    )
+    monkeypatch.setattr(supervisor, "_restore_shared_state", blocked_recovery)
+    manager.add(
+        ProviderWorker(
+            provider="codex",
+            binding_id=DEFAULT_CODEX_BINDING_ID,
+            supported_actions=ALL_CODEX_ACTIONS,
+            durability=ProviderDurability(),
+            owns_process=True,
+            run=supervisor.supervise,
+            close=supervisor.stop,
+        )
+    )
+    manager.start()
+
+    with pytest.raises(SharedCoreFailure, match="stale server request recovery"):
+        await asyncio.wait_for(manager.wait_fatal(), timeout=1)
+
+    assert len(clients) == 1
+    assert clients[0].closed.is_set()
+    snapshot = manager.snapshot("codex", DEFAULT_CODEX_BINDING_ID)
+    assert snapshot.state == "unavailable"
+    assert snapshot.last_error == "shared registry stale server request recovery failed"
+    await manager.stop()
 
 
 async def test_supervisor_skips_non_default_provider_bindings(store: Registry) -> None:
@@ -162,8 +325,7 @@ async def test_supervisor_recovers_and_drains_idle_queue_on_start(store: Registr
         clients.append(client)
         return client
 
-    runner = TriggerRunner(ctx, lambda: _T0)
-    supervisor = Supervisor(ctx, make_client, lambda: Reactor(ctx, runner).run(), backoff=0)
+    supervisor = Supervisor(ctx, make_client, _wait_forever, backoff=0)
 
     first = await make_client()
     task = asyncio.create_task(supervisor.supervise(first))
@@ -201,8 +363,7 @@ async def test_supervisor_revalidates_profile_and_fails_closed_on_older_binary(
     async def make_client() -> OlderClient:
         return OlderClient()
 
-    runner = TriggerRunner(ctx, lambda: _T0)
-    supervisor = Supervisor(ctx, make_client, lambda: Reactor(ctx, runner).run(), backoff=0)
+    supervisor = Supervisor(ctx, make_client, _wait_forever, backoff=0)
     client = await make_client()
     task = asyncio.create_task(supervisor.supervise(client))
     await asyncio.sleep(0.05)
@@ -320,3 +481,213 @@ async def test_supervisor_restores_explicitly_synced_attached_observation(
 
     await supervisor.stop()
     await asyncio.wait_for(task, timeout=1)
+
+
+async def test_supervisor_stops_only_the_current_connection_generation(
+    store: Registry,
+) -> None:
+    ctx = make_ctx(store)
+    clients: list[FakeSupervisedClient] = []
+
+    async def make_client() -> FakeSupervisedClient:
+        client = FakeSupervisedClient()
+        clients.append(client)
+        return client
+
+    async def run_reactor() -> None:
+        await asyncio.Event().wait()
+
+    supervisor = Supervisor(ctx, make_client, run_reactor, backoff=0)
+    first = await make_client()
+    task = asyncio.create_task(supervisor.supervise(first))
+    await asyncio.sleep(0.05)
+    first_generation = ctx.connection_generation
+    first.closed.set()
+    async with asyncio.timeout(1):
+        while len(clients) < 2 or ctx.connection_generation == first_generation:
+            await asyncio.sleep(0)
+
+    await supervisor.stop(expected_generation=first_generation)
+    assert clients[1].closed.is_set() is False
+
+    clients[1].closed.set()
+    async with asyncio.timeout(1):
+        while len(clients) < 3:
+            await asyncio.sleep(0)
+
+    assert ctx.connection_generation not in {first_generation, None}
+    await supervisor.stop(expected_generation=ctx.connection_generation)
+    await asyncio.wait_for(task, timeout=1)
+
+
+async def test_supervisor_treats_registry_failure_during_profile_restore_as_fatal(
+    store: Registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await store.add_lane(id="O1", handle="@own", source="own", status="idle")
+    await store.upsert_lane_runtime_settings(
+        runtime_settings_for_lane(
+            lane="O1",
+            updated_at="2026-06-03T12:00:00+00:00",
+            permission_profile=":read-only",
+        )
+    )
+
+    async def fail_profile_write(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(store, "replace_permission_profiles", fail_profile_write)
+    ctx = make_ctx(store)
+    clients: list[FakeSupervisedClient] = []
+
+    async def make_client() -> FakeSupervisedClient:
+        client = FakeSupervisedClient()
+        clients.append(client)
+        return client
+
+    supervisor = Supervisor(ctx, make_client, _wait_forever, backoff=0)
+    initial = await make_client()
+
+    with pytest.raises(SharedCoreFailure, match="permission profile refresh"):
+        await supervisor.supervise(initial)
+
+    assert len(clients) == 1
+    assert initial.closed.is_set()
+
+
+async def test_supervisor_retries_after_provider_recovery_failure(
+    store: Registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = make_ctx(store)
+    clients: list[FakeSupervisedClient] = []
+    recovered = asyncio.Event()
+
+    async def make_client() -> FakeSupervisedClient:
+        client = FakeSupervisedClient()
+        clients.append(client)
+        return client
+
+    async def run_reactor() -> None:
+        await asyncio.Event().wait()
+
+    supervisor = Supervisor(ctx, make_client, run_reactor, backoff=0)
+    restore = supervisor._restore_lanes
+    attempts = 0
+
+    async def fail_once(client: SupervisedClient) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ClientError("provider history reader failed")
+        await restore(client)
+        recovered.set()
+
+    monkeypatch.setattr(supervisor, "_restore_lanes", fail_once)
+    task = asyncio.create_task(supervisor.supervise())
+
+    await asyncio.wait_for(recovered.wait(), timeout=1)
+    assert len(clients) == 2
+    assert clients[0].closed.is_set()
+    assert ctx.client is clients[1]
+
+    await supervisor.stop()
+    await asyncio.wait_for(task, timeout=1)
+
+
+@pytest.mark.parametrize(
+    "reader_error",
+    [
+        ClientError("provider event reader failed"),
+        ExceptionGroup("reactor", [ClientError("provider event reader failed")]),
+    ],
+    ids=["bare", "task-group"],
+)
+async def test_supervisor_retries_after_reactor_reader_failure(
+    store: Registry, reader_error: Exception
+) -> None:
+    ctx = make_ctx(store)
+    clients: list[FakeSupervisedClient] = []
+    second_reactor_started = asyncio.Event()
+    reactor_runs = 0
+
+    async def make_client() -> FakeSupervisedClient:
+        client = FakeSupervisedClient()
+        clients.append(client)
+        return client
+
+    async def run_reactor() -> None:
+        nonlocal reactor_runs
+        reactor_runs += 1
+        if reactor_runs == 1:
+            raise reader_error
+        second_reactor_started.set()
+        await asyncio.Event().wait()
+
+    supervisor = Supervisor(ctx, make_client, run_reactor, backoff=0)
+    task = asyncio.create_task(supervisor.supervise())
+
+    await asyncio.wait_for(second_reactor_started.wait(), timeout=1)
+    assert len(clients) == 2
+    assert clients[0].closed.is_set()
+    assert ctx.client is clients[1]
+
+    await supervisor.stop()
+    await asyncio.wait_for(task, timeout=1)
+
+
+async def test_supervisor_retries_after_reactor_reader_exits_cleanly(
+    store: Registry,
+) -> None:
+    ctx = make_ctx(store)
+    clients: list[FakeSupervisedClient] = []
+    second_reactor_started = asyncio.Event()
+    reactor_runs = 0
+
+    async def make_client() -> FakeSupervisedClient:
+        client = FakeSupervisedClient()
+        clients.append(client)
+        return client
+
+    async def run_reactor() -> None:
+        nonlocal reactor_runs
+        reactor_runs += 1
+        if reactor_runs == 1:
+            return
+        second_reactor_started.set()
+        await asyncio.Event().wait()
+
+    supervisor = Supervisor(ctx, make_client, run_reactor, backoff=0)
+    task = asyncio.create_task(supervisor.supervise())
+
+    await asyncio.wait_for(second_reactor_started.wait(), timeout=1)
+    assert len(clients) == 2
+    assert clients[0].closed.is_set()
+    assert ctx.client is clients[1]
+
+    await supervisor.stop()
+    await asyncio.wait_for(task, timeout=1)
+
+
+async def test_supervisor_closes_client_returned_after_shutdown(store: Registry) -> None:
+    ctx = make_ctx(store)
+    make_started = asyncio.Event()
+    release_client = asyncio.Event()
+    late_client = FakeSupervisedClient()
+
+    async def make_client() -> FakeSupervisedClient:
+        make_started.set()
+        await release_client.wait()
+        return late_client
+
+    async def run_reactor() -> None:
+        await asyncio.Event().wait()
+
+    supervisor = Supervisor(ctx, make_client, run_reactor, backoff=0)
+    task = asyncio.create_task(supervisor.supervise())
+    await asyncio.wait_for(make_started.wait(), timeout=1)
+
+    await supervisor.stop()
+    release_client.set()
+    await asyncio.wait_for(task, timeout=1)
+
+    assert late_client.closed.is_set()
+    assert ctx.client is not late_client

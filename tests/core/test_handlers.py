@@ -83,6 +83,7 @@ from outfitter.dispatch.core.models import (
     TranscriptInput,
     WatchInput,
 )
+from outfitter.dispatch.core.providers import ProviderRouter
 from outfitter.dispatch.core.reactor import Reactor
 from outfitter.dispatch.core.triggers import TriggerRunner
 from outfitter.dispatch.registry.store import Registry
@@ -572,6 +573,33 @@ async def test_models_refreshes_catalog_and_reports_fast_alias(store: Registry) 
     assert [name for name, _ in client.calls].count("model_list") == 1
 
 
+async def test_models_no_refresh_uses_only_cached_registry_during_outage(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    client.config_result = ConfigInfo(
+        model="gpt-5.5",
+        model_provider="openai",
+        service_tier="fast",
+        model_reasoning_effort="high",
+    )
+    client.models_result.insert(0, AppModel(id="gpt-4-old", is_default=True))
+    ctx = make_ctx(store, client)
+    await handlers.models(ModelsInput(), ctx)
+    client.calls.clear()
+    ctx.providers = ProviderRouter.unavailable_codex("Codex unavailable")
+
+    cached = await handlers.models(ModelsInput(refresh=False), ctx)
+
+    assert cached.source == "registry"
+    assert cached.configured_default.model == "gpt-5.5"
+    assert cached.configured_default.model_provider == "openai"
+    assert cached.configured_default.service_tier == "fast"
+    assert cached.configured_default.model_reasoning_effort == "high"
+    assert "gpt-5.5" in {model.id for model in cached.models}
+    assert client.calls == []
+
+
 async def test_models_no_refresh_empty_catalog_reports_hint(store: Registry) -> None:
     client = FakeLaneClient()
     ctx = make_ctx(store, client)
@@ -586,6 +614,23 @@ async def test_models_no_refresh_empty_catalog_reports_hint(store: Registry) -> 
         == "run dispatch models without --no-refresh to refresh the App Server model catalog"
     )
     assert "model_list" not in [name for name, _ in client.calls]
+
+
+async def test_models_no_refresh_uses_legacy_catalog_default_without_config_cache(
+    store: Registry,
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    await handlers.models(ModelsInput(), ctx)
+    await store._conn.execute("DELETE FROM model_config")
+    await store._conn.commit()
+    client.calls.clear()
+
+    cached = await handlers.models(ModelsInput(refresh=False), ctx)
+
+    assert cached.configured_default.model == "gpt-5.5"
+    assert cached.configured_default.model_provider == "openai"
+    assert client.calls == []
 
 
 async def test_new_lane_no_send_registers_without_turn(store: Registry, tmp_path: Path) -> None:
@@ -3383,6 +3428,22 @@ async def test_plan_new_lane_makes_no_mutation(store: Registry, tmp_path: Path) 
     assert (await store.find_lane("lane-1")) is None
     slots = {src.slot for src in plan.sources}
     assert {"goal", "prompt", "output_schema"} <= slots
+
+
+async def test_plain_text_plan_uses_cached_provider_readiness_during_outage(
+    store: Registry, tmp_path: Path
+) -> None:
+    client = FakeLaneClient()
+    ctx = make_ctx(store, client)
+    ctx.providers = ProviderRouter.unavailable_codex("Codex startup failed")
+
+    plan = await handlers.plan_new_lane(
+        NewInput(name="preview", cwd=str(tmp_path), text="hello"), ctx
+    )
+
+    assert plan.provider_readiness == "unavailable"
+    assert plan.provider_readiness_reason == "Codex startup failed"
+    assert client.calls == []
 
 
 async def test_plan_new_lane_rejects_missing_image_before_workspace_mutation(

@@ -30,7 +30,7 @@ async def find_queued_submission(
     try:
         async with asyncio.timeout(NATIVE_QUEUE_TIMEOUT):
             for _ in range(4):
-                route.recheck(ctx.provider_session_id or None)
+                route.recheck()
                 page = await route.adapter.queue_list(route.target, cursor=cursor, limit=50)
                 total_bytes += len(json.dumps(page.model_dump(mode="json")).encode())
                 for entry in page.data:

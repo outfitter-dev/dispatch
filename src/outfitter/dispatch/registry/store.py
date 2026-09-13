@@ -21,6 +21,7 @@ from uuid import uuid4
 
 import aiosqlite
 
+from outfitter.dispatch.client.models import ConfigInfo
 from outfitter.dispatch.contracts.errors import (
     DeliveryConflictError,
     NotFoundError,
@@ -79,7 +80,7 @@ from .refs import (
 )
 
 Clock = Callable[[], datetime]
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 DEFAULT_CODEX_BINDING_ID = "codex-default"
 
 
@@ -639,6 +640,13 @@ CREATE TABLE IF NOT EXISTS model_catalog (
     source TEXT NOT NULL DEFAULT 'app-server',
     PRIMARY KEY(provider, id)
 );
+CREATE TABLE IF NOT EXISTS model_config (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    model TEXT,
+    model_provider TEXT,
+    service_tier TEXT,
+    model_reasoning_effort TEXT
+);
 CREATE TABLE IF NOT EXISTS permission_profiles (
     id TEXT NOT NULL,
     cwd TEXT NOT NULL,
@@ -910,6 +918,8 @@ class Registry:
             await self._ensure_delivery_submitted_payload_column()
         if user_version < 27:
             await self._ensure_delivery_observation_columns()
+        if user_version < 28:
+            await self._ensure_model_config_table()
 
     async def _ensure_binding_scope_v24(self) -> None:
         """Add binding identity without changing stable lane keys or local row ids."""
@@ -1220,6 +1230,14 @@ class Registry:
                 FOREIGN KEY(lane) REFERENCES lanes(id) ON DELETE CASCADE
             );
             """
+        )
+
+    async def _ensure_model_config_table(self) -> None:
+        await self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS model_config ("
+            "singleton INTEGER PRIMARY KEY CHECK (singleton = 1), "
+            "model TEXT, model_provider TEXT, service_tier TEXT, "
+            "model_reasoning_effort TEXT)"
         )
 
     async def _ensure_model_catalog_capability_columns(self) -> None:
@@ -2846,7 +2864,9 @@ class Registry:
     # --- model catalog / lane model provenance ---------------------------------
 
     @_serialized_access
-    async def upsert_model_catalog(self, models: list[ModelCatalogEntry]) -> None:
+    async def upsert_model_catalog(
+        self, models: list[ModelCatalogEntry], *, config: ConfigInfo | None = None
+    ) -> None:
         async with self._transaction():
             for model in models:
                 existing = await self.get_model_catalog_entry(model.id, provider=model.provider)
@@ -2893,6 +2913,37 @@ class Registry:
                         model.source,
                     ),
                 )
+            if config is not None:
+                await self._conn.execute(
+                    "INSERT INTO model_config (singleton, model, model_provider, service_tier, "
+                    "model_reasoning_effort) VALUES (1, ?, ?, ?, ?) "
+                    "ON CONFLICT(singleton) DO UPDATE SET model = excluded.model, "
+                    "model_provider = excluded.model_provider, "
+                    "service_tier = excluded.service_tier, "
+                    "model_reasoning_effort = excluded.model_reasoning_effort",
+                    (
+                        config.model,
+                        config.model_provider,
+                        config.service_tier,
+                        config.model_reasoning_effort,
+                    ),
+                )
+
+    @_serialized_access
+    async def get_model_config(self) -> ConfigInfo | None:
+        async with self._conn.execute(
+            "SELECT model, model_provider, service_tier, model_reasoning_effort "
+            "FROM model_config WHERE singleton = 1"
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return ConfigInfo(
+            model=row["model"],
+            model_provider=row["model_provider"],
+            service_tier=row["service_tier"],
+            model_reasoning_effort=row["model_reasoning_effort"],
+        )
 
     @_serialized_access
     async def list_model_catalog(self, provider: str | None = None) -> list[ModelCatalogEntry]:

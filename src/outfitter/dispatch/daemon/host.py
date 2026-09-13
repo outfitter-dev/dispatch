@@ -19,12 +19,14 @@ from outfitter.dispatch.codex_compat import inspect_codex_binary
 from outfitter.dispatch.config import app_server_socket_path, capture_policy, runtime_policy
 from outfitter.dispatch.contracts.context import Ctx
 from outfitter.dispatch.core.ops import REGISTRY
+from outfitter.dispatch.core.providers import ALL_CODEX_ACTIONS, ProviderDurability, ProviderRouter
 from outfitter.dispatch.core.reactor import Reactor
 from outfitter.dispatch.core.scheduler import Scheduler
 from outfitter.dispatch.core.triggers import TriggerRunner
-from outfitter.dispatch.registry.store import Registry
+from outfitter.dispatch.registry.store import DEFAULT_CODEX_BINDING_ID, Registry
 
 from .control import ControlServer
+from .provider_manager import ProviderManager, ProviderWorker
 from .supervisor import Supervisor
 
 
@@ -34,11 +36,20 @@ def _utcnow() -> datetime:
 
 async def _spawn_client() -> AppServerClient:
     transport = _configured_transport()
-    await transport.start()
-    client = AppServerClient(transport)
-    await client.start()
-    await client.initialize()
-    return client
+    client: AppServerClient | None = None
+    try:
+        await transport.start()
+        client = AppServerClient(transport)
+        await client.start()
+        await client.initialize()
+        return client
+    except BaseException:
+        with contextlib.suppress(Exception):
+            if client is not None:
+                await client.close()
+            else:
+                await transport.close()
+        raise
 
 
 def _configured_transport() -> StdioTransport | UnixSocketTransport:
@@ -62,25 +73,41 @@ async def _warn_if_codex_below_floor(log: structlog.stdlib.BoundLogger) -> None:
 
 
 async def run_daemon(socket_path: Path, db_path: Path) -> None:
-    """Start the supervised app-server client + registry, then serve the control
-    socket until cancelled. The supervisor restarts the app-server on crash."""
+    """Serve registry/control first, then supervise provider connections."""
     store = await Registry.open(db_path)
     log = structlog.get_logger()
-    await _warn_if_codex_below_floor(log)
-    first_client = await _spawn_client()
-    # mypy verifies AppServerClient satisfies the LaneClient protocol here.
+    provider_router = ProviderRouter.unavailable_codex("Codex App Server is starting")
     ctx = Ctx(
-        client=first_client,
+        client=None,
         registry=store,
         log=log,
         abort=asyncio.Event(),
         policy=runtime_policy(),
         capture=capture_policy(),
+        providers=provider_router,
     )
     runner = TriggerRunner(ctx, _utcnow)
     scheduler = Scheduler(ctx, runner, _utcnow)
     server = ControlServer(REGISTRY, ctx)
-    supervisor = Supervisor(ctx, _spawn_client, lambda: Reactor(ctx, runner).run())
+    provider_manager = ProviderManager(provider_router, log)
+    supervisor = Supervisor(
+        ctx,
+        _spawn_client,
+        lambda: Reactor(ctx, runner).run(),
+        manager=provider_manager,
+    )
+    provider_manager.add(
+        ProviderWorker(
+            provider="codex",
+            binding_id=DEFAULT_CODEX_BINDING_ID,
+            supported_actions=ALL_CODEX_ACTIONS,
+            durability=ProviderDurability(),
+            owns_process=app_server_socket_path() is None,
+            run=supervisor.supervise,
+            close=supervisor.stop,
+        )
+    )
+    ctx.provider_manager = provider_manager
 
     socket_path.parent.mkdir(parents=True, exist_ok=True)
     if socket_path.exists():
@@ -93,17 +120,22 @@ async def run_daemon(socket_path: Path, db_path: Path) -> None:
             loop.add_signal_handler(sig, stop.set)
 
     await server.serve(socket_path)  # already accepting once started
-    supervisor_task = asyncio.create_task(supervisor.supervise(first_client))
+    provider_manager.start()
     scheduler_task = asyncio.create_task(scheduler.run())
+    stop_task = asyncio.create_task(stop.wait())
+    fatal_task = asyncio.create_task(provider_manager.wait_fatal())
     try:
-        await stop.wait()  # serve until SIGTERM/SIGINT
+        await _warn_if_codex_below_floor(log)
+        done, _ = await asyncio.wait((stop_task, fatal_task), return_when=asyncio.FIRST_COMPLETED)
+        if fatal_task in done:
+            await fatal_task
     finally:
         log.info("dispatchd.shutting_down")
-        await supervisor.stop()  # closes the client → terminates the app-server
+        await provider_manager.stop()
         scheduler_task.cancel()
-        for task in (supervisor_task, scheduler_task):
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        stop_task.cancel()
+        fatal_task.cancel()
+        await asyncio.gather(scheduler_task, stop_task, fatal_task, return_exceptions=True)
         await server.close()
         await store.close()
         with contextlib.suppress(FileNotFoundError):

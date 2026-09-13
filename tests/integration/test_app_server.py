@@ -52,7 +52,7 @@ async def test_account_capacity_probe_prints_only_redacted_observation(
         log=structlog.get_logger(),
         abort=asyncio.Event(),
         policy=RuntimePolicy(),
-        provider_session_id="integration-app-server",
+        connection_generation="integration-app-server",
     )
     try:
         observation = await refresh_codex_capacity(ctx)
@@ -85,7 +85,7 @@ async def test_local_and_remote_images_are_visible_to_a_real_turn(
         log=structlog.get_logger(),
         abort=asyncio.Event(),
         policy=RuntimePolicy(),
-        provider_session_id="integration-app-server",
+        connection_generation="integration-app-server",
     )
     try:
         lane = await handlers.open_lane(OpenInput(name="image-proof", cwd=str(work_dir)), ctx)
@@ -208,7 +208,7 @@ async def test_dispatch_request_manager_completes_real_approval(
         log=structlog.get_logger(),
         abort=asyncio.Event(),
         policy=RuntimePolicy(owned_interactive_requests="permissive"),
-        provider_session_id="integration-app-server",
+        connection_generation="integration-app-server",
     )
     manager = ServerRequestManager(ctx)
     manager_task = asyncio.create_task(manager.run())
@@ -262,7 +262,7 @@ async def test_dispatch_request_manager_completes_plan_mode_user_input(
         registry=registry,
         log=structlog.get_logger(),
         abort=asyncio.Event(),
-        provider_session_id="integration-app-server",
+        connection_generation="integration-app-server",
     )
     manager_task = asyncio.create_task(ServerRequestManager(ctx).run())
     await asyncio.sleep(0)
@@ -327,7 +327,7 @@ async def test_dispatch_request_manager_completes_real_mcp_elicitation(
         registry=registry,
         log=structlog.get_logger(),
         abort=asyncio.Event(),
-        provider_session_id="integration-app-server",
+        connection_generation="integration-app-server",
     )
     manager_task = asyncio.create_task(ServerRequestManager(ctx).run())
     await asyncio.sleep(0)

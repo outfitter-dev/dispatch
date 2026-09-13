@@ -272,6 +272,11 @@ NEW_PLAN = define_op(
                 "name": "[demo] preview",
                 "handle": "@[demo] preview",
                 "cwd": "/work",
+                "provider": "codex",
+                "binding_id": "codex-default",
+                "provider_launch_supported": True,
+                "provider_readiness": "ready",
+                "provider_readiness_reason": None,
                 "workspace": {
                     "mode": "none",
                     "resolved_mode": "none",
@@ -617,10 +622,10 @@ MODELS = define_op(
                     "model catalog"
                 ),
                 "configured_default": {
-                    "model": "gpt-5.5",
-                    "model_provider": "openai",
+                    "model": None,
+                    "model_provider": None,
                     "service_tier": None,
-                    "model_reasoning_effort": "xhigh",
+                    "model_reasoning_effort": None,
                 },
                 "models": [],
             },
@@ -972,6 +977,7 @@ STATUS = define_op(
                 "active": 0,
                 "triggers": 0,
                 "triggers_enabled": 0,
+                "providers": [],
             },
         )
     ],

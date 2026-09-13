@@ -24,7 +24,7 @@ async def refresh_permission_profiles(ctx: Ctx, *, cwd: str) -> PermissionProfil
     route = router_for(ctx).route_binding(
         "codex", DEFAULT_CODEX_BINDING_ID, ProviderAction.PERMISSION_PROFILE_READ
     )
-    route.recheck(ctx.provider_session_id or None)
+    route.recheck()
     cwd = str(Path(cwd).expanduser().resolve())
     profiles = await route.adapter.permission_profile_list(cwd=cwd)
     now = ctx.registry.now_iso()

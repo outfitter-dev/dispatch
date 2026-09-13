@@ -9,7 +9,11 @@ import pytest_asyncio
 from outfitter.dispatch.client.events import ServerRequestReceived, classify_server_request
 from outfitter.dispatch.client.models import JsonRpcError, JsonRpcId
 from outfitter.dispatch.config import RuntimePolicy
-from outfitter.dispatch.contracts.errors import CapabilityUnavailableError, ValidationError
+from outfitter.dispatch.contracts.errors import (
+    CapabilityUnavailableError,
+    SharedCoreFailure,
+    ValidationError,
+)
 from outfitter.dispatch.core.server_request_policy import (
     automatic_response,
     expected_response,
@@ -54,7 +58,7 @@ async def test_owned_user_input_becomes_durable_attention(store: Registry) -> No
     )
     client = FakeLaneClient()
     ctx = make_ctx(store, client)
-    ctx.provider_session_id = "session-1"
+    ctx.connection_generation = "session-1"
     manager = ServerRequestManager(ctx)
 
     request = await manager.handle(
@@ -110,7 +114,7 @@ async def test_codex_request_does_not_capture_colliding_non_codex_lane_key(
         provider_thread_id="native-other",
     )
     ctx = make_ctx(store, FakeLaneClient())
-    ctx.provider_session_id = "session-1"
+    ctx.connection_generation = "session-1"
     manager = ServerRequestManager(ctx)
 
     request = await manager.handle(
@@ -141,7 +145,7 @@ async def test_attached_request_is_denied_by_default(store: Registry) -> None:
     await store.add_lane(id="L1", handle="@desktop", source="attached", status="busy")
     client = FakeLaneClient()
     ctx = make_ctx(store, client)
-    ctx.provider_session_id = "session-1"
+    ctx.connection_generation = "session-1"
     manager = ServerRequestManager(ctx)
 
     request = await manager.handle(
@@ -177,7 +181,7 @@ async def test_permissive_owned_permission_request_grants_requested_profile(
         client,
         policy=RuntimePolicy(owned_interactive_requests="permissive"),
     )
-    ctx.provider_session_id = "session-1"
+    ctx.connection_generation = "session-1"
     manager = ServerRequestManager(ctx)
 
     request = await manager.handle(
@@ -206,7 +210,7 @@ async def test_threadless_auth_request_gets_explicit_error_without_secret_storag
 ) -> None:
     client = FakeLaneClient()
     ctx = make_ctx(store, client)
-    ctx.provider_session_id = "session-1"
+    ctx.connection_generation = "session-1"
     manager = ServerRequestManager(ctx)
 
     request = await manager.handle(
@@ -231,7 +235,7 @@ async def test_operator_response_is_validated_and_sent_once(store: Registry) -> 
     await store.add_lane(id="L1", handle="@worker", source="own", status="busy")
     client = FakeLaneClient()
     ctx = make_ctx(store, client)
-    ctx.provider_session_id = "session-1"
+    ctx.connection_generation = "session-1"
     manager = ServerRequestManager(ctx)
     pending = await manager.handle(
         ServerRequestReceived(
@@ -261,7 +265,7 @@ async def test_operator_response_rejects_request_from_non_default_binding(
 ) -> None:
     client = FakeLaneClient()
     ctx = make_ctx(store, client)
-    ctx.provider_session_id = "session-1"
+    ctx.connection_generation = "session-1"
     observation = await store.observe_server_request_once(
         ServerRequest(
             binding_id="profile-a",
@@ -290,7 +294,7 @@ async def test_duplicate_delivery_does_not_duplicate_attention_or_response(
     await store.add_lane(id="L1", handle="@worker", source="own", status="busy")
     client = FakeLaneClient()
     ctx = make_ctx(store, client)
-    ctx.provider_session_id = "session-1"
+    ctx.connection_generation = "session-1"
     manager = ServerRequestManager(ctx)
     event = ServerRequestReceived(
         method="item/tool/requestUserInput",
@@ -319,7 +323,7 @@ async def test_attention_timeout_sends_safe_terminal_response(store: Registry) -
         client,
         policy=RuntimePolicy(interactive_request_timeout_seconds=60),
     )
-    ctx.provider_session_id = "session-1"
+    ctx.connection_generation = "session-1"
     manager = ServerRequestManager(ctx)
     request = await manager.handle(
         ServerRequestReceived(
@@ -342,7 +346,7 @@ async def test_attention_timeout_sends_safe_terminal_response(store: Registry) -
 async def test_reconnect_fails_stale_request_and_clears_attention(store: Registry) -> None:
     await store.add_lane(id="L1", handle="@worker", source="own", status="busy")
     old_ctx = make_ctx(store, FakeLaneClient())
-    old_ctx.provider_session_id = "old-session"
+    old_ctx.connection_generation = "old-session"
     old_manager = ServerRequestManager(old_ctx)
     pending = await old_manager.handle(
         ServerRequestReceived(
@@ -356,7 +360,7 @@ async def test_reconnect_fails_stale_request_and_clears_attention(store: Registr
     assert (await store.get_lane("L1")).status == "waiting_input"
 
     new_ctx = make_ctx(store, FakeLaneClient())
-    new_ctx.provider_session_id = "new-session"
+    new_ctx.connection_generation = "new-session"
     await ServerRequestManager(new_ctx).run()
 
     failed = await store.get_server_request_by_id(pending.id or 0)
@@ -366,6 +370,22 @@ async def test_reconnect_fails_stale_request_and_clears_attention(store: Registr
     runtime = await store.get_lane_runtime_state("L1")
     assert runtime is not None
     assert runtime.needs_attention is False
+
+
+async def test_run_escalates_stale_recovery_registry_failure_to_shared_core(
+    store: Registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fail_listing(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(store, "list_open_server_requests_except_session", fail_listing)
+    ctx = make_ctx(store, FakeLaneClient())
+    ctx.connection_generation = "session-1"
+
+    with pytest.raises(SharedCoreFailure, match="stale server request recovery") as info:
+        await ServerRequestManager(ctx).run()
+
+    assert isinstance(info.value.__cause__, RuntimeError)
 
 
 async def test_response_send_failure_is_audited_and_clears_attention(store: Registry) -> None:
@@ -382,7 +402,7 @@ async def test_response_send_failure_is_audited_and_clears_attention(store: Regi
     await store.add_lane(id="L1", handle="@worker", source="own", status="busy")
     client = FailingClient()
     ctx = make_ctx(store, client)
-    ctx.provider_session_id = "session-1"
+    ctx.connection_generation = "session-1"
     manager = ServerRequestManager(ctx)
     pending = await manager.handle(
         ServerRequestReceived(
