@@ -406,6 +406,7 @@ async def test_reactor_drains_one_queued_message_on_turn_completed(store: Regist
     ctx = make_ctx(store, client)
     reactor = Reactor(ctx, TriggerRunner(ctx, lambda: _T0))
     await store.add_lane(id="L1", handle="@x", source="own", status="busy")
+    await store.record_turn_started("L1", "turn-1")
     await store.enqueue_message(lane="L1", text="first")
     await store.enqueue_message(lane="L1", text="second")
 
@@ -436,6 +437,7 @@ async def test_reactor_fires_turn_completed_trigger_and_audits(store: Registry) 
     ctx = make_ctx(store, client)
     reactor = Reactor(ctx, TriggerRunner(ctx, lambda: _T0))
     await store.add_lane(id="L1", handle="@x", source="own", status="busy")
+    await store.record_turn_started("L1", "turn-1")
     await store.add_trigger(
         Trigger(
             id="t1",

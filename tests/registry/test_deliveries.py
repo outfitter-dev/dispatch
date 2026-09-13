@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -13,7 +14,11 @@ import pytest_asyncio
 
 from outfitter.dispatch.contracts.errors import DeliveryConflictError
 from outfitter.dispatch.registry.delivery import DeliveryExecutionStatus, DeliveryReceipt
-from outfitter.dispatch.registry.observations import ProviderCorrelation, ProviderObservation
+from outfitter.dispatch.registry.observations import (
+    ObservationKind,
+    ProviderCorrelation,
+    ProviderObservation,
+)
 from outfitter.dispatch.registry.store import SCHEMA_VERSION, Registry
 
 
@@ -354,6 +359,165 @@ async def test_terminal_receipt_state_and_provenance_are_absorbing(store: Regist
     assert legacy_completed.execution_status is None
     assert legacy_failed.matched and not legacy_failed.changed
     assert legacy_failed.receipt == legacy_completed
+
+
+async def test_terminal_receipt_is_absorbing_across_registry_instances(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "shared-registry.db"
+    stale = await Registry.open(db, now=_clock)
+    winner = await Registry.open(db, now=_clock)
+    release_stale = asyncio.Event()
+    stale_waiting = asyncio.Event()
+    stale_task: asyncio.Task[object] | None = None
+    try:
+        await stale.add_lane(id="lane-1", handle="@one", source="own")
+        receipt, _ = await stale.reserve_delivery(
+            delivery_id="receipt-terminal-race",
+            key=None,
+            lane="lane-1",
+            mode="send",
+            payload='{"text":"one"}',
+            text="one",
+        )
+
+        def observation(kind: str, source: str) -> ProviderObservation:
+            return ProviderObservation.model_validate(
+                {
+                    "provider": "codex",
+                    "binding_id": "codex-default",
+                    "native_session_id": "lane-1",
+                    "kind": kind,
+                    "correlation": {
+                        "delivery_id": receipt.id,
+                        "correlation_id": receipt.id,
+                        "native_run_id": "turn-1",
+                    },
+                    "source": source,
+                    "received_at": _clock(),
+                    "partial": source == "history",
+                }
+            )
+
+        original_transaction = stale._transaction
+
+        @asynccontextmanager
+        async def delayed_transaction(*, immediate: bool = False) -> AsyncIterator[None]:
+            stale_waiting.set()
+            await release_stale.wait()
+            async with original_transaction(immediate=immediate):
+                yield
+
+        monkeypatch.setattr(stale, "_transaction", delayed_transaction)
+        stale_task = asyncio.create_task(
+            stale.apply_receipt_observation(observation("started", "history"))
+        )
+        await stale_waiting.wait()
+        completed = await winner.apply_receipt_observation(observation("completed", "live"))
+        release_stale.set()
+        stale_result = await stale_task
+
+        assert completed.receipt is not None
+        assert completed.receipt.status == "completed"
+        assert completed.receipt.execution_status == "completed"
+        assert completed.receipt.evidence_source == "live"
+        assert stale_result.matched and not stale_result.changed
+        assert stale_result.reason == "terminal receipt already settled"
+        assert stale_result.receipt == completed.receipt
+        assert await winner.get_delivery(receipt.id) == completed.receipt
+    finally:
+        release_stale.set()
+        if stale_task is not None and not stale_task.done():
+            await stale_task
+        await stale.close()
+        await winner.close()
+
+
+@pytest.mark.parametrize("stale_kind", ["uncertain", "accepted"])
+async def test_started_receipt_rejects_stale_nonterminal_observation_across_registries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stale_kind: ObservationKind,
+) -> None:
+    db = tmp_path / f"shared-{stale_kind}.db"
+    stale = await Registry.open(db, now=_clock)
+    winner = await Registry.open(db, now=_clock)
+    release_stale = asyncio.Event()
+    stale_waiting = asyncio.Event()
+    stale_task: asyncio.Task[object] | None = None
+    try:
+        await stale.add_lane(id="lane-1", handle="@one", source="own")
+        receipt, _ = await stale.reserve_delivery(
+            delivery_id=f"receipt-{stale_kind}-race",
+            key=None,
+            lane="lane-1",
+            mode="send",
+            payload='{"text":"one"}',
+            text="one",
+        )
+
+        started = ProviderObservation(
+            provider="codex",
+            binding_id="codex-default",
+            native_session_id="lane-1",
+            kind="started",
+            correlation=ProviderCorrelation(
+                delivery_id=receipt.id,
+                correlation_id=receipt.id,
+                native_run_id="turn-1",
+            ),
+            generation="generation-1",
+            source="live",
+            received_at=_clock(),
+        )
+        stale_observation = ProviderObservation(
+            provider="codex",
+            binding_id="codex-default",
+            native_session_id="lane-1",
+            kind=stale_kind,
+            correlation=ProviderCorrelation(
+                delivery_id=receipt.id,
+                correlation_id=receipt.id,
+                native_submission_id=("submission-stale" if stale_kind == "accepted" else None),
+            ),
+            generation="generation-0",
+            source="submit_result",
+            received_at=_clock(),
+            partial=True,
+            reason="stale observation",
+        )
+
+        original_transaction = stale._transaction
+
+        @asynccontextmanager
+        async def delayed_transaction(*, immediate: bool = False) -> AsyncIterator[None]:
+            stale_waiting.set()
+            await release_stale.wait()
+            async with original_transaction(immediate=immediate):
+                yield
+
+        monkeypatch.setattr(stale, "_transaction", delayed_transaction)
+        stale_task = asyncio.create_task(stale.apply_receipt_observation(stale_observation))
+        await stale_waiting.wait()
+        stronger = await winner.apply_receipt_observation(started)
+        release_stale.set()
+        stale_result = await stale_task
+
+        assert stronger.receipt is not None
+        assert stronger.receipt.status == "accepted"
+        assert stronger.receipt.execution_status == "inProgress"
+        assert stronger.receipt.turn_id == "turn-1"
+        assert stronger.receipt.submission_id is None
+        assert stronger.receipt.evidence_source == "live"
+        assert stale_result.changed is False
+        assert stale_result.receipt == stronger.receipt
+        assert await winner.get_delivery(receipt.id) == stronger.receipt
+    finally:
+        release_stale.set()
+        if stale_task is not None and not stale_task.done():
+            await stale_task
+        await stale.close()
+        await winner.close()
 
 
 @pytest.mark.parametrize("terminal", ["failed", "interrupted"])

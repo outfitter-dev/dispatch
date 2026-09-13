@@ -800,9 +800,9 @@ class Registry:
         await self._conn.close()
 
     @asynccontextmanager
-    async def _transaction(self) -> AsyncIterator[None]:
+    async def _transaction(self, *, immediate: bool = False) -> AsyncIterator[None]:
         async with self._write_lock:
-            await self._conn.execute("BEGIN")
+            await self._conn.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
             try:
                 yield
             except BaseException:
@@ -1765,7 +1765,7 @@ class Registry:
                 "UPDATE lanes SET active_turn_id = NULL, latest_turn_id = ?, "
                 "latest_turn_status = 'completed', latest_error = NULL, latest_error_at = NULL, "
                 "status = 'idle', updated_at = ? WHERE id = ? "
-                "AND (active_turn_id IS NULL OR active_turn_id = ?)",
+                "AND (active_turn_id = ? OR (active_turn_id IS NULL AND status != 'busy'))",
                 (turn_id, self._now().isoformat(), lane_id, turn_id),
             )
             await self._conn.commit()
@@ -1817,7 +1817,7 @@ class Registry:
                 "UPDATE lanes SET active_turn_id = NULL, latest_turn_id = ?, "
                 "latest_turn_status = ?, latest_error = ?, latest_error_at = ?, "
                 "status = 'error', updated_at = ? WHERE id = ? "
-                "AND (active_turn_id IS NULL OR active_turn_id = ?)",
+                "AND (active_turn_id = ? OR (active_turn_id IS NULL AND status != 'busy'))",
                 (
                     turn_id,
                     execution_status,
@@ -2116,6 +2116,14 @@ class Registry:
     ) -> ReceiptTransition:
         """Apply evidence only when it identifies one frozen delivery target exactly."""
 
+        async with self._transaction(immediate=True):
+            return await self._apply_receipt_observation(observation)
+
+    async def _apply_receipt_observation(
+        self, observation: ProviderObservation
+    ) -> ReceiptTransition:
+        """Validate and apply one observation while holding the database write reservation."""
+
         correlation = observation.correlation
         if correlation.delivery_id is None or correlation.correlation_id is None:
             receipt = (
@@ -2173,6 +2181,12 @@ class Registry:
                 matched=True,
                 reason="terminal receipt already settled",
             )
+        if observation.kind == "uncertain" and receipt.status in {"accepted", "failed"}:
+            return ReceiptTransition(
+                receipt=receipt,
+                matched=True,
+                reason="stronger receipt evidence already recorded",
+            )
         status: DeliveryStatus = receipt.status
         execution_status = receipt.execution_status
         if observation.kind in {"accepted", "started"}:
@@ -2202,51 +2216,62 @@ class Registry:
         )
         received_at = observation.received_at.isoformat()
         updated_at = self.now_iso()
-        async with self._transaction():
-            changed = await self._conn.execute(
-                "UPDATE deliveries SET status = ?, execution_status = ?, "
-                "turn_id = COALESCE(turn_id, ?), submission_id = COALESCE(submission_id, ?), "
-                "error = ?, evidence_source = ?, evidence_provider_time = ?, "
-                "evidence_received_at = ?, evidence_partial = ?, evidence_generation = ?, "
-                "updated_at = ? WHERE id = ? AND provider = ? AND binding_id = ? "
-                "AND native_session_id = ? AND correlation_id = ? "
-                "AND (turn_id IS NULL OR ? IS NULL OR turn_id = ?) "
-                "AND (submission_id IS NULL OR ? IS NULL OR submission_id = ?)",
-                (
-                    status,
-                    execution_status,
-                    correlation.native_run_id,
-                    correlation.native_submission_id,
-                    observation.reason,
-                    observation.source,
-                    provider_time,
-                    received_at,
-                    observation.partial,
-                    observation.generation,
-                    updated_at,
-                    receipt.id,
-                    observation.provider,
-                    observation.binding_id,
-                    observation.native_session_id,
-                    correlation.correlation_id,
-                    correlation.native_run_id,
-                    correlation.native_run_id,
-                    correlation.native_submission_id,
-                    correlation.native_submission_id,
-                ),
+        changed = await self._conn.execute(
+            "UPDATE deliveries SET status = ?, execution_status = ?, "
+            "turn_id = COALESCE(turn_id, ?), submission_id = COALESCE(submission_id, ?), "
+            "error = ?, evidence_source = ?, evidence_provider_time = ?, "
+            "evidence_received_at = ?, evidence_partial = ?, evidence_generation = ?, "
+            "updated_at = ? WHERE id = ? AND provider = ? AND binding_id = ? "
+            "AND native_session_id = ? AND correlation_id = ? "
+            "AND (turn_id IS NULL OR ? IS NULL OR turn_id = ?) "
+            "AND (submission_id IS NULL OR ? IS NULL OR submission_id = ?) "
+            "AND status != 'completed' "
+            "AND COALESCE(execution_status, '') NOT IN ('completed', 'failed', 'interrupted')",
+            (
+                status,
+                execution_status,
+                correlation.native_run_id,
+                correlation.native_submission_id,
+                observation.reason,
+                observation.source,
+                provider_time,
+                received_at,
+                observation.partial,
+                observation.generation,
+                updated_at,
+                receipt.id,
+                observation.provider,
+                observation.binding_id,
+                observation.native_session_id,
+                correlation.correlation_id,
+                correlation.native_run_id,
+                correlation.native_run_id,
+                correlation.native_submission_id,
+                correlation.native_submission_id,
+            ),
+        )
+        if (
+            changed.rowcount == 1
+            and receipt.queue_id is not None
+            and status in {"accepted", "completed"}
+        ):
+            await self._conn.execute(
+                "UPDATE queued_messages SET status = 'sent', updated_at = ?, error = NULL "
+                "WHERE id = ?",
+                (updated_at, receipt.queue_id),
             )
-            if (
-                changed.rowcount == 1
-                and receipt.queue_id is not None
-                and status in {"accepted", "completed"}
-            ):
-                await self._conn.execute(
-                    "UPDATE queued_messages SET status = 'sent', updated_at = ?, error = NULL "
-                    "WHERE id = ?",
-                    (updated_at, receipt.queue_id),
-                )
         current = await self.get_delivery(receipt.id)
         if changed.rowcount != 1:
+            if current.status == "completed" or current.execution_status in {
+                "completed",
+                "failed",
+                "interrupted",
+            }:
+                return ReceiptTransition(
+                    receipt=current,
+                    matched=True,
+                    reason="terminal receipt already settled",
+                )
             reason = (
                 "native run mismatch"
                 if current.turn_id != correlation.native_run_id

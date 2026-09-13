@@ -342,28 +342,28 @@ async def observe_delivery_execution(
     """Join durable lifecycle facts after either side of the ACK/event race."""
     if turn_id is None:
         return
-    managed_lane = await ctx.registry.find_lane(lane)
-    if managed_lane is None or managed_lane.provider_thread_id is None:
+    managed = await ctx.registry.find_lane(lane)
+    if managed is None or managed.provider_thread_id is None:
         return
     try:
         turn = await ctx.registry.get_thread_turn(
-            managed_lane.provider,
-            managed_lane.provider_thread_id,
+            managed.provider,
+            managed.provider_thread_id,
             turn_id,
-            binding_id=managed_lane.binding_id,
+            binding_id=managed.binding_id,
         )
     except NotFoundError:
         return
     if turn.status not in ("completed", "failed", "interrupted"):
         return
     for receipt in await ctx.registry.delivery_for_provider_run(
-        managed.provider, managed.binding_id, managed.provider_session_id, turn_id
+        managed.provider, managed.binding_id, managed.provider_thread_id, turn_id
     ):
         await ctx.registry.apply_receipt_observation(
             ProviderObservation(
                 provider=managed.provider,
                 binding_id=managed.binding_id,
-                native_session_id=managed.provider_session_id,
+                native_session_id=managed.provider_thread_id,
                 kind=turn.status,
                 correlation=ProviderCorrelation(
                     delivery_id=receipt.id,
