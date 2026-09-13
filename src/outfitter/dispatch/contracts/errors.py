@@ -85,7 +85,7 @@ class StagingError(DispatchError):
 
 
 class DeliveryConflictError(DispatchError):
-    """An idempotency key was reused for a different effective delivery."""
+    """An idempotency key was reused for different submitted input."""
 
     code = "delivery_conflict"
     exit_code = 2
