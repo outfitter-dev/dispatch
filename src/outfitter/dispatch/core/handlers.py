@@ -3954,6 +3954,12 @@ async def status(inp: StatusInput, ctx: Ctx) -> StatusOutput:
                     observed_at=ctx.registry.now_iso(),
                     connection_generation=availability.generation,
                     owns_process=False,
+                    supported_actions=sorted(action.value for action in facts.supported_actions),
+                    durability=ProviderDurabilityView(
+                        local_reservation=facts.durability.local_reservation,
+                        provider_idempotency=facts.durability.provider_idempotency,
+                        native_evidence=facts.durability.native_evidence,
+                    ),
                 )
             )
         providers.sort(key=lambda binding: (binding.provider, binding.binding_id))
