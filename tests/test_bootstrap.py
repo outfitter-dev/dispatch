@@ -17,7 +17,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP = ROOT / "scripts" / "bootstrap.sh"
-SOURCE_FIXTURE_DIRS = ("src", "plugins", "tests", "scripts")
+SOURCE_FIXTURE_DIRS = ("src", "plugins", "tests", "scripts", "docs")
 SOURCE_FIXTURE_FILES = ("README.md", "AGENTS.md", "pyproject.toml", "uv.lock", "justfile")
 
 
