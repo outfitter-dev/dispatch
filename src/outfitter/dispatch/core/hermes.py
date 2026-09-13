@@ -46,7 +46,7 @@ if TYPE_CHECKING:
     from outfitter.dispatch.registry.store import Registry
 
 ObservationSink = Callable[[ProviderObservation], Awaitable[object]]
-HERMES_ACTIONS = frozenset({ProviderAction.LAUNCH, ProviderAction.SEND})
+HERMES_ACTIONS = frozenset({ProviderAction.LAUNCH, ProviderAction.SEND, ProviderAction.TRANSCRIPT})
 HERMES_OBSERVED_TEXT_CHARS = 32_000
 HERMES_ATTENTION_MEMBER_LIMIT = 64
 HERMES_NATIVE_CAPABILITY_ATTENTION_FAMILIES = frozenset(
@@ -147,6 +147,11 @@ class HermesLaneAdapter:
         if isinstance(result, HermesSessionCreated):
             self._sessions[result.runtime_session_id] = (lane_id, result.stored_session_id)
         return result
+
+    def owns_session(self, lane_id: str, stored_session_id: str) -> bool:
+        """Whether this gateway generation created the lane's native session."""
+
+        return (lane_id, stored_session_id) in self._sessions.values()
 
     async def submit_prepared(self, request: PreparedProviderRequest) -> ProviderSubmissionResult:
         target = request.target
@@ -423,7 +428,28 @@ async def apply_hermes_delivery_observation(
     ):
         return None
     transition = await registry.apply_receipt_observation(observation)
+    if transition.matched and transition.changed:
+        await _apply_hermes_turn_lifecycle(registry, receipt.lane, observation)
     return transition
+
+
+async def _apply_hermes_turn_lifecycle(
+    registry: Registry, lane_id: str, observation: ProviderObservation
+) -> None:
+    """Apply exact turn evidence to the lane the way the Codex reactor does."""
+
+    run_id = observation.correlation.native_run_id
+    if observation.kind == "started":
+        await registry.record_turn_started(lane_id, run_id)
+    elif observation.kind == "completed":
+        await registry.record_turn_completed_if_active(lane_id, run_id)
+    elif observation.kind == "failed" or observation.kind == "interrupted":
+        await registry.record_turn_failed_if_active(
+            lane_id, run_id, observation.reason, execution_status=observation.kind
+        )
+    else:
+        return
+    await _sync_runtime_state(registry, lane_id, observation.received_at.isoformat())
 
 
 async def apply_hermes_activity_observation(

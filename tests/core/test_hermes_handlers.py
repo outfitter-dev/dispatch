@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -25,6 +26,7 @@ from outfitter.dispatch.contracts.errors import (
 )
 from outfitter.dispatch.core import handlers
 from outfitter.dispatch.core.hermes import (
+    HERMES_ACTIONS,
     HermesAttentionObservation,
     HermesSessionActivityObservation,
     HermesTranscriptObservation,
@@ -35,6 +37,7 @@ from outfitter.dispatch.core.hermes import (
 )
 from outfitter.dispatch.core.models import (
     NewInput,
+    RosterInput,
     SendInput,
     ShowInput,
     SubscribeInput,
@@ -42,7 +45,6 @@ from outfitter.dispatch.core.models import (
 )
 from outfitter.dispatch.core.providers import (
     PreparedProviderRequest,
-    ProviderAction,
     ProviderAvailability,
     ProviderBindingFacts,
     ProviderDurability,
@@ -77,7 +79,7 @@ class FakeHermesAdapter:
         self.facts = ProviderBindingFacts(
             provider="hermes",
             binding_id="hermes-default",
-            supported_actions=frozenset({ProviderAction.LAUNCH, ProviderAction.SEND}),
+            supported_actions=HERMES_ACTIONS,
             availability=ProviderAvailability(ready=True, generation=generation),
             durability=ProviderDurability(local_reservation=True, native_evidence=True),
         )
@@ -89,6 +91,10 @@ class FakeHermesAdapter:
         self.submission = submission
         self.create_calls: list[dict[str, str]] = []
         self.submissions: list[PreparedProviderRequest] = []
+        self.sessions: set[tuple[str, str]] = set()
+
+    def owns_session(self, lane_id: str, stored_session_id: str) -> bool:
+        return (lane_id, stored_session_id) in self.sessions
 
     async def create_session(
         self, *, lane_id: str, cwd: str, title: str
@@ -96,6 +102,7 @@ class FakeHermesAdapter:
         self.create_calls.append({"cwd": cwd, "title": title})
         creation = self.creation
         if isinstance(creation, HermesSessionCreated):
+            self.sessions.add((lane_id, creation.stored_session_id))
             return creation.__class__(
                 runtime_session_id=creation.runtime_session_id,
                 stored_session_id=creation.stored_session_id,
@@ -164,6 +171,8 @@ async def test_hermes_launch_without_prompt_persists_separate_native_identities(
     assert result.message_accepted is False
     assert result.capabilities.send is True
     assert result.capabilities.queue is False
+    assert result.capabilities.transcript is True
+    assert result.capabilities.tail is False
     assert adapter.create_calls[0]["cwd"] == str(tmp_path)
     assert adapter.create_calls[0]["title"].endswith("worker")
     assert adapter.submissions == []
@@ -313,6 +322,54 @@ async def test_launch_readiness_failure_after_claim_is_recorded_as_failed(
     assert replay.launch.status == "failed"
     assert replay.delivery is None
     assert adapter.create_calls == []
+
+
+async def test_cancelled_create_holds_launch_ambiguous_and_propagates(
+    store: Registry, tmp_path: Path
+) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockedCreateAdapter(FakeHermesAdapter):
+        async def create_session(
+            self, *, lane_id: str, cwd: str, title: str
+        ) -> HermesSessionCreationResult:
+            self.create_calls.append({"cwd": cwd, "title": title})
+            entered.set()
+            await release.wait()  # cancelled here, as on daemon shutdown mid-request
+            raise AssertionError("unreachable")
+
+    adapter = BlockedCreateAdapter()
+    ctx = _hermes_ctx(store, adapter)
+    request = NewInput(
+        name="worker",
+        cwd=str(tmp_path),
+        provider="hermes",
+        text="first",
+        idempotency_key="launch-key",
+    )
+
+    task = asyncio.create_task(handlers.new_lane(request, ctx))
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    lane = (await store.list_lanes())[0]
+    launch = await store.get_lane_launch(lane.id)
+    assert launch.status == "ambiguous"
+    assert launch.error is not None and "cancelled" in launch.error
+    assert launch.runtime_session_id is None
+    assert launch.first_delivery_id is None
+    assert lane.status == "error"
+    assert lane.provider_thread_id is None
+
+    replay = await handlers.new_lane(request, ctx)
+    assert replay.launch is not None
+    assert replay.launch.status == "ambiguous"
+    assert replay.delivery is None
+    assert len(adapter.create_calls) == 1
+    assert adapter.submissions == []
 
 
 async def test_hermes_target_subscription_is_rejected_before_creation(
@@ -937,6 +994,165 @@ async def test_bounded_live_observations_feed_partial_public_transcript(
     assert detail.sync.history_source == "live_observed"
     assert detail.sync.history_complete is False
     assert detail.sync.history_capability == "unsupported"
+
+
+async def test_stale_generation_hermes_lane_projects_send_unavailable(
+    store: Registry, tmp_path: Path
+) -> None:
+    first_adapter = FakeHermesAdapter()
+    ctx = _hermes_ctx(store, first_adapter)
+    created = await handlers.new_lane(
+        NewInput(name="worker", cwd=str(tmp_path), provider="hermes", send=False), ctx
+    )
+    current = await handlers.show(ShowInput(lane=created.ref), ctx)
+    assert current.writable is True
+    assert current.capabilities.send is True
+    assert current.write_locked_reason is None
+
+    ctx.providers = ProviderRouter((FakeHermesAdapter(generation="generation-2"),))
+
+    stale = await handlers.show(ShowInput(lane=created.ref), ctx)
+    assert stale.capabilities.send is False
+    assert stale.writable is False
+    assert stale.write_locked_reason == (
+        "Hermes session is not owned by the current gateway generation"
+    )
+    assert stale.provider_state.readiness == "ready"
+    assert stale.capabilities.transcript is True
+    listed = (await handlers.roster(RosterInput(), ctx)).lanes
+    assert [lane.id for lane in listed] == [created.id]
+    assert listed[0].writable is False
+    assert listed[0].capabilities.send is False
+
+
+async def test_unsupported_transcript_falls_through_to_route_rejection(
+    store: Registry, tmp_path: Path
+) -> None:
+    adapter = FakeHermesAdapter()
+    ctx = _hermes_ctx(store, adapter)
+    created = await handlers.new_lane(
+        NewInput(name="worker", cwd=str(tmp_path), provider="hermes", send=False), ctx
+    )
+    ctx.providers = ProviderRouter(())
+
+    assert (await handlers.show(ShowInput(lane=created.ref), ctx)).capabilities.transcript is False
+    with pytest.raises(CapabilityUnavailableError, match="not registered"):
+        await handlers.transcript(TranscriptInput(lane=created.ref), ctx)
+    with pytest.raises(CapabilityUnavailableError, match="not registered"):
+        await handlers.show(ShowInput(lane=created.ref, include_transcript=True), ctx)
+
+
+@pytest.mark.parametrize("terminal", ["completed", "failed", "interrupted"])
+async def test_correlated_turn_evidence_updates_lane_lifecycle(
+    store: Registry, tmp_path: Path, terminal: Literal["completed", "failed", "interrupted"]
+) -> None:
+    adapter = FakeHermesAdapter()
+    ctx = _hermes_ctx(store, adapter)
+    created = await handlers.new_lane(
+        NewInput(name="worker", cwd=str(tmp_path), provider="hermes", text="first"), ctx
+    )
+    assert created.delivery is not None
+    receipt_id = created.delivery.id
+
+    async def observe(kind: Literal["started", "completed", "failed", "interrupted"]) -> None:
+        transition = await apply_hermes_delivery_observation(
+            store,
+            _router(ctx),
+            ProviderObservation(
+                provider="hermes",
+                binding_id="hermes-default",
+                native_session_id="stored-1",
+                kind=kind,
+                correlation=ProviderCorrelation(
+                    delivery_id=receipt_id,
+                    correlation_id=receipt_id,
+                    native_run_id="turn-1",
+                ),
+                generation="generation-1",
+                source="live",
+                received_at=datetime.now(UTC),
+                reason=f"Hermes message completed with status {kind!r}"
+                if kind != "started"
+                else None,
+            ),
+        )
+        assert transition is not None
+
+    await observe("started")
+    lane = await store.get_lane(created.id)
+    assert lane.status == "busy"
+    assert lane.active_turn_id == "turn-1"
+    assert lane.latest_turn_id == "turn-1"
+    assert lane.latest_turn_status == "started"
+    state = await store.get_lane_runtime_state(created.id)
+    assert state is not None
+    assert (state.status, state.active_turn_id, state.latest_turn_status) == (
+        "busy",
+        "turn-1",
+        "started",
+    )
+    started = await handlers.show(ShowInput(lane=created.ref), ctx)
+    assert started.latest_turn.id == "turn-1"
+    assert started.latest_turn.status == "started"
+
+    await observe(terminal)
+    lane = await store.get_lane(created.id)
+    assert lane.active_turn_id is None
+    assert lane.latest_turn_id == "turn-1"
+    assert lane.latest_turn_status == terminal
+    if terminal == "completed":
+        assert lane.status == "idle"
+        assert lane.latest_error is None
+    else:
+        assert lane.status == "error"
+        assert lane.latest_error == f"Hermes message completed with status {terminal!r}"
+        assert lane.latest_error_at is not None
+    state = await store.get_lane_runtime_state(created.id)
+    assert state is not None
+    assert (state.status, state.active_turn_id, state.latest_turn_status) == (
+        lane.status,
+        None,
+        terminal,
+    )
+    settled = await handlers.show(ShowInput(lane=created.ref), ctx)
+    assert settled.latest_turn.id == "turn-1"
+    assert settled.latest_turn.status == terminal
+    assert settled.latest_turn.error == lane.latest_error
+    assert (await store.get_delivery(receipt_id)).execution_status == terminal
+
+
+async def test_unmatched_turn_evidence_leaves_lane_lifecycle_alone(
+    store: Registry, tmp_path: Path
+) -> None:
+    adapter = FakeHermesAdapter()
+    ctx = _hermes_ctx(store, adapter)
+    created = await handlers.new_lane(
+        NewInput(name="worker", cwd=str(tmp_path), provider="hermes", text="first"), ctx
+    )
+    assert created.delivery is not None
+    before = await store.get_lane(created.id)
+
+    await apply_hermes_delivery_observation(
+        store,
+        _router(ctx),
+        ProviderObservation(
+            provider="hermes",
+            binding_id="hermes-default",
+            native_session_id="stored-1",
+            kind="completed",
+            correlation=ProviderCorrelation(
+                delivery_id=created.delivery.id,
+                correlation_id=created.delivery.id,
+                native_run_id="other-turn",
+            ),
+            generation="generation-1",
+            source="live",
+            received_at=datetime.now(UTC),
+        ),
+    )
+
+    assert await store.get_lane(created.id) == before
+    assert (await store.get_delivery(created.delivery.id)).execution_status is None
 
 
 async def test_generation_change_fences_existing_hermes_lane_before_provider_call(

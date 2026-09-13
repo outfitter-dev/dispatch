@@ -280,9 +280,12 @@ def _is_default_codex_lane(lane: Lane) -> bool:
 def _provider_supports(lane: Lane, ctx: Ctx, action: ProviderAction) -> bool:
     if action in {ProviderAction.FORK, ProviderAction.SYNC} and not _is_default_codex_lane(lane):
         return False
-    facts = router_for(ctx).facts_for_lane(lane)
+    router = router_for(ctx)
+    facts = router.facts_for_lane(lane)
     if facts is None or lane.provider_thread_id is None or not facts.supports(action):
         return False
+    if lane.provider == "hermes" and action is ProviderAction.SEND:
+        return router.hermes_lane_is_current(lane)
     return not (
         lane.provider == "codex"
         and lane.binding_id == DEFAULT_CODEX_BINDING_ID
@@ -308,6 +311,7 @@ def _capabilities(lane: Lane, ctx: Ctx) -> LaneCapabilities:
         read=_provider_supports(lane, ctx, ProviderAction.READ),
         sync=_provider_supports(lane, ctx, ProviderAction.SYNC),
         tail=_provider_supports(lane, ctx, ProviderAction.TAIL),
+        transcript=_provider_supports(lane, ctx, ProviderAction.TRANSCRIPT),
         send=effective(ProviderAction.SEND),
         context=effective(ProviderAction.INJECT_CONTEXT),
         steer=effective(ProviderAction.STEER),
@@ -329,6 +333,14 @@ def _write_locked_reason(lane: Lane, ctx: Ctx) -> str | None:
     if _can_write(lane, ctx):
         return None
     if not _provider_supports(lane, ctx, ProviderAction.SEND):
+        facts = router_for(ctx).facts_for_lane(lane)
+        if (
+            lane.provider == "hermes"
+            and lane.provider_thread_id is not None
+            and facts is not None
+            and facts.supports(ProviderAction.SEND)
+        ):
+            return "Hermes session is not owned by the current gateway generation"
         return f"provider binding {lane.provider}:{lane.binding_id} execution is not supported"
     if lane.source == "attached":
         return _ATTACHED_WRITE_LOCK_REASON
@@ -2280,7 +2292,7 @@ async def show(inp: ShowInput, ctx: Ctx) -> LaneDetail:
             relationship_source="thread/list:ancestor",
         )
     if inp.include_transcript:
-        if lane.provider == "hermes":
+        if lane.provider == "hermes" and _provider_supports(lane, ctx, ProviderAction.TRANSCRIPT):
             transcript = await _observed_transcript(ctx, lane, limit=inp.max_items)
         else:
             transcript_route = route_lane(ctx, lane, ProviderAction.TRANSCRIPT)
@@ -2452,7 +2464,7 @@ async def transcript(inp: TranscriptInput, ctx: Ctx) -> TranscriptOutput:
     if resolved.lane is None:
         raise NotFoundError(f"no managed thread {inp.lane!r}")
     lane = resolved.lane
-    if lane.provider == "hermes":
+    if lane.provider == "hermes" and _provider_supports(lane, ctx, ProviderAction.TRANSCRIPT):
         return TranscriptOutput(
             **_managed_identity(lane, ctx),
             items=await _observed_transcript(ctx, lane, limit=inp.limit),

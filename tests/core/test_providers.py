@@ -212,6 +212,7 @@ async def test_action_support_projects_capabilities_and_blocks_before_client_io(
 
         view = await handlers.show(ShowInput(lane=lane.ref), ctx)
         assert view.capabilities.read is True
+        assert view.capabilities.transcript is False
         assert view.capabilities.send is False
         with pytest.raises(CapabilityUnavailableError, match="send is unsupported"):
             await handlers.send(LaneTextInput(lane=lane.ref, text="blocked"), ctx)

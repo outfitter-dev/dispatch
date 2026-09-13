@@ -2199,6 +2199,7 @@ async def test_roster_and_show_report_attached_write_capabilities(store: Registr
     assert item.ref == lane.ref
     assert item.writable is False
     assert item.capabilities.read is True
+    assert item.capabilities.transcript is True
     assert item.capabilities.send is False
     assert item.capabilities.context is False
     assert item.capabilities.goal_set is False

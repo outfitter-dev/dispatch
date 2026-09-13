@@ -712,6 +712,7 @@ class LaneCapabilities(BaseModel):
     read: bool = True
     sync: bool = True
     tail: bool = True
+    transcript: bool = True
     send: bool
     context: bool
     steer: bool

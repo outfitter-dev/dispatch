@@ -1084,6 +1084,25 @@ class ProviderRouter:
             _current_availability=lambda: self._availability("hermes", DEFAULT_HERMES_BINDING_ID),
         )
 
+    def hermes_lane_is_current(self, lane: Lane) -> bool:
+        """Whether the ready Hermes generation itself created this lane's session.
+
+        Hermes never resumes sessions across gateway generations, so this is the
+        projection of the fence ``recheck_generation`` enforces on submit.
+        """
+
+        if (
+            lane.provider != "hermes"
+            or lane.binding_id != DEFAULT_HERMES_BINDING_ID
+            or lane.provider_thread_id is None
+        ):
+            return False
+        try:
+            route = self.route_hermes_launch()
+        except CapabilityUnavailableError:
+            return False
+        return route.adapter.owns_session(lane.id, lane.provider_thread_id)
+
 
 def router_for(ctx: Ctx) -> ProviderRouter:
     if ctx.providers is not None:
