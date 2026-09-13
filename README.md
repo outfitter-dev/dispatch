@@ -16,18 +16,17 @@ dispatch up --json
 dispatch down --json
 ```
 
-From a source checkout:
+From a source checkout on macOS or Linux, with `uv` on `PATH`:
 
 ```bash
-uv sync
-uv run dispatch --help
-uv run dispatch doctor --no-app-server
-uv run dispatch models --no-refresh
-uv run dispatch permissions --no-refresh
-uv run dispatch usage --no-refresh
-uv run dispatch up --json
-uv run dispatch daemon status
+./scripts/bootstrap.sh
 ```
+
+This prepares only the owning checkout's `.venv` from the committed lock and does
+not install global tools, copy credentials, or start Dispatch. The same command is
+used by humans, CI, and coding agents in ordinary clones and linked worktrees. See
+[`AGENTS.md`](AGENTS.md#checkout-setup) for the scoped follow-on verification recipe,
+supported boundaries, dependency-update workflow, and recovery rules.
 
 Create an owned managed thread, send it work, and inspect the daemon:
 

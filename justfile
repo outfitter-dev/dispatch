@@ -1,5 +1,9 @@
 # dispatch task runner. Always go through uv (never bare python/pip).
 
+# Prepare this checkout's locked development environment.
+setup:
+    ./scripts/bootstrap.sh
+
 # Run the full quality gate: lint + format check + strict types + tests.
 check:
     uv run ruff check .

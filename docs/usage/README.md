@@ -71,14 +71,8 @@ not installed or authenticated, fix that first and rerun the doctor. Use
 `dispatch doctor --no-app-server` when you only need to inspect package, PATH,
 daemon, and registry state without starting a Codex App Server process.
 
-For development from this repo, use `uv`:
-
-```bash
-uv sync
-uv run dispatch --help
-uv run dispatchd --help
-uv run dispatch doctor --no-app-server
-```
+For development from this repo, follow the canonical checkout setup and scoped
+follow-on verification recipe in [`AGENTS.md`](../../AGENTS.md#checkout-setup).
 
 Start the singleton daemon:
 
@@ -229,8 +223,9 @@ Common recovery paths:
 
 `project.version` in `pyproject.toml` is the release trigger. Maintainers bump
 that version (and regenerate `uv.lock`) on a PR. After the PR merges to `main`
-and CI `check` is green, Actions cuts GitHub Release `v<version>` when that tag
-does not already exist, then `workflow_dispatch`es `publish.yml`. GitHub does
+and both the Linux `check` and macOS bootstrap smoke jobs are green, Actions
+cuts GitHub Release `v<version>` when that tag does not already exist, then
+`workflow_dispatch`es `publish.yml`. GitHub does
 not start other workflows from a `GITHUB_TOKEN` `release` event, so the
 dispatch step is required for Trusted Publishing. `publish.yml` also still
 runs from a manually published GitHub Release. It uploads to PyPI and then
@@ -687,11 +682,14 @@ version = 1
 name = "repo-name"
 
 [setup]
-script = "./scripts/bootstrap.sh codex"
+script = "./scripts/workspace-setup.sh"
 
 [cleanup]
-script = "./scripts/bootstrap.sh teardown"
+script = "./scripts/workspace-cleanup.sh"
 ```
+
+These are example project-owned lifecycle scripts, not Dispatch's contributor
+bootstrap. A project may omit either hook; Dispatch does not synthesize teardown.
 
 Discovery is automatic, but setup execution is not granted by packet files. A setup
 script runs only when explicitly requested with `--workspace-setup run` or allowed by

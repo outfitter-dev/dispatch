@@ -20,7 +20,52 @@ uv run dispatch --help
 uv run dispatchd --help
 ```
 
-Always go through `uv` (never a bare `python`/`pip`). `uv sync` to install, `uv add <pkg>` to add deps.
+Always go through `uv` (never a bare `python`/`pip`). Use the bootstrap below to
+install from the lock; use `uv add <pkg>` or `uv remove <pkg>` to change dependencies.
+
+## Checkout setup
+
+The contributor bootstrap supports POSIX `/bin/sh` on macOS and Linux. It requires
+`uv` on `PATH`; uv reads the Python requirement from `pyproject.toml` and, in a
+full Git checkout, `.python-version`. Packaged source exports rely on `pyproject.toml`;
+uv may use its normal shared cache or managed Python directory.
+In a full Git checkout, read this file plus the design and plan below before
+implementation. Packaged source exports omit those Git-only planning documents but
+use the same bootstrap. From the checkout root, run:
+
+```sh
+./scripts/bootstrap.sh
+```
+
+`just setup` is a thin alias. The script anchors to its physical checkout, validates
+`pyproject.toml` and `uv.lock`, refuses a symlinked `.venv`, and runs
+`uv sync --locked --group dev` into that checkout's `.venv`. It clears inherited
+Git, Python, uv location, and install-suppression selectors in its child process;
+explicit directory/project arguments provide a second checkout boundary. The lock
+must be current and is never rewritten. For intentional dependency changes, use
+`uv add` or `uv remove`, review the resulting lock diff, then rerun the bootstrap.
+
+The script cannot sanitize the parent shell. Run later checks from the same checkout
+in a scoped shell so inherited selectors cannot redirect uv:
+
+```sh
+(
+  unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE
+  unset VIRTUAL_ENV UV_PROJECT_ENVIRONMENT UV_WORKING_DIR UV_WORKING_DIRECTORY
+  unset UV_PROJECT UV_PYTHON UV_FROZEN PYTHONHOME PYTHONPATH
+  unset UV_NO_DEV UV_NO_GROUP UV_NO_EDITABLE
+  unset UV_NO_INSTALL_PROJECT UV_NO_INSTALL_WORKSPACE UV_NO_INSTALL_LOCAL UV_NO_INSTALL_PACKAGE
+  export UV_PROJECT_ENVIRONMENT="$PWD/.venv"
+  uv run --locked dispatch --help
+  just check
+)
+```
+
+The same entrypoint is for ordinary clones, linked worktrees, source exports, CI,
+humans, and coding agents. It installs no global tools, hooks, credentials, or live
+application state; starts no daemon; and never creates, removes, or restacks
+worktrees or Graphite branches. Setup is explicit, not a lifecycle hook. Preserve
+uncommitted work, other worktrees, and shared Graphite metadata.
 
 ## Project Overview
 
@@ -41,7 +86,9 @@ dispatch owns one Codex App Server connection and multiplexes many lanes over it
 - `skills/` — first-party Codex skills for operating dispatch (`dispatch`) and dispatch-backed direct messages (`dm`).
 - `plugins/dispatch/` — workspace-local Codex plugin bundle exposing the skills and MCP server.
 
-Read `docs/development/design.md` and `.agents/plans/v0/PLAN.md` before implementing. Record working findings in `.agents/notes/`; promote durable decisions into `docs/adrs/`.
+In a full Git checkout, read `docs/development/design.md` and
+`.agents/plans/v0/PLAN.md` before implementing. Record working findings in
+`.agents/notes/`; promote durable decisions into `docs/adrs/`.
 
 ## Lexicon
 
