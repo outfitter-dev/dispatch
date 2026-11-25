@@ -40,6 +40,10 @@ CLI_SURFACE_CONTROL_PATHS: tuple[tuple[str, ...], ...] = (
     ("usage-capture", "install"),
     ("usage-capture", "status"),
     ("usage-capture", "remove"),
+    # Explicit single-process Outpost host integration; never a managed-lane op.
+    ("outpost", "run"),
+    ("outpost", "pause"),
+    ("outpost", "resume"),
 )
 _METHOD_NOT_FOUND = -32601
 
@@ -621,6 +625,10 @@ def build_cli(socket_path: Path | None = None) -> typer.Typer:
     from outfitter.dispatch.surfaces.cli_usage_capture import build_usage_capture_cli
 
     app.add_typer(build_usage_capture_cli(), name="usage-capture")
+
+    from outfitter.dispatch.surfaces.cli_outpost import build_outpost_cli
+
+    app.add_typer(build_outpost_cli(), name="outpost")
 
     return app
 
