@@ -35,6 +35,7 @@ async def test_deadline_distinguishes_inflight_input_from_idle_window(
 
     class Feed:
         mcp_url = "https://test/mcp"
+        api_url = "https://test"
 
         def __init__(self, client: httpx.AsyncClient, api: str, mcp: str, token: str) -> None:
             pass

@@ -22,11 +22,13 @@ def wake() -> Wake:
 def test_receipt_survives_restart_and_prevents_duplicate_submission(tmp_path: Path) -> None:
     ledger = RunLedger(tmp_path)
     ledger.reserve(wake())
-    assert ledger.state(wake().id) == "indeterminate"
+    assert ledger.state(wake().id) == "prepared"
     restored = RunLedger(tmp_path)
-    assert restored.state(wake().id) == "indeterminate"
+    assert restored.state(wake().id) == "prepared"
     with pytest.raises(OutpostRunnerError, match="already recorded"):
         restored.reserve(wake())
+    restored.submitted(wake().id)
+    assert RunLedger(tmp_path).state(wake().id) == "indeterminate"
     restored.complete(wake().id)
     assert RunLedger(tmp_path).state(wake().id) == "completed"
 

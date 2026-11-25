@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
@@ -16,6 +16,8 @@ import httpx
 from outfitter.dispatch.core.outpost_feed import OutpostFeed
 from outfitter.dispatch.core.outpost_models import Binding, OutpostRunnerError, Wake
 from outfitter.dispatch.core.outpost_owner import ClaudeOwner
+from outfitter.dispatch.core.outpost_receipts import RunLedger as RunLedger
+from outfitter.dispatch.core.outpost_receipts import run_lock
 
 
 class StreamOwner(Protocol):
@@ -23,50 +25,6 @@ class StreamOwner(Protocol):
     def running(self) -> bool: ...
 
     async def submit(self, text: str) -> None: ...
-
-
-class RunLedger:
-    """A possible provider write stays indeterminate until its result is observed."""
-
-    def __init__(self, directory: Path) -> None:
-        self.directory = directory
-
-    def _path(self, identifier: str) -> Path:
-        return self.directory / (hashlib.sha256(identifier.encode()).hexdigest() + ".json")
-
-    def state(self, identifier: str) -> str | None:
-        path = self._path(identifier)
-        if not path.exists():
-            return None
-        record: object = json.loads(path.read_text())
-        if not isinstance(record, dict) or record.get("id") != identifier:
-            raise OutpostRunnerError("invalid Outpost runner receipt")
-        status = record.get("state")
-        if status not in {"indeterminate", "completed"}:
-            raise OutpostRunnerError("invalid Outpost runner receipt state")
-        return str(status)
-
-    def reserve(self, wake: Wake) -> None:
-        try:
-            with self._path(wake.id).open("x") as output:
-                os.chmod(output.name, 0o600)
-                json.dump({"id": wake.id, "state": "indeterminate"}, output)
-                output.flush()
-                os.fsync(output.fileno())
-        except FileExistsError as exc:
-            raise OutpostRunnerError("Outpost wake already recorded") from exc
-
-    def complete(self, identifier: str) -> None:
-        if self.state(identifier) != "indeterminate":
-            raise OutpostRunnerError("Outpost wake has no reserved delivery")
-        target = self._path(identifier)
-        temporary = target.with_suffix(".tmp")
-        with temporary.open("x") as output:
-            os.chmod(output.name, 0o600)
-            json.dump({"id": identifier, "state": "completed"}, output)
-            output.flush()
-            os.fsync(output.fileno())
-        temporary.replace(target)
 
 
 def wake_prompt(wake: Wake) -> str:
@@ -135,6 +93,34 @@ async def run_outpost_owner(
 ) -> None:
     run_dir = run_dir.absolute()
     ledger = await asyncio.to_thread(prepare_run, run_dir)
+    with run_lock(run_dir):
+        await _run_bound_owner(
+            api_url=api_url,
+            mcp_url=mcp_url,
+            run_dir=run_dir,
+            cwd=cwd,
+            prompt=prompt,
+            token=token,
+            model=model,
+            max_seconds=max_seconds,
+            report=report,
+            ledger=ledger,
+        )
+
+
+async def _run_bound_owner(
+    *,
+    api_url: str,
+    mcp_url: str,
+    run_dir: Path,
+    cwd: Path,
+    prompt: str,
+    token: str,
+    model: str | None,
+    max_seconds: float,
+    report: Callable[[str], None],
+    ledger: RunLedger,
+) -> None:
     owner: ClaudeOwner | None = None
     async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
         feed = OutpostFeed(client, api_url, mcp_url, token)
@@ -150,6 +136,7 @@ async def run_outpost_owner(
                         "agent": binding.agent,
                         "startedAt": binding.started_at,
                         "claudeSession": session_id,
+                        "apiUrl": feed.api_url,
                     }
                 ),
             )
@@ -182,10 +169,20 @@ async def deliver_wakes(
     run_dir: Path,
     report: Callable[[str], None],
 ) -> None:
+    reported: set[str] = {
+        receipt.id for receipt in await asyncio.to_thread(ledger.receipts) if receipt.reported
+    }
     while owner.running:
         try:
+            for receipt in await asyncio.to_thread(ledger.receipts):
+                if receipt.state == "completed" and receipt.id not in reported:
+                    await feed.delivery(binding, receipt.wake, receipt.attempt, "completed")
+                    await asyncio.to_thread(ledger.reported, receipt.id)
+                    reported.add(receipt.id)
             wakes = await feed.pending(binding)
             for wake in wakes:
+                if wake.id in reported:
+                    continue
                 if await asyncio.to_thread((run_dir / "paused").exists):
                     break
                 state = await asyncio.to_thread(ledger.state, wake.id)
@@ -193,8 +190,9 @@ async def deliver_wakes(
                     raise OutpostRunnerError(
                         "prior wake delivery is indeterminate; automatic replay held"
                     )
-                if state is None:
-                    await asyncio.to_thread(ledger.reserve, wake)
+                if state in {None, "prepared"}:
+                    if state is None:
+                        await asyncio.to_thread(ledger.reserve, wake)
                     # Authority can change during reservation or a held pause. Safe
                     # refresh failures retain this reserved, still-unsubmitted input.
                     while owner.running:
@@ -221,10 +219,23 @@ async def deliver_wakes(
                         await asyncio.sleep(1)
                     else:
                         raise OutpostRunnerError("Claude owner ended while wake delivery was held")
-                    await owner.submit(wake_prompt(wake))
+                    receipt = await asyncio.to_thread(ledger.receipt, wake.id)
+                    await feed.reserve(binding, wake, receipt.attempt)
+                    if await asyncio.to_thread((run_dir / "paused").exists):
+                        continue
+                    await asyncio.to_thread(ledger.submitted, wake.id)
+                    try:
+                        await owner.submit(wake_prompt(wake))
+                    except BaseException:
+                        with suppress(httpx.HTTPError):
+                            await feed.delivery(binding, wake, receipt.attempt, "uncertain")
+                        raise
                     await asyncio.to_thread(ledger.complete, wake.id)
                     report(f"completed {wake.id}")
-                await feed.ack(binding, wake)
+                receipt = await asyncio.to_thread(ledger.receipt, wake.id)
+                await feed.delivery(binding, wake, receipt.attempt, "completed")
+                await asyncio.to_thread(ledger.reported, wake.id)
+                reported.add(wake.id)
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code < 500:
                 raise OutpostRunnerError(
