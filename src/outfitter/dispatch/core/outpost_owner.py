@@ -8,6 +8,8 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
+from outfitter.dispatch.core.outpost_models import ClaudeResult, OutpostRunnerError
+
 STOP_TIMEOUT_SECONDS = 5.0
 
 
@@ -16,7 +18,8 @@ class ClaudeOwner:
         self.session_id = session_id
         self.process = process
         self.pending = False
-        self._results: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
+        self.stream_failed = False
+        self._results: asyncio.Queue[ClaudeResult | None] = asyncio.Queue()
         self._reader = asyncio.create_task(self._read())
 
     @classmethod
@@ -35,7 +38,7 @@ class ClaudeOwner:
             "--session-id",
             session_id,
             "--mcp-config",
-            str(config),
+            str(config.absolute()),
             "--strict-mcp-config",
             "--tools",
             "",
@@ -64,24 +67,43 @@ class ClaudeOwner:
 
     @property
     def running(self) -> bool:
-        return self.process.returncode is None
+        return self.process.returncode is None and not self.stream_failed
 
     async def _read(self) -> None:
         assert self.process.stdout
+        stream = self.process.stdout
+        discarding = False
         try:
-            while raw := await self.process.stdout.readline():
+            while True:
+                try:
+                    raw = await stream.readuntil(b"\n")
+                except asyncio.LimitOverrunError as exc:
+                    await stream.readexactly(exc.consumed)
+                    discarding = True
+                    continue
+                except asyncio.IncompleteReadError as exc:
+                    if discarding or not exc.partial:
+                        break
+                    raw = exc.partial
+                if discarding:
+                    discarding = False
+                    continue
                 try:
                     value: object = json.loads(raw)
                 except ValueError:
                     continue
                 if isinstance(value, dict) and value.get("type") == "result":
-                    await self._results.put(value)
+                    await self._results.put(ClaudeResult.model_validate(value))
+        except Exception:
+            # Reader failures signal an unknown provider outcome through the queue.
+            # They must not escape shutdown and mask the original submission error.
+            self.stream_failed = True
         finally:
             await self._results.put(None)
 
     async def submit(self, text: str) -> None:
         if self.process.returncode is not None:
-            raise ValueError("Claude owner has ended")
+            raise OutpostRunnerError("Claude owner has ended")
         assert self.process.stdin
         self.pending = True
         self.process.stdin.write(
@@ -98,9 +120,11 @@ class ClaudeOwner:
         await self.process.stdin.drain()
         result = await self._results.get()
         if result is None:
-            raise ValueError("Claude owner ended after a possible input write")
-        if result.get("session_id") != self.session_id or result.get("is_error") is not False:
-            raise ValueError("Claude owner did not confirm a successful result for this session")
+            raise OutpostRunnerError("Claude owner ended after a possible input write")
+        if result.session_id != self.session_id or result.is_error:
+            raise OutpostRunnerError(
+                "Claude owner did not confirm a successful result for this session"
+            )
         self.pending = False
 
     async def stop(self) -> None:

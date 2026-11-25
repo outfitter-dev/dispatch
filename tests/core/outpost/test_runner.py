@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from outfitter.dispatch.core.outpost_feed import Wake
+from outfitter.dispatch.core.outpost_models import OutpostRunnerError, Wake
 from outfitter.dispatch.core.outpost_runner import RunLedger, wake_prompt
 
 
@@ -25,7 +25,7 @@ def test_receipt_survives_restart_and_prevents_duplicate_submission(tmp_path: Pa
     assert ledger.state(wake().id) == "indeterminate"
     restored = RunLedger(tmp_path)
     assert restored.state(wake().id) == "indeterminate"
-    with pytest.raises(ValueError, match="already recorded"):
+    with pytest.raises(OutpostRunnerError, match="already recorded"):
         restored.reserve(wake())
     restored.complete(wake().id)
     assert RunLedger(tmp_path).state(wake().id) == "completed"

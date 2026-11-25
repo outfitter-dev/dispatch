@@ -2,59 +2,58 @@
 
 from __future__ import annotations
 
-import json
-from typing import Annotated
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
-Identifier = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9:._/-]{0,199}$")]
-
-
-class Binding(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-    agent: Identifier
-    started_at: str = Field(alias="startedAt", min_length=1, max_length=100)
-    mcp_session: str = Field(min_length=1, max_length=200)
-
-
-class Wake(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-    id: Identifier
-    agent: Identifier
-    started_at: str = Field(alias="startedAt", min_length=1, max_length=100)
-    thread: Identifier
-    message: Identifier
-    channel: Identifier
+from outfitter.dispatch.core.outpost_models import (
+    AgentIdentity,
+    Binding,
+    FeedPage,
+    OutpostRunnerError,
+    RpcEnvelope,
+    SessionIdentity,
+    ToolResult,
+    Wake,
+)
 
 
 def validate_endpoint(value: str) -> str:
     parsed = urlsplit(value)
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ValueError("Outpost endpoint must not contain credentials, query or fragment")
+        raise OutpostRunnerError("Outpost endpoint must not contain credentials, query or fragment")
     if parsed.scheme != "https" and not (
         parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
     ):
-        raise ValueError("Outpost endpoint requires HTTPS or a loopback HTTP address")
-    return value.rstrip("/")
+        raise OutpostRunnerError("Outpost endpoint requires HTTPS or a loopback HTTP address")
+    return value
 
 
-def rpc_body(response: httpx.Response) -> dict[str, object]:
+def rpc_body(response: httpx.Response, expected_id: int) -> dict[str, object]:
     response.raise_for_status()
     raw = response.text.strip()
-    if not raw.startswith("{"):
-        raw = "\n".join(line[5:].lstrip() for line in raw.splitlines() if line.startswith("data:"))
-    body: object = json.loads(raw)
-    if not isinstance(body, dict) or "error" in body or not isinstance(body.get("result"), dict):
-        raise ValueError("Outpost MCP request failed")
-    return body
+    payloads = (
+        [raw]
+        if raw.startswith("{")
+        else [
+            "\n".join(line[5:].lstrip() for line in block.splitlines() if line.startswith("data:"))
+            for block in raw.replace("\r\n", "\n").split("\n\n")
+        ]
+    )
+    for payload in filter(None, payloads):
+        body = RpcEnvelope.model_validate_json(payload)
+        if body.id == expected_id:
+            if body.error is not None or body.result is None:
+                raise OutpostRunnerError("Outpost MCP request failed")
+            return body.result
+    raise OutpostRunnerError("Outpost MCP stream returned no matching result")
 
 
 class OutpostFeed:
     def __init__(self, client: httpx.AsyncClient, api_url: str, mcp_url: str, token: str) -> None:
         self.client = client
-        self.api_url = validate_endpoint(api_url)
+        self.api_url = validate_endpoint(api_url).rstrip("/")
         self.mcp_url = validate_endpoint(mcp_url)
         self.headers = {"authorization": f"Bearer {token}"}
         self.binding: Binding | None = None
@@ -80,58 +79,52 @@ class OutpostFeed:
                 },
             },
         )
-        rpc_body(initialized)
+        rpc_body(initialized, 1)
         session = initialized.headers.get("mcp-session-id")
         if not session:
-            raise ValueError("Outpost connection must enable temporary session agents")
+            raise OutpostRunnerError("Outpost connection must enable temporary session agents")
         self.binding = Binding(agent="unresolved", startedAt="unresolved", mcp_session=session)
         headers["mcp-session-id"] = session
+        notification = await self.client.post(
+            self.mcp_url,
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+            },
+        )
+        notification.raise_for_status()
         agent = await self._agent(headers)
         response = await self.client.get(f"{self.api_url}/sessions", headers=self.headers)
         response.raise_for_status()
-        sessions: object = response.json()
-        matches = (
-            [item for item in sessions if isinstance(item, dict) and item.get("name") == agent]
-            if isinstance(sessions, list)
-            else []
-        )
-        if len(matches) != 1 or not isinstance(matches[0].get("startedAt"), str):
-            raise ValueError("Outpost API could not verify the negotiated session generation")
+        sessions = TypeAdapter(list[SessionIdentity]).validate_python(response.json())
+        matches = [item for item in sessions if item.name == agent]
+        if len(matches) != 1:
+            raise OutpostRunnerError(
+                "Outpost API could not verify the negotiated session generation"
+            )
         # Every bound MCP call verifies its immutable token-store generation. A
         # second read rejects a name reused while the API session list was read.
         if await self._agent(headers) != agent:
-            raise ValueError("Outpost changed the negotiated session identity")
-        self.binding = Binding(agent=agent, startedAt=matches[0]["startedAt"], mcp_session=session)
+            raise OutpostRunnerError("Outpost changed the negotiated session identity")
+        self.binding = Binding(agent=agent, startedAt=matches[0].startedAt, mcp_session=session)
         return self.binding
 
     async def _agent(self, headers: dict[str, str]) -> str:
-        who = rpc_body(
-            await self.client.post(
-                self.mcp_url,
-                headers=headers,
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 2,
-                    "method": "tools/call",
-                    "params": {"name": "outpost_whoami", "arguments": {}},
-                },
-            )
+        response = await self.client.post(
+            self.mcp_url,
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "outpost_whoami", "arguments": {}},
+            },
         )
-        result = who["result"]
-        if not isinstance(result, dict) or not isinstance(result.get("content"), list):
-            raise ValueError("Outpost whoami returned no actor")
-        content = result["content"]
-        if (
-            not content
-            or not isinstance(content[0], dict)
-            or not isinstance(content[0].get("text"), str)
-        ):
-            raise ValueError("Outpost whoami returned no actor")
-        identity: object = json.loads(content[0]["text"])
-        agent: object = identity.get("agent") if isinstance(identity, dict) else None
-        if not isinstance(agent, str):
-            raise ValueError("Outpost whoami returned no agent")
-        return agent
+        result = ToolResult.model_validate(rpc_body(response, 2))
+        if result.isError:
+            raise OutpostRunnerError("Outpost whoami returned an error")
+        return AgentIdentity.model_validate_json(result.content[0].text).agent
 
     async def pending(self, binding: Binding) -> list[Wake]:
         response = await self.client.get(
@@ -140,25 +133,23 @@ class OutpostFeed:
             params={"startedAt": binding.started_at},
         )
         response.raise_for_status()
-        body: object = response.json()
-        if not isinstance(body, dict) or body.get("status") not in {"active", "paused", "ended"}:
-            raise ValueError("Outpost response feed returned no session status")
-        if body["status"] == "ended":
-            raise ValueError("Outpost recipient has ended")
-        if not isinstance(body.get("wakes"), list):
-            raise ValueError("Outpost response feed returned no wake list")
         try:
-            wakes = [Wake.model_validate(item) for item in body["wakes"]]
+            page = FeedPage.model_validate(response.json())
         except ValidationError as exc:
-            raise ValueError("Outpost response feed contains a malformed wake") from exc
-        if body["status"] == "paused":
-            if wakes:
-                raise ValueError("Outpost exposed wakes for a paused session")
+            raise OutpostRunnerError("Outpost response feed contains malformed data") from exc
+        if page.status == "ended":
+            raise OutpostRunnerError("Outpost recipient has ended")
+        if page.status == "paused":
+            if page.wakes:
+                raise OutpostRunnerError("Outpost exposed wakes for a paused session")
             return []
+        wakes = page.wakes
         if any(
             (item.agent, item.started_at) != (binding.agent, binding.started_at) for item in wakes
         ):
-            raise ValueError("Outpost response wake has a stale or mismatched session binding")
+            raise OutpostRunnerError(
+                "Outpost response wake has a stale or mismatched session binding"
+            )
         return wakes
 
     async def ack(self, binding: Binding, wake: Wake) -> None:
@@ -176,6 +167,7 @@ class OutpostFeed:
                 headers={
                     **self.headers,
                     "mcp-session-id": self.binding.mcp_session,
+                    "mcp-protocol-version": "2025-06-18",
                     "accept": "application/json, text/event-stream",
                 },
             )

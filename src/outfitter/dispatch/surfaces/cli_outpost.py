@@ -10,7 +10,8 @@ from typing import Annotated
 import httpx
 import typer
 
-from outfitter.dispatch.core.outpost_runner import run_outpost_owner
+from outfitter.dispatch.core.outpost_models import OutpostRunnerError
+from outfitter.dispatch.core.outpost_runner import run_outpost_owner, set_run_paused
 
 
 def build_outpost_cli() -> typer.Typer:
@@ -46,24 +47,32 @@ def build_outpost_cli() -> typer.Typer:
                     report=typer.echo,
                 )
             )
-        except (ValueError, OSError, httpx.HTTPError) as exc:
+        except (OutpostRunnerError, ValueError, OSError, httpx.HTTPError) as exc:
             # HTTP errors can contain request URLs. Report fixed diagnostics only.
             if isinstance(exc, httpx.HTTPError):
                 typer.echo("Outpost runner could not authenticate or reach its endpoint", err=True)
+            elif isinstance(exc, OutpostRunnerError):
+                typer.echo(exc.message, err=True)
             else:
-                typer.echo(str(exc), err=True)
+                typer.echo("Outpost runner input or local state is invalid", err=True)
             raise typer.Exit(1) from exc
 
     @app.command("pause")
     def pause(run_dir: Annotated[Path, typer.Argument(exists=True, file_okay=False)]) -> None:
         """Hold new wake submissions for this explicit owner directory."""
-        (run_dir / "paused").touch(mode=0o600)
+        try:
+            set_run_paused(run_dir, True)
+        except OutpostRunnerError as exc:
+            raise typer.BadParameter(exc.message) from exc
         typer.echo("wake submissions paused")
 
     @app.command("resume")
     def resume(run_dir: Annotated[Path, typer.Argument(exists=True, file_okay=False)]) -> None:
         """Allow held wake submissions to the existing owner."""
-        (run_dir / "paused").unlink(missing_ok=True)
+        try:
+            set_run_paused(run_dir, False)
+        except OutpostRunnerError as exc:
+            raise typer.BadParameter(exc.message) from exc
         typer.echo("wake submissions resumed")
 
     return app

@@ -5,7 +5,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from outfitter.dispatch.core.outpost_feed import Binding, OutpostFeed, Wake
+from outfitter.dispatch.core.outpost_feed import OutpostFeed
+from outfitter.dispatch.core.outpost_models import Binding, OutpostRunnerError, Wake
 from outfitter.dispatch.core.outpost_runner import RunLedger, deliver_wakes
 
 BINDING = Binding(agent="claude-1234", startedAt="generation-1", mcp_session="binding-1")
@@ -29,7 +30,7 @@ class Owner:
     async def submit(self, text: str) -> None:
         self.messages.append(text)
         if self.fail:
-            raise ValueError("owner ended after a possible write")
+            raise OutpostRunnerError("owner ended after a possible write")
 
 
 @pytest.mark.asyncio
@@ -90,9 +91,9 @@ async def test_possible_input_loss_stays_indeterminate_without_ack(tmp_path: Pat
     ledger = RunLedger(tmp_path)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         feed = OutpostFeed(client, "https://test", "https://test/mcp", "token")
-        with pytest.raises(ValueError, match="possible write"):
+        with pytest.raises(OutpostRunnerError, match="possible write"):
             await deliver_wakes(feed, BINDING, owner, ledger, tmp_path, lambda message: None)
-        with pytest.raises(ValueError, match="indeterminate"):
+        with pytest.raises(OutpostRunnerError, match="indeterminate"):
             await deliver_wakes(feed, BINDING, owner, ledger, tmp_path, lambda message: None)
     assert len(owner.messages) == 1
     assert ledger.state(WAKE.id) == "indeterminate"
@@ -217,7 +218,7 @@ async def test_ended_binding_after_held_pause_never_submits_cached_wake(tmp_path
         paused.unlink()
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        with pytest.raises(ValueError, match="recipient has ended"):
+        with pytest.raises(OutpostRunnerError, match="recipient has ended"):
             await asyncio.gather(
                 deliver_wakes(
                     OutpostFeed(client, "https://test", "https://test/mcp", "token"),

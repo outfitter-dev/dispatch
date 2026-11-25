@@ -13,7 +13,8 @@ from uuid import uuid4
 
 import httpx
 
-from outfitter.dispatch.core.outpost_feed import Binding, OutpostFeed, Wake
+from outfitter.dispatch.core.outpost_feed import OutpostFeed
+from outfitter.dispatch.core.outpost_models import Binding, OutpostRunnerError, Wake
 from outfitter.dispatch.core.outpost_owner import ClaudeOwner
 
 
@@ -39,10 +40,10 @@ class RunLedger:
             return None
         record: object = json.loads(path.read_text())
         if not isinstance(record, dict) or record.get("id") != identifier:
-            raise ValueError("invalid Outpost runner receipt")
+            raise OutpostRunnerError("invalid Outpost runner receipt")
         status = record.get("state")
         if status not in {"indeterminate", "completed"}:
-            raise ValueError("invalid Outpost runner receipt state")
+            raise OutpostRunnerError("invalid Outpost runner receipt state")
         return str(status)
 
     def reserve(self, wake: Wake) -> None:
@@ -53,11 +54,11 @@ class RunLedger:
                 output.flush()
                 os.fsync(output.fileno())
         except FileExistsError as exc:
-            raise ValueError("Outpost wake already recorded") from exc
+            raise OutpostRunnerError("Outpost wake already recorded") from exc
 
     def complete(self, identifier: str) -> None:
         if self.state(identifier) != "indeterminate":
-            raise ValueError("Outpost wake has no reserved delivery")
+            raise OutpostRunnerError("Outpost wake has no reserved delivery")
         target = self._path(identifier)
         temporary = target.with_suffix(".tmp")
         with temporary.open("x") as output:
@@ -79,9 +80,23 @@ def wake_prompt(wake: Wake) -> str:
 
 def prepare_run(directory: Path) -> RunLedger:
     directory.mkdir(mode=0o700, parents=False, exist_ok=False)
+    (directory / ".dispatch-outpost-owner").write_text("1\n")
     receipts = directory / "receipts"
     receipts.mkdir(mode=0o700)
     return RunLedger(receipts)
+
+
+def set_run_paused(directory: Path, paused: bool) -> None:
+    marker = directory / ".dispatch-outpost-owner"
+    if marker.is_symlink() or not marker.is_file() or marker.read_text() != "1\n":
+        raise OutpostRunnerError("directory is not an Outpost runner directory")
+    switch = directory / "paused"
+    if switch.is_symlink():
+        raise OutpostRunnerError("runner pause marker must not be a symlink")
+    if paused:
+        switch.touch(mode=0o600)
+    else:
+        switch.unlink(missing_ok=True)
 
 
 def write_config(directory: Path, mcp_url: str, binding: Binding) -> Path:
@@ -118,6 +133,7 @@ async def run_outpost_owner(
     max_seconds: float,
     report: Callable[[str], None],
 ) -> None:
+    run_dir = run_dir.absolute()
     ledger = await asyncio.to_thread(prepare_run, run_dir)
     owner: ClaudeOwner | None = None
     async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
@@ -143,9 +159,12 @@ async def run_outpost_owner(
                 await owner.submit(prompt)
                 report("initial turn completed")
                 await deliver_wakes(feed, binding, owner, ledger, run_dir, report)
+                raise OutpostRunnerError("Claude owner ended before the run window closed")
         except TimeoutError as exc:
             if owner and owner.pending:
-                raise ValueError("run window ended with an indeterminate Claude input") from exc
+                raise OutpostRunnerError(
+                    "run window ended with an indeterminate Claude input"
+                ) from exc
             report("run window ended")
         finally:
             try:
@@ -167,17 +186,19 @@ async def deliver_wakes(
         try:
             wakes = await feed.pending(binding)
             for wake in wakes:
-                if (run_dir / "paused").exists():
+                if await asyncio.to_thread((run_dir / "paused").exists):
                     break
                 state = await asyncio.to_thread(ledger.state, wake.id)
                 if state == "indeterminate":
-                    raise ValueError("prior wake delivery is indeterminate; automatic replay held")
+                    raise OutpostRunnerError(
+                        "prior wake delivery is indeterminate; automatic replay held"
+                    )
                 if state is None:
                     await asyncio.to_thread(ledger.reserve, wake)
                     # Authority can change during reservation or a held pause. Safe
                     # refresh failures retain this reserved, still-unsubmitted input.
                     while owner.running:
-                        if (run_dir / "paused").exists():
+                        if await asyncio.to_thread((run_dir / "paused").exists):
                             await asyncio.sleep(0.1)
                             continue
                         try:
@@ -192,19 +213,21 @@ async def deliver_wakes(
                             await asyncio.sleep(1)
                             continue
                         if any(item.id == wake.id and item != wake for item in current):
-                            raise ValueError("Outpost changed a reserved wake")
-                        if wake in current and not (run_dir / "paused").exists():
+                            raise OutpostRunnerError("Outpost changed a reserved wake")
+                        if wake in current and not await asyncio.to_thread(
+                            (run_dir / "paused").exists
+                        ):
                             break
                         await asyncio.sleep(1)
                     else:
-                        raise ValueError("Claude owner ended while wake delivery was held")
+                        raise OutpostRunnerError("Claude owner ended while wake delivery was held")
                     await owner.submit(wake_prompt(wake))
                     await asyncio.to_thread(ledger.complete, wake.id)
                     report(f"completed {wake.id}")
                 await feed.ack(binding, wake)
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code < 500:
-                raise ValueError(
+                raise OutpostRunnerError(
                     f"Outpost refused runner request ({exc.response.status_code})"
                 ) from exc
             report("Outpost unavailable; awaiting next poll")
