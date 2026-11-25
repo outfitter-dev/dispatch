@@ -122,3 +122,76 @@ async def test_recovery_refuses_an_active_owner_and_redirected_endpoint(tmp_path
         await outpost_recovery.reconcile_run(run, "https://outpost.test/api/v1", "parent")
     with pytest.raises(OutpostRunnerError, match="original Outpost run"):
         await outpost_recovery.reconcile_run(run, "https://other.test/api/v1", "parent")
+
+
+@pytest.mark.asyncio
+async def test_cancelled_completion_keeps_ownership_until_writer_finishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import threading
+
+    from outfitter.dispatch.core.outpost_receipts import durable_io, owned_run
+
+    run = tmp_path / "run"
+    ledger = saved_run(run)
+    ledger.reserve(wake("completed"))
+    ledger.submitted("completed")
+    entered = threading.Event()
+    release = threading.Event()
+    original = ledger._write
+
+    def delayed_write(receipt: object) -> None:
+        entered.set()
+        assert release.wait(timeout=5)
+        original(receipt)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(ledger, "_write", delayed_write)
+
+    async def finish() -> None:
+        async with owned_run(run):
+            await durable_io(ledger.complete, "completed")
+
+    task = asyncio.create_task(finish())
+    assert await asyncio.to_thread(entered.wait, 5)
+    task.cancel()
+    await asyncio.sleep(0.02)
+    with pytest.raises(OutpostRunnerError, match="active owner"), run_lock(run):
+        pass
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert ledger.receipt("completed").state == "completed"
+    with run_lock(run):
+        pass
+
+
+def test_prepared_receipt_is_invisible_until_atomic_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from outfitter.dispatch.core import outpost_receipts
+
+    ledger = RunLedger(tmp_path)
+    final_files: list[Path] = []
+
+    def interrupted(path: Path, text: str) -> None:
+        path.write_text("partial")
+        final_files.extend(tmp_path.glob("*.json"))
+        raise OSError("synthetic interrupted preparation")
+
+    monkeypatch.setattr(outpost_receipts, "write_private", interrupted)
+    with pytest.raises(OSError, match="interrupted"):
+        ledger.reserve(wake("prepared"))
+    assert final_files == []
+    assert ledger.receipts() == []
+
+
+def test_report_marker_cannot_settle_a_newer_outcome(tmp_path: Path) -> None:
+    ledger = RunLedger(tmp_path)
+    ledger.reserve(wake("completed"))
+    ledger.submitted("completed")
+    uncertain = ledger.receipt("completed")
+    ledger.complete("completed")
+    with pytest.raises(OutpostRunnerError, match="evidence changed"):
+        ledger.reported(uncertain)
+    assert not ledger.receipt("completed").reported

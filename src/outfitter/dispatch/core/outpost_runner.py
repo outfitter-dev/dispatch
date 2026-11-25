@@ -6,7 +6,6 @@ import asyncio
 import json
 import os
 from collections.abc import Callable
-from contextlib import suppress
 from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
@@ -17,7 +16,12 @@ from outfitter.dispatch.core.outpost_feed import OutpostFeed
 from outfitter.dispatch.core.outpost_models import Binding, OutpostRunnerError, Wake
 from outfitter.dispatch.core.outpost_owner import ClaudeOwner
 from outfitter.dispatch.core.outpost_receipts import RunLedger as RunLedger
-from outfitter.dispatch.core.outpost_receipts import run_lock
+from outfitter.dispatch.core.outpost_receipts import (
+    durable_io,
+    owned_run,
+    sync_directory,
+    write_private,
+)
 
 
 class StreamOwner(Protocol):
@@ -38,9 +42,11 @@ def wake_prompt(wake: Wake) -> str:
 
 def prepare_run(directory: Path) -> RunLedger:
     directory.mkdir(mode=0o700, parents=False, exist_ok=False)
-    (directory / ".dispatch-outpost-owner").write_text("1\n")
+    write_private(directory / ".dispatch-outpost-owner", "1\n")
     receipts = directory / "receipts"
     receipts.mkdir(mode=0o700)
+    sync_directory(directory)
+    sync_directory(directory.parent)
     return RunLedger(receipts)
 
 
@@ -92,8 +98,8 @@ async def run_outpost_owner(
     report: Callable[[str], None],
 ) -> None:
     run_dir = run_dir.absolute()
-    ledger = await asyncio.to_thread(prepare_run, run_dir)
-    with run_lock(run_dir):
+    ledger = await durable_io(prepare_run, run_dir)
+    async with owned_run(run_dir):
         await _run_bound_owner(
             api_url=api_url,
             mcp_url=mcp_url,
@@ -129,8 +135,9 @@ async def _run_bound_owner(
             await feed.pending(binding)
             config = await asyncio.to_thread(write_config, run_dir, feed.mcp_url, binding)
             session_id = str(uuid4())
-            await asyncio.to_thread(
-                (run_dir / "binding.json").write_text,
+            await durable_io(
+                write_private,
+                run_dir / "binding.json",
                 json.dumps(
                     {
                         "agent": binding.agent,
@@ -140,6 +147,7 @@ async def _run_bound_owner(
                     }
                 ),
             )
+            await durable_io(sync_directory, run_dir)
             report(f"bound {binding.agent} {session_id}")
             owner = await ClaudeOwner.start(session_id, cwd, config, model, token)
             async with asyncio.timeout(max_seconds):
@@ -177,7 +185,7 @@ async def deliver_wakes(
             for receipt in await asyncio.to_thread(ledger.receipts):
                 if receipt.state == "completed" and receipt.id not in reported:
                     await feed.delivery(binding, receipt.wake, receipt.attempt, "completed")
-                    await asyncio.to_thread(ledger.reported, receipt.id)
+                    await durable_io(ledger.reported, receipt)
                     reported.add(receipt.id)
             wakes = await feed.pending(binding)
             for wake in wakes:
@@ -192,7 +200,7 @@ async def deliver_wakes(
                     )
                 if state in {None, "prepared"}:
                     if state is None:
-                        await asyncio.to_thread(ledger.reserve, wake)
+                        await durable_io(ledger.reserve, wake)
                     # Authority can change during reservation or a held pause. Safe
                     # refresh failures retain this reserved, still-unsubmitted input.
                     while owner.running:
@@ -223,18 +231,13 @@ async def deliver_wakes(
                     await feed.reserve(binding, wake, receipt.attempt)
                     if await asyncio.to_thread((run_dir / "paused").exists):
                         continue
-                    await asyncio.to_thread(ledger.submitted, wake.id)
-                    try:
-                        await owner.submit(wake_prompt(wake))
-                    except BaseException:
-                        with suppress(httpx.HTTPError):
-                            await feed.delivery(binding, wake, receipt.attempt, "uncertain")
-                        raise
-                    await asyncio.to_thread(ledger.complete, wake.id)
+                    await durable_io(ledger.submitted, wake.id)
+                    await owner.submit(wake_prompt(wake))
+                    await durable_io(ledger.complete, wake.id)
                     report(f"completed {wake.id}")
                 receipt = await asyncio.to_thread(ledger.receipt, wake.id)
                 await feed.delivery(binding, wake, receipt.attempt, "completed")
-                await asyncio.to_thread(ledger.reported, wake.id)
+                await durable_io(ledger.reported, receipt)
                 reported.add(wake.id)
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code < 500:

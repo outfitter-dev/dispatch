@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -14,6 +15,51 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict
 
 from outfitter.dispatch.core.outpost_models import OutpostRunnerError, Wake
+
+
+async def durable_io[T, **P](operation: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    """Finish started filesystem work before cancellation releases run ownership."""
+    task = asyncio.create_task(asyncio.to_thread(operation, *args, **kwargs))
+    cancelled = False
+    while True:
+        try:
+            result = await asyncio.shield(task)
+            break
+        except asyncio.CancelledError:
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError
+    return result
+
+
+def sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def write_private(path: Path, text: str) -> None:
+    with path.open("x") as output:
+        os.chmod(path, 0o600)
+        output.write(text)
+        output.flush()
+        os.fsync(output.fileno())
+
+
+@asynccontextmanager
+async def owned_run(directory: Path) -> AsyncIterator[None]:
+    ownership = run_lock(directory)
+    try:
+        await durable_io(ownership.__enter__)
+    except BaseException:
+        await durable_io(ownership.__exit__, None, None, None)
+        raise
+    try:
+        yield
+    finally:
+        await durable_io(ownership.__exit__, None, None, None)
 
 
 class DeliveryReceipt(BaseModel):
@@ -87,22 +133,17 @@ class RunLedger:
 
     def reserve(self, wake: Wake) -> None:
         receipt = DeliveryReceipt(id=wake.id, state="prepared", attempt=str(uuid4()), wake=wake)
+        target = self._path(wake.id)
+        temporary = target.with_suffix(f".{uuid4().hex}.tmp")
         try:
-            with self._path(wake.id).open("x") as output:
-                os.chmod(output.name, 0o600)
-                output.write(receipt.model_dump_json(by_alias=True))
-                output.flush()
-                os.fsync(output.fileno())
+            write_private(temporary, receipt.model_dump_json(by_alias=True))
+            # Hard-link publication is atomic and refuses to replace an existing attempt.
+            os.link(temporary, target)
+            sync_directory(self.directory)
         except FileExistsError as exc:
             raise OutpostRunnerError("Outpost wake already recorded") from exc
-        self._sync_directory()
-
-    def _sync_directory(self) -> None:
-        descriptor = os.open(self.directory, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
         finally:
-            os.close(descriptor)
+            temporary.unlink(missing_ok=True)
 
     def submitted(self, identifier: str) -> None:
         self._transition(identifier, "prepared", "indeterminate")
@@ -110,8 +151,14 @@ class RunLedger:
     def complete(self, identifier: str) -> None:
         self._transition(identifier, "indeterminate", "completed")
 
-    def reported(self, identifier: str) -> None:
-        receipt = self.receipt(identifier)
+    def reported(self, evidence: DeliveryReceipt) -> None:
+        receipt = self.receipt(evidence.id)
+        if (receipt.attempt, receipt.state, receipt.wake) != (
+            evidence.attempt,
+            evidence.state,
+            evidence.wake,
+        ):
+            raise OutpostRunnerError("delivery evidence changed before its report was recorded")
         self._write(receipt.model_copy(update={"reported": True}))
 
     def _transition(self, identifier: str, previous: str, state: str) -> None:
@@ -129,4 +176,4 @@ class RunLedger:
             output.flush()
             os.fsync(output.fileno())
         temporary.replace(target)
-        self._sync_directory()
+        sync_directory(self.directory)

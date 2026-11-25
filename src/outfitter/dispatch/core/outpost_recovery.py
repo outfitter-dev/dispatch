@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict
 
 from outfitter.dispatch.core.outpost_feed import OutpostFeed, validate_endpoint
 from outfitter.dispatch.core.outpost_models import Binding, OutpostRunnerError
-from outfitter.dispatch.core.outpost_receipts import RunLedger, run_lock
+from outfitter.dispatch.core.outpost_receipts import RunLedger, durable_io, owned_run
 
 
 class SavedRun(BaseModel):
@@ -38,7 +38,7 @@ def read_run(directory: Path, api_url: str) -> tuple[SavedRun, RunLedger]:
 async def reconcile_run(directory: Path, api_url: str, token: str) -> int:
     directory = directory.absolute()
     saved, ledger = await asyncio.to_thread(read_run, directory, api_url)
-    with run_lock(directory):
+    async with owned_run(directory):
         binding = Binding(agent=saved.agent, startedAt=saved.startedAt, mcp_session="recovery")
         async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
             feed = OutpostFeed(client, saved.apiUrl, saved.apiUrl, token)
@@ -63,7 +63,7 @@ async def reconcile_run(directory: Path, api_url: str, token: str) -> int:
                 except httpx.HTTPError:
                     failed += 1
                 else:
-                    await asyncio.to_thread(ledger.reported, receipt.id)
+                    await durable_io(ledger.reported, receipt)
                     count += 1
             if failed:
                 raise OutpostRunnerError(
