@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import httpx
@@ -40,7 +41,10 @@ async def test_repeated_feed_and_lost_ack_never_resubmit_completed_wake(tmp_path
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal ack_count
-        assert request.headers["outpost-act-as"] == BINDING.agent
+        if request.method == "GET":
+            assert request.headers["outpost-act-as"] == BINDING.agent
+        if request.url.path.endswith("/reserve"):
+            return httpx.Response(200, json={"reserved": True})
         if request.method == "POST":
             ack_count += 1
             if ack_count == 1:
@@ -77,6 +81,11 @@ async def test_possible_input_loss_stays_indeterminate_without_ack(tmp_path: Pat
     owner = Owner(fail=True)
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/reserve"):
+            return httpx.Response(200, json={"reserved": True})
+        if request.url.path.endswith("/delivery"):
+            assert json.loads(request.content)["outcome"] == "uncertain"
+            return httpx.Response(200, json={"recorded": True})
         assert request.method == "GET"
         return httpx.Response(
             200,
@@ -108,6 +117,8 @@ async def test_local_pause_retains_response_until_resume(tmp_path: Path) -> None
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal polls
+        if request.url.path.endswith("/reserve"):
+            return httpx.Response(200, json={"reserved": True})
         if request.method == "POST":
             owner.running = False
             return httpx.Response(200, json={"acknowledged": True})
@@ -153,6 +164,8 @@ async def test_pause_during_reservation_waits_for_resume_without_ending_owner(
             paused.touch()
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/reserve"):
+            return httpx.Response(200, json={"reserved": True})
         if request.method == "POST":
             owner.running = False
             return httpx.Response(200, json={"acknowledged": True})
@@ -201,6 +214,8 @@ async def test_ended_binding_after_held_pause_never_submits_cached_wake(tmp_path
             paused.touch()
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/reserve"):
+            return httpx.Response(200, json={"reserved": True})
         assert request.method == "GET"
         return httpx.Response(
             200,
@@ -242,6 +257,8 @@ async def test_refresh_outage_before_input_retries_without_losing_reserved_wake(
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal polls
+        if request.url.path.endswith("/reserve"):
+            return httpx.Response(200, json={"reserved": True})
         if request.method == "POST":
             owner.running = False
             return httpx.Response(200, json={"acknowledged": True})
@@ -269,3 +286,65 @@ async def test_refresh_outage_before_input_retries_without_losing_reserved_wake(
         )
     assert len(owner.messages) == 1
     assert polls == 3
+
+
+@pytest.mark.asyncio
+async def test_lost_reservation_response_retries_same_attempt_before_one_input(
+    tmp_path: Path,
+) -> None:
+    owner = Owner()
+    attempts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/reserve"):
+            attempts.append(json.loads(request.content)["attempt"])
+            assert owner.messages == []
+            if len(attempts) == 1:
+                raise httpx.ReadError("reply lost after reservation", request=request)
+            return httpx.Response(200, json={"reserved": True})
+        if request.url.path.endswith("/delivery"):
+            owner.running = False
+            return httpx.Response(200, json={"recorded": True})
+        assert request.url.params["deliveryProtocol"] == "1"
+        return httpx.Response(
+            200, json={"status": "active", "wakes": [WAKE.model_dump(by_alias=True)]}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await deliver_wakes(
+            OutpostFeed(client, "https://test", "https://test/mcp", "parent"),
+            BINDING,
+            owner,
+            RunLedger(tmp_path),
+            tmp_path,
+            lambda message: None,
+        )
+    assert len(attempts) == 2 and attempts[0] == attempts[1]
+    assert len(owner.messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_conflicting_server_reservation_prevents_provider_input(tmp_path: Path) -> None:
+    owner = Owner()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/reserve"):
+            return httpx.Response(409)
+        assert request.method == "GET"
+        return httpx.Response(
+            200, json={"status": "active", "wakes": [WAKE.model_dump(by_alias=True)]}
+        )
+
+    ledger = RunLedger(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(OutpostRunnerError, match="409"):
+            await deliver_wakes(
+                OutpostFeed(client, "https://test", "https://test/mcp", "parent"),
+                BINDING,
+                owner,
+                ledger,
+                tmp_path,
+                lambda message: None,
+            )
+    assert owner.messages == []
+    assert ledger.state(WAKE.id) == "prepared"

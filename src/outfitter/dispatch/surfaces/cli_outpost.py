@@ -11,6 +11,7 @@ import httpx
 import typer
 
 from outfitter.dispatch.core.outpost_models import OutpostRunnerError
+from outfitter.dispatch.core.outpost_recovery import reconcile_run
 from outfitter.dispatch.core.outpost_runner import run_outpost_owner, set_run_paused
 
 
@@ -56,6 +57,27 @@ def build_outpost_cli() -> typer.Typer:
             else:
                 typer.echo("Outpost runner input or local state is invalid", err=True)
             raise typer.Exit(1) from exc
+
+    @app.command("reconcile")
+    def reconcile(
+        run_dir: Annotated[Path, typer.Argument(exists=True, file_okay=False)],
+        api_url: Annotated[str, typer.Option(help="Original Outpost API base for this run.")],
+    ) -> None:
+        """Report delivery evidence from a stopped owner using its original parent token."""
+        token = os.environ.get("OUTPOST_TOKEN", "")
+        if not token:
+            raise typer.BadParameter("OUTPOST_TOKEN must contain the original parent token")
+        try:
+            count = asyncio.run(reconcile_run(run_dir, api_url, token))
+        except (OutpostRunnerError, ValueError, OSError, httpx.HTTPError) as exc:
+            message = (
+                exc.message
+                if isinstance(exc, OutpostRunnerError)
+                else "Outpost recovery could not validate or report the saved run"
+            )
+            typer.echo(message, err=True)
+            raise typer.Exit(1) from exc
+        typer.echo(f"reported {count} delivery outcomes")
 
     @app.command("pause")
     def pause(run_dir: Annotated[Path, typer.Argument(exists=True, file_okay=False)]) -> None:

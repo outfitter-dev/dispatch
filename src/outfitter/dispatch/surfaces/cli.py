@@ -44,6 +44,7 @@ CLI_SURFACE_CONTROL_PATHS: tuple[tuple[str, ...], ...] = (
     ("outpost", "run"),
     ("outpost", "pause"),
     ("outpost", "resume"),
+    ("outpost", "reconcile"),
 )
 _METHOD_NOT_FOUND = -32601
 

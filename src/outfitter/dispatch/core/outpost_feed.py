@@ -130,7 +130,7 @@ class OutpostFeed:
         response = await self.client.get(
             f"{self.api_url}/board/response-wakes/{binding.agent}",
             headers={**self.headers, "outpost-act-as": binding.agent},
-            params={"startedAt": binding.started_at},
+            params={"startedAt": binding.started_at, "deliveryProtocol": "1"},
         )
         response.raise_for_status()
         try:
@@ -152,11 +152,19 @@ class OutpostFeed:
             )
         return wakes
 
-    async def ack(self, binding: Binding, wake: Wake) -> None:
+    async def reserve(self, binding: Binding, wake: Wake, attempt: str) -> None:
         response = await self.client.post(
-            f"{self.api_url}/board/response-wakes/{binding.agent}/{wake.id}/ack",
-            headers={**self.headers, "outpost-act-as": binding.agent},
-            json={"startedAt": binding.started_at},
+            f"{self.api_url}/board/response-wakes/{binding.agent}/{wake.id}/reserve",
+            headers=self.headers,
+            json={"startedAt": binding.started_at, "attempt": attempt},
+        )
+        response.raise_for_status()
+
+    async def delivery(self, binding: Binding, wake: Wake, attempt: str, outcome: str) -> None:
+        response = await self.client.post(
+            f"{self.api_url}/board/response-wakes/{binding.agent}/{wake.id}/delivery",
+            headers=self.headers,
+            json={"startedAt": binding.started_at, "attempt": attempt, "outcome": outcome},
         )
         response.raise_for_status()
 
